@@ -96,6 +96,8 @@ class Skill:
             return (f"{old_val * 100:.0f}%", f"{new_val * 100:.0f}%")
         elif key == "regen":
             return (f"{old_val * 100:.1f}%/s", f"{new_val * 100:.1f}%/s")
+        elif key == "stamina":
+            return (f"{100 + old_val:.0f}", f"{100 + new_val:.0f}")
         return None
 
 
@@ -265,6 +267,12 @@ class SkillTree:
                   requires=[(SkillType.REGENERATION, 2)], is_active=True,
                   level_descriptions={1: "净化：清除debuff+无敌2秒", 2: "圣洁：清除debuff+无敌3秒+回血30%",
                                       3: "神圣庇护：清除debuff+无敌5秒+满血"}),
+            Skill(SkillType.ADRENALINE, "肾上腺素", "装备防爆套装时体力上限+25，回复+4/s", 5, icon_color=CRIMSON,
+                  requires=[(SkillType.RIOT_GEAR, 1)],
+                  level_descriptions={1: "兴奋：装备时体力+25，回复+4/s", 2: "激昂：装备时体力+50，回复+8/s",
+                                      3: "狂热：装备时体力+75，回复+12/s", 4: "暴走：装备时体力+100，回复+16/s",
+                                      5: "极限：装备时体力+125，回复+20/s"},
+                  effect_key="stamina", effect_per_level=25),
         ]
 
     def get_skill(self, skill_type):

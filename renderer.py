@@ -7,7 +7,7 @@ import math
 import random
 from config import (GameState, ControlMode, GameMode, MapType, MAP_CONFIGS,
                    STORY_MAP_ORDER, STORY_FRAGMENTS,
-                   WHITE, BLACK, RED, GREEN, BLUE, YELLOW, ORANGE, 
+                   WHITE, BLACK, RED, GREEN, BLUE, YELLOW, ORANGE, FIRE_ORANGE, 
                    GRAY, DARK_GRAY, CYAN, DARK_RED, PURPLE, LIGHT_GRAY,
                    GOLD, AMBER, CRIMSON, CHARCOAL, VOID_BLACK, DARK_BLUE)
 from buff import BuffType
@@ -121,23 +121,34 @@ class Renderer:
 
         for i, btn in enumerate(self.game.menu_buttons):
             btn.base_y = (220 + i * 60)
+            # 继续游戏按钮：无存档时禁用
+            if i == 0:
+                btn.enabled = self.game.has_saved_game()
+                if not btn.enabled:
+                    btn.color = (80, 80, 80)
+                else:
+                    btn.color = CYAN
             if btn.update(mouse_pos, mouse_pressed, self.game.touch_events, scale):
                 self.game.logger.info(f"菜单按钮 '{btn.text}' 被点击")
                 if i == 0:
-                    self.game.state = GameState.MODE_SELECT
+                    # 继续游戏
+                    if self.game.has_saved_game():
+                        self.game.load_game_state()
                 elif i == 1:
+                    self.game.state = GameState.MODE_SELECT
+                elif i == 2:
                     self.game.state = GameState.STORY_ARCHIVE
                     self.game.story_archive_scroll = 0
                     self.game.story_archive_selected = None
-                elif i == 2:
-                    self.game.state = GameState.RECORDS
                 elif i == 3:
-                    self.game.state = GameState.ACHIEVEMENTS
+                    self.game.state = GameState.RECORDS
                 elif i == 4:
-                    self.game.state = GameState.SETTINGS
+                    self.game.state = GameState.ACHIEVEMENTS
                 elif i == 5:
-                    self.game.state = GameState.TUTORIAL
+                    self.game.state = GameState.SETTINGS
                 elif i == 6:
+                    self.game.state = GameState.TUTORIAL
+                elif i == 7:
                     self.game.running = False
             btn.draw(self.screen, self.game.font_large, scale)
 
@@ -225,7 +236,7 @@ class Renderer:
         for map_type in STORY_MAP_ORDER:
             map_config = MAP_CONFIGS[map_type]
             # 地图标题
-            map_title = self.game.font.render(f"{map_config['chapter']} · {map_config['name']}", True, GOLD)
+            map_title = self.game.font.render(f"{map_config['chapter']} - {map_config['name']}", True, GOLD)
             self.screen.blit(map_title, (list_x, y_offset))
             y_offset += 35 * scale
 
@@ -233,7 +244,7 @@ class Renderer:
             for frag in fragments:
                 is_collected = frag["id"] in collected
                 color = WHITE if is_collected else DARK_GRAY
-                prefix = "✓ " if is_collected else "? "
+                prefix = "v " if is_collected else "? "
                 text = prefix + (frag["title"] if is_collected else "未发现的资料")
                 frag_text = self.game.font_small.render(text, True, color)
                 frag_rect = frag_text.get_rect(x=list_x + 20, y=y_offset)
@@ -367,10 +378,10 @@ class Renderer:
         back_btn.draw(self.screen, self.game.font_large, scale)
 
         if self.game.tutorial_scroll_offset > 0:
-            hint = self.game.font_small.render("↑ 继续上滑", True, GRAY)
+            hint = self.game.font_small.render("+ 继续上滑", True, GRAY)
             self.screen.blit(hint, (sw // 2 - 40, 10))
         if max_scroll > 0 and self.game.tutorial_scroll_offset < max_scroll:
-            hint = self.game.font_small.render("↓ 继续下滑", True, GRAY)
+            hint = self.game.font_small.render("- 继续下滑", True, GRAY)
             self.screen.blit(hint, (sw // 2 - 40, self.game.scaled_height - 30))
 
     def _draw_playing(self):
@@ -388,7 +399,7 @@ class Renderer:
         cam_y = camera.y - shake_y
 
         # 绘制世界
-        self.game.world.draw(self.screen, cam_x, cam_y, scale)
+        self.game.world.draw(self.screen, cam_x, cam_y, scale, self.game.assets)
 
         # 绘制剧情收集物（故事模式）
         if self.game.config.game_mode == GameMode.STORY:
@@ -421,7 +432,7 @@ class Renderer:
 
         # 绘制敌人
         for enemy in self.game.enemies:
-            enemy.draw(self.screen, cam_x, cam_y, self.game.font, scale)
+            enemy.draw(self.screen, cam_x, cam_y, self.game.font, scale, self.game.assets)
 
         # 绘制玩家
         player.draw(self.screen, cam_x, cam_y, self.game.font, scale)
@@ -461,6 +472,50 @@ class Renderer:
                 tpx = int((grenade["target_x"] - cam_x) * scale)
                 tpy = int((grenade["target_y"] - cam_y) * scale)
                 pygame.draw.circle(self.screen, (255, 50, 50, 100), (tpx, tpy), int(grenade["radius"] * scale), max(1, int(2 * scale)))
+
+        # 绘制玩家投掷物（飞行中）
+        if hasattr(self.game, 'grenades_in_flight'):
+            for g in self.game.grenades_in_flight:
+                px = int((g["x"] - cam_x) * scale)
+                py = int((g["y"] - cam_y) * scale)
+                color = FIRE_ORANGE if g["type"] == "incendiary" else (SMOKE_GRAY if g["type"] == "smoke" else (CYAN if g["type"] == "emp" else ORANGE))
+                pygame.draw.circle(self.screen, color, (px, py), max(3, int(7 * scale)))
+                # 目标标记
+                tpx = int((g["target_x"] - cam_x) * scale)
+                tpy = int((g["target_y"] - cam_y) * scale)
+                pygame.draw.circle(self.screen, color + (80,), (tpx, tpy), int(30 * scale), max(1, int(2 * scale)))
+        
+        # 绘制怪物投掷物
+        if hasattr(self.game, 'enemy_throwables'):
+            for g in self.game.enemy_throwables:
+                px = int((g["x"] - cam_x) * scale)
+                py = int((g["y"] - cam_y) * scale) - int(g.get("height", 0) * scale)
+                if g["type"] == "fire":
+                    color = FIRE_ORANGE
+                elif g["type"] == "acid":
+                    color = POISON_GREEN
+                elif g["type"] == "curse":
+                    color = PURPLE
+                else:
+                    color = GRAY
+                pygame.draw.circle(self.screen, color, (px, py), max(4, int(8 * scale)))
+                pygame.draw.circle(self.screen, WHITE, (px, py), max(2, int(3 * scale)))
+                # 阴影
+                shadow_y = int((g["y"] - cam_y) * scale)
+                pygame.draw.circle(self.screen, (0, 0, 0, 100), (px, shadow_y), max(3, int(5 * scale)))
+                # 目标标记
+                tpx = int((g["target_x"] - cam_x) * scale)
+                tpy = int((g["target_y"] - cam_y) * scale)
+                pygame.draw.circle(self.screen, color + (100,), (tpx, tpy), int(25 * scale), max(1, int(2 * scale)))
+
+        # 绘制燃烧区域
+        self._draw_fire_zones(cam_x, cam_y, scale)
+
+        # 绘制烟雾区域
+        self._draw_smoke_zones(cam_x, cam_y, scale)
+
+        # 绘制空袭飞机
+        self._draw_airstrike_planes(cam_x, cam_y, scale)
 
         # 绘制自动炮塔
         self._draw_turrets(cam_x, cam_y, scale)
@@ -516,6 +571,29 @@ class Renderer:
                 skill_color = skill.icon_color if skill else ORANGE
                 self.game.skill_caster.draw(self.screen, self.game.font_small, 
                     self.game.selected_skill, skill_name, skill_color, scale)
+
+            # 投掷物释放按钮（触控端）
+            if hasattr(self.game, 'throwable_caster') and self.game.throwable_caster and self.game.throwable_caster.visible:
+                t_type = self.game.selected_throwable
+                t_name = self.game.throwable_names.get(t_type, "投")
+                t_color = self.game.throwable_colors.get(t_type, ORANGE)
+                t_count = getattr(self.game.player, 'throwables', {}).get(t_type, 0)
+                t_abbr = {"incendiary": "燃", "smoke": "烟", "cluster": "束", "emp": "E"}.get(t_type, "投")
+                self.game.throwable_caster.draw(self.screen, self.game.font_small, 
+                    None, t_abbr, t_color, scale)
+                # 数量角标
+                if t_count > 0:
+                    bx, by, br = self.game.throwable_caster.get_scaled_pos(scale)
+                    badge_text = self.game.font_small.render(str(t_count), True, WHITE)
+                    badge_bg = pygame.Surface((badge_text.get_width() + 8, badge_text.get_height() + 4), pygame.SRCALPHA)
+                    badge_bg.fill((0, 0, 0, 180))
+                    self.screen.blit(badge_bg, (int(bx + br - badge_text.get_width() - 4), int(by - br + 2)))
+                    self.screen.blit(badge_text, (int(bx + br - badge_text.get_width()), int(by - br + 4)))
+
+            # 投掷物切换按钮（触控端）
+            if hasattr(self.game, 'throwable_switch_btn') and self.game.throwable_switch_btn:
+                self.game.throwable_switch_btn.draw(self.screen, self.game.font_small, scale)
+
             if self.game.skill_wheel_active:
                 self.game.skill_wheel.draw(self.screen, self.game.font, self.game.font_large, scale)
             if self.game.weapon_wheel_active:
@@ -524,6 +602,41 @@ class Renderer:
         # ==========键鼠长按G瞄准预览（复用SkillCaster原生绘制逻辑） ==========
         if self.game.config.control_mode == ControlMode.KEYBOARD and self.game.skill_caster.is_aiming:
             self.game.skill_caster._draw_aim_preview(self.screen, self.game.selected_skill, self.game.scale)
+
+        # ==========键鼠长按Q投掷物瞄准预览 ==========
+        if self.game.config.control_mode == ControlMode.KEYBOARD and hasattr(self.game, 'throwable_caster') and self.game.throwable_caster.is_aiming:
+            tc = self.game.throwable_caster
+            scale = self.game.scale
+            px = int((tc.player_x - tc.camera_x) * scale)
+            py = int((tc.player_y - tc.camera_y) * scale)
+            dist = tc.max_skill_distance * tc.distance_ratio
+            tx = px + math.cos(tc.angle) * dist * scale
+            ty = py + math.sin(tc.angle) * dist * scale
+
+            # 抛物线轨迹
+            points = []
+            for t in range(0, 21):
+                ratio = t / 20.0
+                arc_x = px + (tx - px) * ratio
+                arc_y = py + (ty - py) * ratio - math.sin(ratio * math.pi) * 50 * scale
+                points.append((arc_x, arc_y))
+            if len(points) >= 2:
+                pygame.draw.lines(self.screen, (255, 140, 0), False, points, max(1, int(2 * scale)))
+
+            # 爆炸范围圈（投掷物AOE半径约80）
+            aoe_r = int(80 * scale)
+            range_surf = pygame.Surface((aoe_r * 2, aoe_r * 2), pygame.SRCALPHA)
+            pygame.draw.circle(range_surf, (255, 100, 0, 50), (aoe_r, aoe_r), aoe_r)
+            self.screen.blit(range_surf, (int(tx - aoe_r), int(ty - aoe_r)))
+            pygame.draw.circle(self.screen, (255, 140, 0), (int(tx), int(ty)), aoe_r, max(1, int(2 * scale)))
+            # 十字标记
+            cs = int(12 * scale)
+            pygame.draw.line(self.screen, (255, 200, 0), (int(tx) - cs, int(ty)), (int(tx) + cs, int(ty)), 2)
+            pygame.draw.line(self.screen, (255, 200, 0), (int(tx), int(ty) - cs), (int(tx), int(ty) + cs), 2)
+            # 距离指示
+            dist_text = f"{int(dist)}m"
+            dt_surf = pygame.font.SysFont("arial", max(10, int(12 * scale))).render(dist_text, True, (255, 180, 0))
+            self.screen.blit(dt_surf, (int(tx) + 10, int(ty) - 20))
             
         # =========【新增】成就解锁右上角toast提示 =========
         scale = self.game.scale
@@ -559,7 +672,7 @@ class Renderer:
 
             # 地图名称（上移避免与时间重叠）
             map_name_text = self.game.font_small.render(
-                f"{map_config['chapter']} · {map_config['name']}", True, GOLD)
+                f"{map_config['chapter']} - {map_config['name']}", True, GOLD)
             map_name_rect = map_name_text.get_rect(center=(sw // 2, int(14 * scale)))
             self.screen.blit(map_name_text, map_name_rect)
 
@@ -568,7 +681,7 @@ class Renderer:
 
             # 特殊事件激活提示
             if self.game.special_event_active:
-                event_text = self.game.font_small.render("⚠ 特殊事件进行中", True, RED)
+                event_text = self.game.font_small.render("[!] 特殊事件进行中", True, RED)
                 event_rect = event_text.get_rect(center=(sw // 2, int(65 * scale)))
                 if int(pygame.time.get_ticks() / 300) % 2 == 0:
                     self.screen.blit(event_text, event_rect)
@@ -683,6 +796,18 @@ class Renderer:
             skill_text = self.game.font.render(f"技能: {skill.name} (G)", True, GOLD)
             self.screen.blit(skill_text, (15, 15 + bar_h + exp_h + 95))
 
+        # 当前投掷物显示
+        t_type = self.game.selected_throwable
+        t_name = self.game.throwable_names.get(t_type, "?")
+        t_color = self.game.throwable_colors.get(t_type, ORANGE)
+        t_count = getattr(player, 'throwables', {}).get(t_type, 0)
+        total_throwables = sum(getattr(player, 'throwables', {}).values())
+        if total_throwables > 0:
+            throw_text = self.game.font.render(f"投掷: {t_name} x{t_count} (Q投/E切)", True, t_color)
+        else:
+            throw_text = self.game.font.render("投掷: 无 (拾取获得)", True, GRAY)
+        self.screen.blit(throw_text, (15, 15 + bar_h + exp_h + 118))
+
         # ==========【仅键控模式】显示：下一个技能 / 下一把武器 ==========
         if self.game.config.control_mode == ControlMode.KEYBOARD:
             # 下一个技能
@@ -694,7 +819,7 @@ class Renderer:
                 next_skill = player.skill_tree.get_skill(next_skill_type)
                 next_skill_name = next_skill.name if next_skill else "?"
                 next_skill_text = self.game.font_small.render(f"下技能(Tab): {next_skill_name}", True, AMBER)
-                self.screen.blit(next_skill_text, (15, 15 + bar_h + exp_h + 118))
+                self.screen.blit(next_skill_text, (15, 15 + bar_h + exp_h + 140))
 
             # 下一把武器
             if len(player.weapons) > 1:
@@ -702,7 +827,7 @@ class Renderer:
                 next_w_idx = (curr_w_idx + 1) % len(player.weapons)
                 next_weapon = player.weapons[next_w_idx]
                 next_weapon_text = self.game.font_small.render(f"下武器(R): {next_weapon.name}", True, PURPLE)
-                self.screen.blit(next_weapon_text, (15, 15 + bar_h + exp_h + 140))
+                self.screen.blit(next_weapon_text, (15, 15 + bar_h + exp_h + 162))
                 
         status_lines = []
         riot = player.riot_gear
@@ -716,14 +841,14 @@ class Renderer:
             progress = 1 - (self.game.riot_anim_timer / self.game.riot_anim_duration)
             status_lines.append(f"防爆卸下中... {int(progress*100)}%")
         elif riot.equipped:
-            status_lines.append("✅ 防爆套装已装备")
+            status_lines.append("[OK] 防爆套装已装备")
             if riot.shield_broken:
-                status_lines.append("⚠ 观察窗已破碎")
+                status_lines.append("[!] 观察窗已破碎")
             else:
                 vw_ratio = riot.viewing_window_hp / riot.max_viewing_window_hp
                 status_lines.append(f"观察窗: {int(vw_ratio*100)}%")
             if riot.has_debuff:
-                status_lines.append("❗装备超时，移动减速")
+                status_lines.append("[!]装备超时，移动减速")
             status_lines.append(f"盾牌体力: {int(riot.stamina)}")
         elif riot.riot_gear_cd_timer > 0:
             status_lines.append(f"防爆套装冷却: {riot.riot_gear_cd_timer:.1f}s")
@@ -1078,6 +1203,75 @@ class Renderer:
                 pygame.draw.rect(vignette, (0, 0, 0, a), (0, 0, sw, sh), border_radius=r)
             self.game.screen.blit(vignette, (0, 0))
 
+    def _draw_fire_zones(self, cam_x, cam_y, scale):
+        """绘制燃烧区域"""
+        import pygame
+        if not hasattr(self.game, 'fire_zones') or not self.game.fire_zones:
+            return
+        for zone in self.game.fire_zones:
+            sx = int((zone["x"] - cam_x) * scale)
+            sy = int((zone["y"] - cam_y) * scale)
+            r = int(zone["radius"] * scale)
+            # 半透明红色光晕
+            glow = pygame.Surface((r * 2, r * 2), pygame.SRCALPHA)
+            alpha = min(120, int(80 + zone["timer"] * 5))
+            pygame.draw.circle(glow, (255, 100, 20, alpha), (r, r), r)
+            pygame.draw.circle(glow, (255, 200, 50, alpha // 2), (r, r), int(r * 0.7))
+            self.screen.blit(glow, (sx - r, sy - r))
+            # 边缘火焰圈
+            pygame.draw.circle(self.screen, (255, 140, 30), (sx, sy), r, max(2, int(3 * scale)))
+
+    def _draw_smoke_zones(self, cam_x, cam_y, scale):
+        """绘制烟雾区域"""
+        import pygame
+        if not hasattr(self.game, 'smoke_zones') or not self.game.smoke_zones:
+            return
+        for zone in self.game.smoke_zones:
+            sx = int((zone["x"] - cam_x) * scale)
+            sy = int((zone["y"] - cam_y) * scale)
+            r = int(zone["radius"] * scale)
+            # 半透明灰色烟雾
+            smoke = pygame.Surface((r * 2, r * 2), pygame.SRCALPHA)
+            alpha = min(160, int(100 + zone["timer"] * 3))
+            pygame.draw.circle(smoke, (150, 150, 150, alpha), (r, r), r)
+            pygame.draw.circle(smoke, (180, 180, 180, alpha // 2), (r, r), int(r * 0.6))
+            self.screen.blit(smoke, (sx - r, sy - r))
+
+    def _draw_airstrike_planes(self, cam_x, cam_y, scale):
+        """绘制空袭飞机"""
+        import pygame
+        if not hasattr(self.game, 'airstrikes') or not self.game.airstrikes:
+            return
+        for strike in self.game.airstrikes:
+            if strike.get("type") != "plane_run":
+                continue
+            if strike["phase"] == "done":
+                continue
+            px = int((strike["plane_x"] - cam_x) * scale)
+            py = int((strike["plane_y"] - cam_y) * scale)
+            # 飞机机身
+            plane_size = int(30 * scale)
+            angle = math.atan2(strike["plane_vy"], strike["plane_vx"])
+            # 绘制飞机三角形
+            import math
+            p1 = (px + math.cos(angle) * plane_size, py + math.sin(angle) * plane_size)
+            p2 = (px + math.cos(angle + 2.5) * plane_size * 0.7, py + math.sin(angle + 2.5) * plane_size * 0.7)
+            p3 = (px + math.cos(angle - 2.5) * plane_size * 0.7, py + math.sin(angle - 2.5) * plane_size * 0.7)
+            pygame.draw.polygon(self.screen, (80, 80, 90), [p1, p2, p3])
+            pygame.draw.polygon(self.screen, (120, 120, 130), [p1, p2, p3], max(1, int(2 * scale)))
+            # 机翼
+            wing_len = plane_size * 0.8
+            perp_angle = angle + math.pi / 2
+            wx1 = (px + math.cos(perp_angle) * wing_len, py + math.sin(perp_angle) * wing_len)
+            wx2 = (px - math.cos(perp_angle) * wing_len, py - math.sin(perp_angle) * wing_len)
+            pygame.draw.line(self.screen, (80, 80, 90), wx1, wx2, max(2, int(4 * scale)))
+            # 轰炸目标标记线
+            if strike["phase"] == "incoming":
+                for bomb in strike["bombs"]:
+                    bx = int((bomb["x"] - cam_x) * scale)
+                    by = int((bomb["y"] - cam_y) * scale)
+                    pygame.draw.circle(self.screen, (255, 50, 50, 150), (bx, by), int(15 * scale), max(1, int(2 * scale)))
+
     def _draw_turrets(self, cam_x, cam_y, scale):
         """绘制自动炮塔 - 炫酷科幻风格"""
         if not hasattr(self.game, 'turrets') or not self.game.turrets:
@@ -1430,7 +1624,7 @@ class Renderer:
         achievements = self.game.records.get_achievements()
         for ach_key, ach_data in list(achievements.items())[:8]:
             color = GREEN if ach_data["unlocked"] else DARK_GRAY
-            status = "✓" if ach_data["unlocked"] else "○"
+            status = "v" if ach_data["unlocked"] else "(o)"
             ach_text = self.game.font.render(f"{status} {ach_data['desc']}", True, color)
             self.screen.blit(ach_text, (int(70 * scale), y))
             y += line_h
@@ -1495,10 +1689,10 @@ class Renderer:
                 unlocked = ach_data.get("unlocked", False)
                 if unlocked:
                     col = GOLD
-                    prefix = "✓ "
+                    prefix = "v "
                 else:
                     col = DARK_GRAY
-                    prefix = "○ "
+                    prefix = "(o) "
                 desc = ach_data.get("desc","???")
                 text_str = prefix + desc
                 surf = self.game.font.render(text_str, True, col)

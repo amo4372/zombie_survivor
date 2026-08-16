@@ -4,7 +4,8 @@
 import math
 from enum import Enum
 from config import (RED, GREEN, BLUE, YELLOW, ORANGE, PURPLE, CYAN, GRAY, WHITE,
-                    CRIMSON, LIME, TEAL, RUST, POISON_GREEN, FIRE_ORANGE, BLOOD_RED, GOLD)
+                    CRIMSON, LIME, TEAL, RUST, POISON_GREEN, FIRE_ORANGE, FIRE_YELLOW, 
+                    SMOKE_GRAY, BLOOD_RED, GOLD)
 
 
 class BuffType(Enum):
@@ -43,130 +44,151 @@ class BuffType(Enum):
 # Buff 预设配置
 BUFF_CONFIGS = {
     BuffType.SPEED_BOOST: {
-        "name": "加速", "icon": "⚡", "color": LIME, "is_debuff": False,
+        "name": "加速", "icon": "[E]", "color": LIME, "is_debuff": False,
         "desc": "移动速度提升50%",
         "speed_mult": 1.5,
     },
     BuffType.DAMAGE_BOOST: {
-        "name": "伤害提升", "icon": "⚔", "color": ORANGE, "is_debuff": False,
+        "name": "伤害提升", "icon": "[S]", "color": ORANGE, "is_debuff": False,
         "desc": "造成伤害提升100%",
         "damage_mult": 2.0,
     },
     BuffType.HASTE: {
-        "name": "急速", "icon": "⏱", "color": YELLOW, "is_debuff": False,
+        "name": "急速", "icon": "[T]", "color": YELLOW, "is_debuff": False,
         "desc": "攻击速度和换弹速度提升40%",
         "attack_speed_mult": 1.4, "reload_speed_mult": 1.4,
     },
     BuffType.SHIELD: {
-        "name": "护盾", "icon": "🛡", "color": BLUE, "is_debuff": False,
+        "name": "护盾", "icon": "[SHLD]", "color": BLUE, "is_debuff": False,
         "desc": "受到伤害降低50%",
         "damage_taken_mult": 0.5,
     },
     BuffType.REGEN: {
-        "name": "恢复", "icon": "✚", "color": GREEN, "is_debuff": False,
+        "name": "恢复", "icon": "+", "color": GREEN, "is_debuff": False,
         "desc": "每秒恢复5%最大生命值",
         "tick_interval": 1.0, "heal_percent": 0.05,
     },
     BuffType.INVINCIBLE: {
-        "name": "无敌", "icon": "★", "color": GOLD, "is_debuff": False,
+        "name": "无敌", "icon": "*", "color": GOLD, "is_debuff": False,
         "desc": "免疫所有伤害",
         "damage_taken_mult": 0.0,
     },
     BuffType.BERSERK: {
-        "name": "狂暴", "icon": "🔥", "color": CRIMSON, "is_debuff": False,
+        "name": "狂暴", "icon": "[FIRE]", "color": CRIMSON, "is_debuff": False,
         "desc": "攻速翻倍，移动速度+20%，但受到伤害+30%",
         "attack_speed_mult": 2.0, "speed_mult": 1.2, "damage_taken_mult": 1.3,
     },
     BuffType.IRON_SKIN: {
-        "name": "铁皮", "icon": "⛨", "color": GRAY, "is_debuff": False,
+        "name": "铁皮", "icon": "[SHLD]", "color": GRAY, "is_debuff": False,
         "desc": "受到伤害降低30%",
         "damage_taken_mult": 0.7,
     },
     BuffType.LUCKY: {
-        "name": "幸运", "icon": "♦", "color": YELLOW, "is_debuff": False,
+        "name": "幸运", "icon": "[*]", "color": YELLOW, "is_debuff": False,
         "desc": "暴击率提升20%",
         "crit_chance_add": 0.2,
     },
     # === Debuff ===
     BuffType.BLEED: {
-        "name": "流血", "icon": "🩸", "color": BLOOD_RED, "is_debuff": True,
+        "name": "流血", "icon": "[BLD]", "color": BLOOD_RED, "is_debuff": True,
         "desc": "每秒流失3%最大生命值",
         "tick_interval": 0.5, "damage_percent": 0.015,
+        "fx_particle": BLOOD_RED, "fx_rate": 0.15, "fx_count": 3, "fx_size": (4, 8),
+        "fx_mode": "splatter", "screen_flash": (180, 30, 30, 30), "screen_shake": 2,
     },
     BuffType.FRACTURE: {
-        "name": "骨折", "icon": "🦴", "color": GRAY, "is_debuff": True,
+        "name": "骨折", "icon": "[BONE]", "color": GRAY, "is_debuff": True,
         "desc": "移动速度降低50%",
         "speed_mult": 0.5,
+        "fx_particle": (180, 180, 180), "fx_rate": 0.3, "fx_count": 1, "fx_size": (3, 5),
+        "fx_mode": "attached", "limp_animation": True,
     },
     BuffType.BURN: {
-        "name": "燃烧", "icon": "🔥", "color": FIRE_ORANGE, "is_debuff": True,
+        "name": "燃烧", "icon": "[FIRE]", "color": FIRE_ORANGE, "is_debuff": True,
         "desc": "每秒流失4%生命值，受到伤害+20%",
         "tick_interval": 0.5, "damage_percent": 0.02, "damage_taken_mult": 1.2,
+        "fx_particle": FIRE_ORANGE, "fx_rate": 0.08, "fx_count": 5, "fx_size": (8, 16),
+        "fx_second_color": FIRE_YELLOW, "fx_mode": "attached", "fx_attached_lift": True,
+        "screen_flash": (200, 100, 20, 25), "screen_shake": 3, "aura_color": FIRE_ORANGE,
     },
     BuffType.FREEZE: {
-        "name": "冻结", "icon": "❄", "color": CYAN, "is_debuff": True,
+        "name": "冻结", "icon": "[ICE]", "color": CYAN, "is_debuff": True,
         "desc": "无法移动和攻击",
         "speed_mult": 0.0, "stunned": True,
+        "fx_particle": CYAN, "fx_rate": 0.2, "fx_count": 2, "fx_size": (3, 6),
+        "fx_mode": "attached", "fx_attached_lift": False, "screen_tint": (100, 180, 255, 40), "aura_color": CYAN, "frozen_overlay": True,
     },
     BuffType.POISON: {
-        "name": "中毒", "icon": "☠", "color": POISON_GREEN, "is_debuff": True,
+        "name": "中毒", "icon": "[X]", "color": POISON_GREEN, "is_debuff": True,
         "desc": "每秒流失2%生命值，移动速度-20%",
         "tick_interval": 1.0, "damage_percent": 0.02, "speed_mult": 0.8,
+        "fx_particle": POISON_GREEN, "fx_rate": 0.25, "fx_count": 2, "fx_size": (5, 10),
+        "fx_mode": "attached", "fx_attached_lift": True, "aura_color": POISON_GREEN,
     },
     BuffType.SLOW: {
-        "name": "减速", "icon": "🐌", "color": TEAL, "is_debuff": True,
+        "name": "减速", "icon": "[SLOW]", "color": TEAL, "is_debuff": True,
         "desc": "移动速度降低40%",
         "speed_mult": 0.6,
     },
     BuffType.WEAKEN: {
-        "name": "虚弱", "icon": "💔", "color": PURPLE, "is_debuff": True,
+        "name": "虚弱", "icon": "[BRKN]", "color": PURPLE, "is_debuff": True,
         "desc": "造成伤害降低30%",
         "damage_mult": 0.7,
     },
     BuffType.STUN: {
-        "name": "眩晕", "icon": "💫", "color": YELLOW, "is_debuff": True,
+        "name": "眩晕", "icon": "[STUN]", "color": YELLOW, "is_debuff": True,
         "desc": "无法行动",
         "speed_mult": 0.0, "stunned": True,
+        "fx_particle": YELLOW, "fx_rate": 0.1, "fx_count": 3, "fx_size": (4, 8),
+        "fx_mode": "attached", "stars_above_head": True,
     },
     BuffType.EMPOWER: {
-        "name": "强化", "icon": "🔆", "color": GOLD, "is_debuff": False,
+        "name": "强化", "icon": "[GLW]", "color": GOLD, "is_debuff": False,
         "desc": "下次攻击伤害提升200%",
         "damage_mult": 3.0, "consume_on_attack": True,
     },
     BuffType.GHOST: {
-        "name": "幽灵化", "icon": "👻", "color": CYAN, "is_debuff": False,
+        "name": "幽灵化", "icon": "[GHST]", "color": CYAN, "is_debuff": False,
         "desc": "半透明，穿越敌人，受到伤害-40%",
         "damage_taken_mult": 0.6, "ghost_mode": True,
     },
     BuffType.THORNS: {
-        "name": "荆棘", "icon": "🌵", "color": LIME, "is_debuff": False,
+        "name": "荆棘", "icon": "[CACT]", "color": LIME, "is_debuff": False,
         "desc": "受到近战攻击时反弹50%伤害",
         "thorns_damage": 0.5,
     },
     BuffType.BLOOD_FRENZY: {
-        "name": "血怒", "icon": "🩸", "color": CRIMSON, "is_debuff": False,
+        "name": "血怒", "icon": "[BLD]", "color": CRIMSON, "is_debuff": False,
         "desc": "血量越低伤害越高，最多+100%",
         "blood_frenzy": True,
     },
     BuffType.CORROSION: {
-        "name": "腐蚀", "icon": "🧪", "color": LIME, "is_debuff": True,
+        "name": "腐蚀", "icon": "[CHEM]", "color": LIME, "is_debuff": True,
         "desc": "护甲归零，每秒受到8点伤害",
         "tick_interval": 1.0, "tick_damage": 8, "armor_mult": 0.0,
+        "fx_particle": LIME, "fx_rate": 0.12, "fx_count": 4, "fx_size": (4, 9),
+        "fx_mode": "attached", "fx_attached_lift": True, "aura_color": LIME, "armor_shatter": True,
     },
     BuffType.FEAR: {
-        "name": "恐惧", "icon": "😱", "color": PURPLE, "is_debuff": True,
+        "name": "恐惧", "icon": "[FEAR]", "color": PURPLE, "is_debuff": True,
         "desc": "无法攻击，随机方向移动",
         "attack_speed_mult": 0.0, "fear_move": True,
+        "fx_particle": PURPLE, "fx_rate": 0.15, "fx_count": 3, "fx_size": (5, 10),
+        "fx_mode": "attached", "screen_tint": (120, 40, 180, 35), "tremble": True,
     },
     BuffType.CURSE: {
-        "name": "诅咒", "icon": "☠", "color": PURPLE, "is_debuff": True,
+        "name": "诅咒", "icon": "[X]", "color": PURPLE, "is_debuff": True,
         "desc": "受到伤害+50%，治疗效果-50%",
         "damage_taken_mult": 1.5, "heal_mult": 0.5,
+        "fx_particle": (80, 20, 120), "fx_rate": 0.2, "fx_count": 2, "fx_size": (4, 8),
+        "fx_mode": "attached", "fx_attached_lift": True, "aura_color": (80, 20, 120), "dark_aura": True,
     },
     BuffType.MARK: {
-        "name": "标记", "icon": "🎯", "color": RED, "is_debuff": True,
+        "name": "标记", "icon": "[TGT]", "color": RED, "is_debuff": True,
         "desc": "受到暴击伤害+100%",
         "crit_taken_mult": 2.0,
+        "fx_particle": RED, "fx_rate": 0.25, "fx_count": 1, "fx_size": (3, 6),
+        "fx_mode": "attached", "mark_above_head": True,
     },
 }
 
@@ -243,10 +265,19 @@ class BuffManager:
         """
         更新所有buff，处理tick伤害/治疗
         entity需要有 hp, max_hp, take_damage(), heal() 方法
-        返回：造成的伤害总量（用于屏幕特效）
+        返回：(damage_dealt, damage_events) 其中 damage_events 是 [(damage, type_name), ...]
         """
         damage_dealt = 0
+        damage_events = []  # [(damage, type_name), ...]
         expired = []
+        # buff类型到伤害类型的映射
+        type_map = {
+            "burn": "fire",
+            "poison": "poison",
+            "bleed": "bleed",
+            "corrosion": "corrosion",
+            "freeze": "freeze",
+        }
         for btype, buff in self.buffs.items():
             if buff.duration is not None:
                 buff.remaining -= dt
@@ -263,6 +294,8 @@ class BuffManager:
                         if hasattr(entity, 'take_damage'):
                             entity.take_damage(dmg, damage_type="dot")
                         damage_dealt += dmg
+                        dmg_type = type_map.get(btype.name.lower(), "dot")
+                        damage_events.append((dmg, dmg_type))
                     # 持续治疗
                     heal_pct = buff.config.get("heal_percent", 0)
                     if heal_pct > 0 and hasattr(entity, 'max_hp') and hasattr(entity, 'heal'):
@@ -271,7 +304,7 @@ class BuffManager:
                 expired.append(btype)
         for btype in expired:
             del self.buffs[btype]
-        return damage_dealt
+        return damage_dealt, damage_events
 
     # === 效果计算（所有乘区相乘）===
     def get_speed_mult(self):

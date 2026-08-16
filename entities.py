@@ -6,9 +6,9 @@ import pygame
 import math
 import random
 from config import (EnemyType, WeaponType, SkillType, ItemType,
-                   RED, GREEN, BLUE, YELLOW, ORANGE, PURPLE, GRAY, DARK_GRAY, GOLD,
+                   RED, GREEN, BLUE, YELLOW, ORANGE, PURPLE, GRAY, DARK_GRAY, 
                    LIGHT_GRAY, CYAN, WHITE, BLACK, DARK_GREEN, DARK_RED, BROWN, CRIMSON,
-                   RUST, POISON_GREEN, BLOOD_RED, LIME, SLATE, CHARCOAL)
+                   RUST, POISON_GREEN, BLOOD_RED, LIME, SLATE, CHARCOAL, GOLD, FIRE_ORANGE, FIRE_YELLOW, SMOKE_GRAY)
 from weapons import Weapon, Projectile
 from skills import SkillTree
 from buff import BuffManager, BuffType
@@ -24,7 +24,10 @@ class RiotGear:
         self.facing_angle = 0
         self.stamina = 100
         self.max_stamina = 100
-        self.stamina_regen = 20
+        self.base_max_stamina = 100
+        self.stamina_regen = 8
+        self.base_stamina_regen = 8
+        self.adrenaline_level = 0  # 肾上腺素技能等级，装备时提升体力
         self.bash_cooldown = 0
         self.bash_max_cooldown = 0.5
         self.grapple_cooldown = 0
@@ -48,10 +51,20 @@ class RiotGear:
         self.grapple_stamina_cost = 0
         self.bash_auto = False
         self.bash_direction = 0
-        self.bash_stamina_cost = 25
+        self.bash_stamina_cost = 10
         self.bash_anim_timer = 0
         self.bash_anim_duration = 0.2
         self.bash_hit_pos = None
+        # === 盾牌冲撞系统 ===
+        self.charge_active = False
+        self.charge_timer = 0
+        self.charge_duration = 0.45
+        self.charge_speed = 680
+        self.charge_direction = 0
+        self.charge_hit_ids = set()  # 已命中的敌人id，避免重复伤害
+        self.charge_damage = 220
+        self.charge_stun_duration = 2.0
+        self.charge_knockback = 150
         self.equip_time = 0
         self.debuff_threshold = 60.0
         self.has_debuff = False
@@ -88,6 +101,8 @@ class RiotGear:
         self.grapple_head_pos = None
         self.grapple_state = "idle"
         self.bash_auto = False
+        self.charge_active = False
+        self.charge_hit_ids = set()
         self.has_debuff = False
         self.aim_line_active = False
         # 卸下瞬间开启冷却
@@ -98,6 +113,14 @@ class RiotGear:
         # 冷却计时
         if self.riot_gear_cd_timer > 0:
             self.riot_gear_cd_timer -= dt
+
+        # 肾上腺素技能加成（仅装备时生效）
+        if self.equipped and self.adrenaline_level > 0:
+            self.max_stamina = self.base_max_stamina + self.adrenaline_level * 25
+            self.stamina_regen = self.base_stamina_regen + self.adrenaline_level * 4
+        else:
+            self.max_stamina = self.base_max_stamina
+            self.stamina_regen = self.base_stamina_regen
 
         # 体力恢复
         if self.stamina < self.max_stamina:
@@ -277,26 +300,23 @@ class RiotGear:
                 return damage * 0.5
 
     def can_bash(self):
-        return self.equipped and self.bash_cooldown <= 0 and self.stamina >= self.bash_stamina_cost
+        return self.equipped and self.bash_cooldown <= 0 and self.stamina >= self.bash_stamina_cost and not self.charge_active
 
     def bash(self, direction_angle=None, is_sprint=False):
+        """盾牌冲撞：启动冲撞状态，由game.py处理移动和伤害"""
         if not self.can_bash():
-            return 0, False, 0
+            return False
         self.stamina -= self.bash_stamina_cost
         self.bash_cooldown = self.bash_max_cooldown
-        damage = 180 if not is_sprint else 250
-        bash_range = 120 if not is_sprint else 90
         if direction_angle is not None:
-            self.bash_direction = direction_angle
+            self.charge_direction = direction_angle
         else:
-            self.bash_direction = self.facing_angle
+            self.charge_direction = self.facing_angle
+        self.charge_active = True
+        self.charge_timer = self.charge_duration
+        self.charge_hit_ids = set()
         self.bash_anim_timer = self.bash_anim_duration
-        angle_rad = math.radians(self.bash_direction)
-        self.bash_hit_pos = (
-            self.shield_offset * math.cos(angle_rad),
-            self.shield_offset * math.sin(angle_rad)
-        )
-        return damage, True, bash_range
+        return True
 
     def can_grapple(self):
         return self.equipped and self.grapple_cooldown <= 0
@@ -563,6 +583,7 @@ class Player:
         self.berserk_active = False  # 新增：狂暴状态
         # Buff系统
         self.buff_manager = BuffManager()
+        self.buff_damage_events = []
 
         # 升级选择状态
         self.pending_level_up = False
@@ -620,7 +641,7 @@ class Player:
         self.crit_chance += self.buff_manager.get_crit_chance_add()
 
         # 更新Buff系统（处理持续伤害/治疗等）
-        self.buff_manager.update(dt, self)
+        _, self.buff_damage_events = self.buff_manager.update(dt, self)
         # 兼容旧接口：把旧的临时增益转换为Buff
         if self.speed_boost_timer > 0:
             self.buff_manager.add_buff(BuffType.SPEED_BOOST, self.speed_boost_timer)
@@ -865,7 +886,7 @@ class Player:
         return pygame.Rect(self.x - self.size, self.y - self.size, 
                           self.size * 2, self.size * 2)
 
-    def draw(self, screen, camera_x, camera_y, font, scale=1.0):
+    def draw(self, screen, camera_x, camera_y, font, scale=1.0, assets=None):
         px = int((self.x - camera_x) * scale)
         py = int((self.y - camera_y) * scale)
         s = max(2, int(self.size * scale))
@@ -928,7 +949,17 @@ class Enemy:
         self.phantom_flicker = 0  # 幻影闪烁
         # Buff系统
         self.buff_manager = BuffManager()
+        # 控制抗性：Boss对控制类debuff有高抗性/免疫
+        self.control_resistance = 0.0  # 0=无抗性, 1=完全免疫
+        self.can_throw = False  # 是否能投掷道具
+        self.throw_cd = random.uniform(3.0, 6.0)  # 投掷道具CD
+        self.buff_damage_events = []
         self._setup_enemy()
+        # Boss控制抗性设置（在_setup_enemy后设置is_boss）
+        if getattr(self, 'is_boss', False):
+            self.control_resistance = 0.85  # Boss 85%概率免疫控制
+        elif getattr(self, 'is_elite', False):
+            self.control_resistance = 0.4   # 精英 40%免疫
 
         # =========【新增Boss技能计时器】=========
         self.boss_dash_cd = 0.0
@@ -1032,7 +1063,7 @@ class Enemy:
             EnemyType.BOSS_MUTANT: {
                 "hp": 4000, "speed": 2.2, "damage": 45, "size": 38,
                 "color": BLOOD_RED, "exp": 800, "score": 1500,
-                "is_boss": True, "name": "变异体·深渊",
+                "is_boss": True, "name": "变异体-深渊",
                 "has_combo": True, "combo_damage_mult": 2.5,
             },
             EnemyType.BOSS_QUEEN: {
@@ -1128,7 +1159,7 @@ class Enemy:
 
     def update(self, dt, player_x, player_y, player):
         # 更新Buff系统（持续伤害/治疗等）
-        self.buff_manager.update(dt, self)
+        _, self.buff_damage_events = self.buff_manager.update(dt, self)
         self._buff_speed_mult = self.buff_manager.get_speed_mult()
         # Buff冻结/眩晕优先
         if self.buff_manager.is_stunned() or self.buff_manager.is_frozen():
@@ -1442,7 +1473,7 @@ class Enemy:
                 self.y += (player_y - self.y) / dist * self.speed * self._buff_speed_mult * dt * 60
 
         elif self.enemy_type == EnemyType.BOSS_MUTANT:
-            # ----变异体·深渊：高伤害连招Boss----
+            # ----变异体-深渊：高伤害连招Boss----
             # 连招状态机
             if not hasattr(self, 'combo_state'):
                 self.combo_state = 0
@@ -1740,6 +1771,58 @@ class Enemy:
             "damage": self.damage
         }
 
+    def try_throw(self, dt, player_x, player_y, dist):
+        """尝试投掷道具，返回投掷物数据或None"""
+        if not self.can_throw:
+            return None
+        if self.throw_cd > 0:
+            self.throw_cd -= dt
+            return None
+        # 距离在150-400之间才投掷
+        if dist < 150 or dist > 450:
+            return None
+        # 投掷概率
+        if random.random() > 0.3:
+            self.throw_cd = random.uniform(4.0, 8.0)
+            return None
+        self.throw_cd = random.uniform(6.0, 12.0)
+        
+        # 根据怪物类型选择投掷物
+        throw_type = "rock"  # 默认石块
+        if self.enemy_type == EnemyType.ZOMBIE_SPITTER:
+            throw_type = "acid"  # 酸液瓶
+        elif self.enemy_type == EnemyType.ELITE_SORCERER:
+            throw_type = random.choice(["fire", "acid", "curse"])
+        elif getattr(self, "is_boss", False):
+            throw_type = random.choice(["fire", "rock", "acid"])
+        elif self.enemy_type == EnemyType.ZOMBIE_RANGED:
+            throw_type = random.choice(["rock", "fire"])
+        
+        return {
+            "type": throw_type,
+            "x": self.x, "y": self.y,
+            "target_x": player_x, "target_y": player_y,
+            "damage": self.damage * 1.5,
+        }
+
+    def apply_buff(self, buff_type, duration=None, stacks=1):
+        """应用buff，考虑控制抗性"""
+        import random
+        from buff import BuffType
+        # 控制类debuff列表
+        control_debuffs = {
+            BuffType.FREEZE, BuffType.STUN, BuffType.FEAR,
+            BuffType.SLOW, BuffType.FRACTURE, BuffType.WEAKEN,
+        }
+        if buff_type in control_debuffs and self.control_resistance > 0:
+            if random.random() < self.control_resistance:
+                return False  # 免疫
+            # 非免疫时缩短持续时间
+            if duration is not None:
+                duration = duration * (1 - self.control_resistance * 0.5)
+        self.buff_manager.add_buff(buff_type, duration, stacks)
+        return True
+
     def take_damage(self, damage, damage_type="normal"):
         # DOT伤害跳过特殊防御机制
         if damage_type != "dot":
@@ -1769,7 +1852,7 @@ class Enemy:
         return pygame.Rect(self.x - self.size, self.y - self.size, 
                           self.size * 2, self.size * 2)
 
-    def draw(self, screen, camera_x, camera_y, font, scale=1.0):
+    def draw(self, screen, camera_x, camera_y, font, scale=1.0, assets=None):
         px = int((self.x - camera_x) * scale)
         py = int((self.y - camera_y) * scale)
         s = max(2, int(self.size * scale))
@@ -1791,11 +1874,50 @@ class Enemy:
         else:
             color = self.color
 
+        # === 优先使用assets图片绘制 ===
+        img_key = None
+        if hasattr(self, 'enemy_type'):
+            et = self.enemy_type
+            type_map = {
+                EnemyType.ZOMBIE_NORMAL: "zombie_normal",
+                EnemyType.ZOMBIE_FAST: "zombie_fast",
+                EnemyType.ZOMBIE_TANK: "zombie_tank",
+                EnemyType.ZOMBIE_RANGED: "zombie_ranged",
+                EnemyType.ZOMBIE_EXPLODER: "zombie_exploder",
+                EnemyType.ZOMBIE_CRAWLER: "zombie_crawler",
+                EnemyType.ZOMBIE_SPLITTER: "zombie_splitter",
+                EnemyType.ZOMBIE_SHIELD: "zombie_shield",
+                EnemyType.ZOMBIE_HEALER: "zombie_healer",
+                EnemyType.ZOMBIE_PHANTOM: "zombie_phantom",
+                EnemyType.ZOMBIE_SPITTER: "zombie_spitter",
+                EnemyType.ZOMBIE_LEAPER: "zombie_leaper",
+                EnemyType.ZOMBIE_CORPSE_EATER: "zombie_corpse_eater",
+                EnemyType.ZOMBIE_WRAITH: "zombie_wraith",
+                EnemyType.BOSS_LONG: "boss_long",
+                EnemyType.BOSS_XIANG: "boss_xiang",
+                EnemyType.BOSS_MUTANT: "boss_mutant",
+                EnemyType.BOSS_QUEEN: "boss_queen",
+                EnemyType.BOSS_TITAN: "boss_titan",
+                EnemyType.ELITE_BRUTE: "elite_brute",
+                EnemyType.ELITE_ASSASSIN: "elite_assassin",
+                EnemyType.ELITE_SORCERER: "elite_sorcerer",
+                EnemyType.ELITE_GUARDIAN: "elite_guardian",
+            }
+            img_key = type_map.get(et)
+
+        use_image = assets is not None and img_key is not None and assets.has_image(img_key)
+
         if self.knockdown_timer > 0:
             pygame.draw.ellipse(screen, DARK_GRAY, 
                               (px - s, py - s // 2, s * 2, s))
+        elif use_image:
+            # 使用assets图片绘制
+            img = assets.get_image(img_key, s * 2, s * 2)
+            if alpha < 255:
+                img.set_alpha(alpha)
+            screen.blit(img, (px - s, py - s))
         else:
-            # 绘制身体
+            # 绘制身体（几何占位）
             body_surf = pygame.Surface((s * 2, s * 2), pygame.SRCALPHA)
             pygame.draw.circle(body_surf, (*color[:3], alpha), (s, s), s)
             screen.blit(body_surf, (px - s, py - s))

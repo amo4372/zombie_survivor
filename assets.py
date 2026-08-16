@@ -93,6 +93,51 @@ ASSET_REGISTRY = {
         "fx_spark":          "assets/images/fx_spark.png",
         "fx_grapple":        "assets/images/fx_grapple.png",
         "fx_shield_hit":     "assets/images/fx_shield_hit.png",
+        # === 新Boss ===
+        "boss_mutant":       "assets/images/boss_mutant.png",
+        "boss_queen":        "assets/images/boss_queen.png",
+        "boss_titan":        "assets/images/boss_titan.png",
+        # === 新精英怪 ===
+        "elite_brute":       "assets/images/elite_brute.png",
+        "elite_assassin":    "assets/images/elite_assassin.png",
+        "elite_sorcerer":    "assets/images/elite_sorcerer.png",
+        "elite_guardian":    "assets/images/elite_guardian.png",
+        # === 新僵尸 ===
+        "zombie_spitter":    "assets/images/zombie_spitter.png",
+        "zombie_leaper":     "assets/images/zombie_leaper.png",
+        "zombie_corpse_eater":"assets/images/zombie_corpse_eater.png",
+        "zombie_wraith":     "assets/images/zombie_wraith.png",
+        # === 新武器 ===
+        "weapon_semi_auto_sniper":"assets/images/weapon_semi_auto_sniper.png",
+        # === 新道具 ===
+        "item_weapon_box":   "assets/images/item_weapon_box.png",
+        "item_treasure":     "assets/images/item_treasure.png",
+        "item_skill_slot":   "assets/images/item_skill_slot.png",
+        "item_buff_charm":   "assets/images/item_buff_charm.png",
+        # === 新特效 ===
+        "fx_acid":           "assets/images/fx_acid.png",
+        "fx_fear":           "assets/images/fx_fear.png",
+        "fx_curse":          "assets/images/fx_curse.png",
+        "fx_tentacle":       "assets/images/fx_tentacle.png",
+        "fx_boulder":        "assets/images/fx_boulder.png",
+        "fx_stomp":          "assets/images/fx_stomp.png",
+        "fx_freeze":         "assets/images/fx_freeze.png",
+        "fx_blood_frenzy":   "assets/images/fx_blood_frenzy.png",
+        # === 地图背景 ===
+        "bg_school":         "assets/images/bg_school.png",
+        "bg_street":         "assets/images/bg_street.png",
+        "bg_downtown":       "assets/images/bg_downtown.png",
+        "bg_suburb":         "assets/images/bg_suburb.png",
+        "bg_nuclear_plant":  "assets/images/bg_nuclear_plant.png",
+        # === Buff图标 ===
+        "buff_empower":      "assets/images/buff_empower.png",
+        "buff_ghost":        "assets/images/buff_ghost.png",
+        "buff_thorns":       "assets/images/buff_thorns.png",
+        "buff_blood_frenzy": "assets/images/buff_blood_frenzy.png",
+        "buff_corrosion":    "assets/images/buff_corrosion.png",
+        "buff_fear":         "assets/images/buff_fear.png",
+        "buff_curse":        "assets/images/buff_curse.png",
+        "buff_mark":         "assets/images/buff_mark.png",
     },
     # --- 音效资源 ---
     "sounds": {
@@ -161,6 +206,34 @@ ASSET_REGISTRY = {
         "fire_burn":         "assets/sounds/fire_burn.wav",
         "electric_spark":    "assets/sounds/electric_spark.wav",
         "glass_break":       "assets/sounds/glass_break.wav",
+        # === 新Boss音效 ===
+        "boss_mutant_roar":  "assets/sounds/boss_mutant_roar.wav",
+        "boss_mutant_combo": "assets/sounds/boss_mutant_combo.wav",
+        "boss_queen_summon": "assets/sounds/boss_queen_summon.wav",
+        "boss_queen_tentacle":"assets/sounds/boss_queen_tentacle.wav",
+        "boss_titan_stomp":  "assets/sounds/boss_titan_stomp.wav",
+        "boss_titan_charge": "assets/sounds/boss_titan_charge.wav",
+        "boss_titan_boulder":"assets/sounds/boss_titan_boulder.wav",
+        # === 新敌人音效 ===
+        "zombie_spit":       "assets/sounds/zombie_spit.wav",
+        "zombie_leap":       "assets/sounds/zombie_leap.wav",
+        "zombie_curse":      "assets/sounds/zombie_curse.wav",
+        "elite_heavy_attack":"assets/sounds/elite_heavy_attack.wav",
+        "elite_dash":        "assets/sounds/elite_dash.wav",
+        "elite_heal":        "assets/sounds/elite_heal.wav",
+        # === 新道具音效 ===
+        "pickup_weapon_box": "assets/sounds/pickup_weapon_box.wav",
+        "pickup_treasure":   "assets/sounds/pickup_treasure.wav",
+        "pickup_skill_slot": "assets/sounds/pickup_skill_slot.wav",
+        "pickup_buff_charm": "assets/sounds/pickup_buff_charm.wav",
+        # === 新特效音效 ===
+        "acid_splash":       "assets/sounds/acid_splash.wav",
+        "fear_scream":       "assets/sounds/fear_scream.wav",
+        "curse_whisper":     "assets/sounds/curse_whisper.wav",
+        "tentacle_rise":     "assets/sounds/tentacle_rise.wav",
+        "boulder_throw":     "assets/sounds/boulder_throw.wav",
+        "stomp_shock":       "assets/sounds/stomp_shock.wav",
+        "freeze_break":      "assets/sounds/freeze_break.wav",
     },
     # --- 音乐资源 ---
     "music": {
@@ -491,6 +564,36 @@ SOUND_MAP = {
     "fire_burn": ["fire_burn"],
     "electric": ["electric_spark"],
     "glass_break": ["glass_break"],
+    # 新武器
+    "semi_auto_sniper": ["shoot_sniper"],
+    # 新Boss
+    "boss_mutant_roar": ["boss_mutant_roar"],
+    "boss_mutant_combo": ["boss_mutant_combo"],
+    "boss_queen_summon": ["boss_queen_summon"],
+    "boss_queen_tentacle": ["boss_queen_tentacle"],
+    "boss_titan_stomp": ["boss_titan_stomp"],
+    "boss_titan_charge": ["boss_titan_charge"],
+    "boss_titan_boulder": ["boss_titan_boulder"],
+    # 新敌人
+    "zombie_spit": ["zombie_spit"],
+    "zombie_leap": ["zombie_leap"],
+    "zombie_curse": ["zombie_curse"],
+    "elite_heavy_attack": ["elite_heavy_attack"],
+    "elite_dash": ["elite_dash"],
+    "elite_heal": ["elite_heal"],
+    # 新道具
+    "pickup_weapon_box": ["pickup_weapon_box"],
+    "pickup_treasure": ["pickup_treasure"],
+    "pickup_skill_slot": ["pickup_skill_slot"],
+    "pickup_buff_charm": ["pickup_buff_charm"],
+    # 新特效
+    "acid_splash": ["acid_splash"],
+    "fear_scream": ["fear_scream"],
+    "curse_whisper": ["curse_whisper"],
+    "tentacle_rise": ["tentacle_rise"],
+    "boulder_throw": ["boulder_throw"],
+    "stomp_shock": ["stomp_shock"],
+    "freeze_break": ["freeze_break"],
 }
 
 MUSIC_MAP = {

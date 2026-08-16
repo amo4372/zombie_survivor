@@ -72,6 +72,7 @@ class Button:
         self.hovered = False
         self.pressed = False
         self.visible = True
+        self.enabled = True
         self.was_pressed = False
 
     def get_scaled_rect(self, scale=1.0):
@@ -83,7 +84,7 @@ class Button:
         )
 
     def update(self, mouse_pos, mouse_pressed, touch_events=None, scale=1.0):
-        if not self.visible:
+        if not self.visible or not self.enabled:
             return False
         scaled_rect = self.get_scaled_rect(scale)
         self.hovered = scaled_rect.collidepoint(mouse_pos)
@@ -123,7 +124,10 @@ class Button:
         if not self.visible:
             return
         scaled_rect = self.get_scaled_rect(scale)
-        color = self.hover_color if self.hovered else self.color
+        if not self.enabled:
+            color = (60, 60, 60)
+        else:
+            color = self.hover_color if self.hovered else self.color
         if self.pressed:
             color = tuple(max(0, c - 40) for c in color)
         pygame.draw.rect(screen, color, scaled_rect, border_radius=self.border_radius)
@@ -1009,7 +1013,7 @@ class SkillCardSelector:
                 desc_rect = desc_text.get_rect(center=(x + card_w // 2, desc_y + j * int(22 * scale)))
                 screen.blit(desc_text, desc_rect)
 
-            # 属性加成详情（原属性 → 新属性）
+            # 属性加成详情（原属性 -> 新属性）
             stat_change = skill.get_stat_change_text()
             if stat_change:
                 old_text, new_text = stat_change
@@ -1026,7 +1030,7 @@ class SkillCardSelector:
                 screen.blit(old_val, (x + card_w - int(20 * scale) - old_val.get_width(), stat_y))
                 stat_y += int(18 * scale)
                 # 箭头
-                arrow = font.render("↓", True, GOLD)
+                arrow = font.render("-", True, GOLD)
                 screen.blit(arrow, (x + card_w // 2 - arrow.get_width() // 2, stat_y - int(2 * scale)))
                 stat_y += int(16 * scale)
                 # 新属性
@@ -1100,14 +1104,55 @@ class DeathAura:
 
 
 class DamageNumber:
-    def __init__(self, x, y, damage, color=WHITE, is_crit=False):
+    # 伤害类型对应的颜色
+    TYPE_COLORS = {
+        "normal": WHITE,
+        "melee": (255, 220, 180),
+        "ranged": (180, 220, 255),
+        "crit": (255, 200, 50),
+        "dot": (255, 120, 80),
+        "fire": (255, 100, 20),
+        "poison": (120, 200, 50),
+        "bleed": (200, 30, 30),
+        "corrosion": (150, 200, 50),
+        "freeze": (100, 200, 255),
+        "explosion": (255, 150, 0),
+        "aoe": (255, 180, 50),
+        "magic": (200, 100, 255),
+        "heal": (80, 255, 120),
+    }
+
+    def __init__(self, x, y, damage, color=None, is_crit=False, damage_type="normal"):
         self.x = x
         self.y = y
         self.damage = damage
-        self.color = color
+        self.damage_type = damage_type
         self.is_crit = is_crit
+        # 暴击优先用暴击色
+        if is_crit:
+            self.color = self.TYPE_COLORS["crit"]
+        elif color is not None:
+            self.color = color
+        else:
+            self.color = self.TYPE_COLORS.get(damage_type, WHITE)
         self.lifetime = 1.0
         self.vy = -2
+        # 根据伤害大小计算字号倍率（小伤害<10=0.7, 普通=1.0, 大伤害>50=1.3, 巨大>100=1.6）
+        if damage < 10:
+            self.size_mult = 0.7
+        elif damage < 30:
+            self.size_mult = 0.85
+        elif damage < 60:
+            self.size_mult = 1.0
+        elif damage < 100:
+            self.size_mult = 1.2
+        elif damage < 200:
+            self.size_mult = 1.4
+        else:
+            self.size_mult = 1.7
+        # 暴击额外放大
+        if is_crit:
+            self.size_mult *= 1.3
 
     def update(self, dt):
         self.y += self.vy * dt * 60
@@ -1118,10 +1163,19 @@ class DamageNumber:
         alpha = int(255 * self.lifetime)
         text = f"{int(self.damage)}" + ("!" if self.is_crit else "")
         text_surf = font.render(text, True, self.color)
+        # 根据size_mult缩放表面
+        if self.size_mult != 1.0:
+            import pygame
+            orig_w, orig_h = text_surf.get_size()
+            new_w = max(4, int(orig_w * self.size_mult))
+            new_h = max(4, int(orig_h * self.size_mult))
+            text_surf = pygame.transform.smoothscale(text_surf, (new_w, new_h))
         text_surf.set_alpha(alpha)
         px = int((self.x - camera_x) * scale)
         py = int((self.y - camera_y) * scale)
-        screen.blit(text_surf, (px, py))
+        # 居中对齐
+        text_rect = text_surf.get_rect(center=(px, py))
+        screen.blit(text_surf, text_rect)
 
     def is_alive(self):
         return self.lifetime > 0

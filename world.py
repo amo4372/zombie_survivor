@@ -30,6 +30,10 @@ class SpecialItem:
             ItemType.TREASURE_CHEST: ((218, 165, 32), (255, 215, 0)),
             ItemType.SKILL_SLOT: ((255, 215, 0), (255, 255, 200)),
             ItemType.BUFF_CHARM: ((0, 200, 200), (150, 255, 255)),
+            ItemType.INCENDIARY: ((220, 80, 20), (255, 160, 40)),
+            ItemType.SMOKE_GRENADE: ((120, 120, 120), (180, 180, 180)),
+            ItemType.CLUSTER_BOMB: ((180, 100, 30), (240, 180, 60)),
+            ItemType.EMP_GRENADE: ((0, 180, 220), (100, 240, 255)),
         }
         # 武器箱和宝箱更大、存在更久
         if item_type in (ItemType.WEAPON_BOX, ItemType.TREASURE_CHEST):
@@ -49,12 +53,42 @@ class SpecialItem:
     def get_rect(self):
         return pygame.Rect(self.x - self.size, self.y - self.size, self.size * 2, self.size * 2)
 
-    def draw(self, screen, camera_x, camera_y, scale=1.0):
+    def draw(self, screen, camera_x, camera_y, scale=1.0, assets=None):
         px = int((self.x - camera_x) * scale)
         py = int((self.y - camera_y) * scale)
         s = max(2, int(self.size * scale))
 
         pulse = abs(math.sin(self.pulse_timer * 3)) * 0.5 + 0.5
+
+        # === 优先使用assets图片绘制 ===
+        img_key = None
+        item_img_map = {
+            ItemType.VACCINE: "item_vaccine",
+            ItemType.HEALTH_PACK: "item_health",
+            ItemType.AMMO_BOX: "item_ammo",
+            ItemType.SPEED_BOOST: "item_speed",
+            ItemType.DAMAGE_BOOST: "item_damage",
+            ItemType.SHIELD_REPAIR: "item_shield",
+            ItemType.WEAPON_BOX: "item_weapon_box",
+            ItemType.TREASURE_CHEST: "item_treasure",
+            ItemType.SKILL_SLOT: "item_skill_slot",
+            ItemType.BUFF_CHARM: "item_buff_charm",
+            ItemType.INCENDIARY: "item_incendiary",
+            ItemType.SMOKE_GRENADE: "item_smoke",
+            ItemType.CLUSTER_BOMB: "item_cluster",
+            ItemType.EMP_GRENADE: "item_emp",
+        }
+        img_key = item_img_map.get(self.item_type)
+        if assets is not None and img_key is not None and assets.has_image(img_key):
+            # 发光效果
+            glow_s = int(s * (1 + pulse * 0.5))
+            glow = pygame.Surface((glow_s * 2, glow_s * 2), pygame.SRCALPHA)
+            pygame.draw.circle(glow, (*self.glow_color[:3], int(80 * pulse)), (glow_s, glow_s), glow_s)
+            screen.blit(glow, (px - glow_s, py - glow_s))
+            # 图片
+            img = assets.get_image(img_key, s * 2, s * 2)
+            screen.blit(img, (px - s, py - s))
+            return
 
         if self.item_type == ItemType.WEAPON_BOX:
             # 武器箱：木质军箱外观
@@ -385,11 +419,14 @@ class GameWorld:
         x = player_x + math.cos(angle) * dist
         y = player_y + math.sin(angle) * dist
 
-        weights = [0.04, 0.20, 0.20, 0.16, 0.12, 0.08, 0.07, 0.04, 0.05, 0.04]
+        weights = [0.04, 0.18, 0.18, 0.12, 0.10, 0.07, 0.06, 0.04, 0.04, 0.03,
+                   0.05, 0.04, 0.03, 0.02]
         types = [ItemType.VACCINE, ItemType.HEALTH_PACK, ItemType.AMMO_BOX, 
                 ItemType.SPEED_BOOST, ItemType.DAMAGE_BOOST, ItemType.SHIELD_REPAIR,
                 ItemType.WEAPON_BOX, ItemType.TREASURE_CHEST,
-                ItemType.SKILL_SLOT, ItemType.BUFF_CHARM]
+                ItemType.SKILL_SLOT, ItemType.BUFF_CHARM,
+                ItemType.INCENDIARY, ItemType.SMOKE_GRENADE,
+                ItemType.CLUSTER_BOMB, ItemType.EMP_GRENADE]
         item_type = random.choices(types, weights=weights)[0]
 
         self.items.append(SpecialItem(x, y, item_type))
@@ -439,7 +476,7 @@ class GameWorld:
         self.ensure_chunks_around(x, y)
         return x, y
 
-    def draw(self, screen, camera_x, camera_y, scale=1.0):
+    def draw(self, screen, camera_x, camera_y, scale=1.0, assets=None):
         screen_w = screen.get_width()
         screen_h = screen.get_height()
 
@@ -462,7 +499,7 @@ class GameWorld:
                     pygame.draw.rect(screen, color, (px, py, tile_size + 1, tile_size + 1))
 
         for item in self.items:
-            item.draw(screen, camera_x, camera_y, scale)
+            item.draw(screen, camera_x, camera_y, scale, assets)
 
         for obs in self.obstacles:
             rect = obs['rect']
@@ -676,21 +713,26 @@ class GameWorld:
 
 
 class HordeManager:
+    # 尸潮规模等级
+    SCALE_SMALL = 1    # 小型：普通僵尸，无Boss
+    SCALE_MEDIUM = 2   # 中型：精英怪，有概率Boss
+    SCALE_LARGE = 3    # 大型：必刷Boss，大量精英
+    SCALE_MASSIVE = 4  # 巨型：多Boss，尸潮女王级
+
     def __init__(self, game_mode, difficulty):
         self.game_mode = game_mode
         self.difficulty = difficulty
 
         # 基础参数（开局）
         self.base_horde_duration = 32.0
-        self.min_horde_duration = 14.0    # 尸潮持续时间下限，不能比这个更短
+        self.min_horde_duration = 14.0
         self.base_horde_cooldown = 60.0
-        self.min_horde_cooldown = 30.0    # 冷却间隔下限
+        self.min_horde_cooldown = 30.0
 
         self.base_boss_chance_horde = 0.08
         self.base_spawn_rate_horde = 0.35
         self.base_spawn_rate_normal = 1.8
 
-        # 难度修正系数
         diff_mod = {
             "简单": {"dur_mod":1.2, "cd_mod":1.2, "boss":0.04, "spawn_h":0.5, "spawn_n":2.2},
             "普通": {"dur_mod":1.0, "cd_mod":1.0, "boss":0.08, "spawn_h":0.35, "spawn_n":1.8},
@@ -711,21 +753,28 @@ class HordeManager:
         self.spawn_timer = 0.0
         self.total_time = 0.0
 
+        # === 尸潮规模系统 ===
+        self.horde_count = 0           # 已发生的尸潮次数
+        self.current_scale = self.SCALE_SMALL
+        self.boss_guaranteed = False   # 本次尸潮是否保底Boss
+        self.vaccine_boss_spawned = False  # 是否已刷出保底疫苗Boss
+
+        # 故事/限时模式：确保至少刷一个Boss且其中一个爆疫苗
+        self.story_boss_guaranteed = game_mode in (GameMode.STORY, GameMode.TIMED)
+        self.story_min_horde_for_boss = 2  # 第2波起保底Boss
+
         self.endless_glitch_shown = False
         self.glitch_trigger_time = 1200.0
-        # 无尽模式专属：前置倒计时（较短，营造紧张感后出错）
         self.endless_countdown_total = 90
         self.endless_countdown_left = 90
 
     def update(self, dt):
         self.total_time += dt
         if self.game_mode == GameMode.ENDLESS:
-            # 先走倒计时，倒计时归零后触发glitch变为正向计时
             if not self.endless_glitch_shown:
                 self.endless_countdown_left -= dt
                 if self.endless_countdown_left <= 0:
                     self.endless_glitch_shown = True
-        # 尸潮逻辑
         self.timer -= dt
         if self.horde_active:
             if self.timer <= 0:
@@ -736,10 +785,61 @@ class HordeManager:
         else:
             if self.timer <= 0:
                 self.horde_active = True
+                self.horde_count += 1
                 new_dur = self._get_current_horde_duration()
                 self.timer = new_dur
                 self.boss_spawned_this_horde = False
+                # 计算本次尸潮规模
+                self._calculate_horde_scale()
         self.spawn_timer -= dt
+
+    def _calculate_horde_scale(self):
+        """根据波次和时间计算尸潮规模"""
+        import random
+        wave = self.horde_count
+        time_min = self.total_time / 60.0
+
+        # 基础规模随波次提升
+        if wave <= 1:
+            base_scale = self.SCALE_SMALL
+        elif wave <= 3:
+            base_scale = self.SCALE_SMALL if random.random() < 0.5 else self.SCALE_MEDIUM
+        elif wave <= 6:
+            base_scale = self.SCALE_MEDIUM
+        elif wave <= 10:
+            base_scale = self.SCALE_MEDIUM if random.random() < 0.4 else self.SCALE_LARGE
+        else:
+            base_scale = self.SCALE_LARGE if random.random() < 0.6 else self.SCALE_MASSIVE
+
+        # 时间加成
+        if time_min > 10:
+            base_scale = max(base_scale, self.SCALE_MEDIUM)
+        if time_min > 20:
+            base_scale = max(base_scale, self.SCALE_LARGE)
+
+        self.current_scale = base_scale
+
+        # 保底Boss判定
+        self.boss_guaranteed = False
+        if self.current_scale >= self.SCALE_LARGE:
+            self.boss_guaranteed = True
+        elif self.current_scale == self.SCALE_MEDIUM and wave >= 3:
+            self.boss_guaranteed = random.random() < 0.4
+
+        # 故事/限时模式强制保底
+        if self.story_boss_guaranteed and wave >= self.story_min_horde_for_boss:
+            self.boss_guaranteed = True
+            # 确保至少有一个Boss爆疫苗
+            if not self.vaccine_boss_spawned:
+                self.boss_guaranteed = True
+
+    def get_current_scale_name(self):
+        names = {1: "小型尸潮", 2: "中型尸潮", 3: "大型尸潮", 4: "巨型尸潮"}
+        return names.get(self.current_scale, "未知")
+
+    def get_scale_color(self):
+        colors = {1: (180, 180, 180), 2: (220, 180, 60), 3: (220, 80, 40), 4: (180, 30, 180)}
+        return colors.get(self.current_scale, (255, 255, 255))
 
     def get_time_display(self):
         """返回(显示文本, 是否倒计时模式)"""
@@ -789,7 +889,11 @@ class HordeManager:
         import random
         time_factor = min(2.2, 1.0 + self.total_time / 180.0)
 
-        spawn_rate_horde = self.base_spawn_rate_horde / time_factor
+        # 规模影响刷新速率
+        scale_mult = {1: 1.2, 2: 0.9, 3: 0.65, 4: 0.45}
+        scale_spawn_mult = scale_mult.get(self.current_scale, 1.0)
+
+        spawn_rate_horde = self.base_spawn_rate_horde / time_factor * scale_spawn_mult
         spawn_rate_normal = self.base_spawn_rate_normal / time_factor
         boss_chance_horde = self.base_boss_chance_horde * time_factor
 
@@ -802,14 +906,18 @@ class HordeManager:
             return None
         self.spawn_timer = spawn_rate
 
-        if self.horde_active and (not self.boss_spawned_this_horde) and random.random() < boss_chance_horde:
-            if random.random() < 0.5:
-                boss_type = EnemyType.BOSS_LONG
-            else:
-                boss_type = EnemyType.BOSS_XIANG
-            self.boss_spawned_this_horde = True
-            return boss_type
+        # === Boss刷新逻辑 ===
+        if self.horde_active and not self.boss_spawned_this_horde:
+            # 保底Boss：大型以上必刷，中型有概率
+            if self.boss_guaranteed:
+                self.boss_spawned_this_horde = True
+                return self._select_boss_type()
+            # 概率Boss
+            elif random.random() < boss_chance_horde:
+                self.boss_spawned_this_horde = True
+                return self._select_boss_type()
 
+        # === 普通怪物池（按规模）===
         base_pool = [
             EnemyType.ZOMBIE_NORMAL,
             EnemyType.ZOMBIE_FAST,
@@ -818,6 +926,14 @@ class HordeManager:
         mid_pool = [
             EnemyType.ZOMBIE_RANGED,
             EnemyType.ZOMBIE_CRAWLER,
+            EnemyType.ZOMBIE_SPITTER,
+            EnemyType.ZOMBIE_LEAPER,
+        ]
+        elite_pool = [
+            EnemyType.ELITE_BRUTE,
+            EnemyType.ELITE_ASSASSIN,
+            EnemyType.ELITE_SORCERER,
+            EnemyType.ELITE_GUARDIAN,
         ]
         advanced_pool = [
             EnemyType.ZOMBIE_EXPLODER,
@@ -825,18 +941,46 @@ class HordeManager:
             EnemyType.ZOMBIE_SHIELD,
             EnemyType.ZOMBIE_HEALER,
             EnemyType.ZOMBIE_PHANTOM,
+            EnemyType.ZOMBIE_WRAITH,
         ]
 
         final_pool = base_pool.copy()
-        if self.total_time >= 60.0:
+        if self.total_time >= 60.0 or self.current_scale >= 2:
             final_pool.extend(mid_pool)
-        if self.total_time >= 120.0:
+        if self.total_time >= 120.0 or self.current_scale >= 3:
             final_pool.extend(advanced_pool)
+        # 精英怪：中型以上加入
+        if self.current_scale >= 2:
+            elite_weight = 0.15 if self.current_scale == 2 else 0.25
+            if random.random() < elite_weight:
+                return random.choice(elite_pool)
 
         if self.horde_active:
             return random.choice(final_pool)
         else:
             return random.choice(base_pool)
+
+    def _select_boss_type(self):
+        """根据规模和模式选择Boss类型，标记疫苗Boss"""
+        import random
+        # 巨型尸潮：高级Boss
+        if self.current_scale >= self.SCALE_MASSIVE:
+            bosses = [EnemyType.BOSS_MUTANT, EnemyType.BOSS_QUEEN, EnemyType.BOSS_TITAN]
+            boss_type = random.choice(bosses)
+        elif self.current_scale >= self.SCALE_LARGE:
+            bosses = [EnemyType.BOSS_LONG, EnemyType.BOSS_XIANG, EnemyType.BOSS_MUTANT]
+            boss_type = random.choice(bosses)
+        else:
+            bosses = [EnemyType.BOSS_LONG, EnemyType.BOSS_XIANG]
+            boss_type = random.choice(bosses)
+
+        # 标记疫苗Boss：故事/限时模式第一个Boss必爆疫苗
+        if self.story_boss_guaranteed and not self.vaccine_boss_spawned:
+            self.vaccine_boss_spawned = True
+            boss_type = getattr(boss_type, 'value', boss_type)  # 保持原值
+            # 用特殊标记：返回元组(boss_type, drops_vaccine=True)
+            return (boss_type, True)
+        return boss_type
 
     def is_timed_over(self):
         if self.game_mode == GameMode.TIMED:
