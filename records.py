@@ -185,6 +185,20 @@ class GameRecords:
                 "millionaire": {"unlocked": False, "desc": "单局得分超过100万", "date": None, "group":"结局挑战", "hidden":False},
                 "perfect_ending": {"unlocked": False, "desc": "达成完美结局", "date": None, "group":"结局挑战", "hidden":False},
                 "all_endings": {"unlocked": False, "desc": "达成所有结局", "date": None, "group":"结局挑战", "hidden":False},
+                # === Buff/新机制相关成就 ===
+                "turret_master": {"unlocked": False, "desc": "单局部署10个自动炮塔", "date": None, "group":"战斗", "hidden":False},
+                "chest_opener": {"unlocked": False, "desc": "单局开启5个宝箱", "date": None, "group":"技能武器", "hidden":False},
+                "ice_sculptor": {"unlocked": False, "desc": "单局冻结30个敌人", "date": None, "group":"战斗", "hidden":False},
+                "poison_master": {"unlocked": False, "desc": "单局用毒素击杀30个敌人", "date": None, "group":"战斗", "hidden":False},
+                "purifier": {"unlocked": False, "desc": "累计使用净化技能10次", "date": None, "group":"技能武器", "hidden":False},
+                "war_crier": {"unlocked": False, "desc": "战吼状态下累计击杀50个敌人", "date": None, "group":"战斗", "hidden":False},
+                "vaccine_hunter": {"unlocked": False, "desc": "限时模式击败Boss获得疫苗", "date": None, "group":"结局挑战", "hidden":False},
+                "elemental_master": {"unlocked": False, "desc": "同时拥有火焰、冰霜、剧毒三种附魔", "date": None, "group":"技能武器", "hidden":False},
+                # 隐藏趣味成就
+                "fire_and_ice": {"unlocked": False, "desc": "冰火双修：同时拥有火焰和冰霜附魔", "date": None, "group":"隐藏", "hidden":True},
+                "debuff_collector": {"unlocked": False, "desc": "debuff收藏家：同时受到5种不同负面效果", "date": None, "group":"隐藏", "hidden":True},
+                "burning_survivor": {"unlocked": False, "desc": "浴火重生：在燃烧状态下存活60秒", "date": None, "group":"隐藏", "hidden":True},
+                "bleeding_warrior": {"unlocked": False, "desc": "浴血奋战：在流血状态下击杀20个敌人", "date": None, "group":"隐藏", "hidden":True},
                 # 隐藏成就示例
                 "secret_zombie": {"unlocked": False, "desc": "发现秘密僵尸", "date": None, "group":"隐藏", "hidden":True},
             },
@@ -195,6 +209,8 @@ class GameRecords:
             "total_dodge_count": 0,
             "total_life_steal_heal": 0,
             "highest_combo_kills": 0,
+            # === 故事模式剧情收集 ===
+            "collected_story": [],
         }
 
         # 顶层key：只补缺失，不覆盖旧数据
@@ -493,6 +509,31 @@ class GameRecords:
             unlock("speedrunner")
         if d.get("difficulty") == "地狱" and d.get("time_survived",0)>=480:
             unlock("iron_will")
+        # === 新成就检测 ===
+        if d.get("turrets_deployed", 0) >= 10:
+            unlock("turret_master")
+        if d.get("chests_opened", 0) >= 5:
+            unlock("chest_opener")
+        if d.get("enemies_frozen", 0) >= 30:
+            unlock("ice_sculptor")
+        if d.get("poison_kills", 0) >= 30:
+            unlock("poison_master")
+        if self.data["skill_usage"].get("purify", 0) >= 10:
+            unlock("purifier")
+        if d.get("war_cry_kills", 0) >= 50:
+            unlock("war_crier")
+        if d.get("mode") == "timed" and d.get("got_vaccine", False):
+            unlock("vaccine_hunter")
+        if d.get("has_flame_enchant", False) and d.get("has_frost_enchant", False) and d.get("has_poison_enchant", False):
+            unlock("elemental_master")
+        if d.get("has_flame_enchant", False) and d.get("has_frost_enchant", False):
+            unlock("fire_and_ice")
+        if d.get("max_debuffs_at_once", 0) >= 5:
+            unlock("debuff_collector")
+        if d.get("burning_survive_time", 0) >= 60:
+            unlock("burning_survivor")
+        if d.get("bleeding_kills", 0) >= 20:
+            unlock("bleeding_warrior")
         return new_unlocks
 
     # ==================== 查询接口 ====================
@@ -512,6 +553,16 @@ class GameRecords:
         return self.data["achievements"]
     def get_unlocked_achievements(self):
         return {k: v for k, v in self.data["achievements"].items() if v.get("unlocked",False)}
+    def get_collected_story(self):
+        """获取已收集的剧情片段ID列表"""
+        return self.data.get("collected_story", [])
+    def add_collected_story(self, fragment_id):
+        """添加已收集的剧情片段（去重）"""
+        if "collected_story" not in self.data:
+            self.data["collected_story"] = []
+        if fragment_id not in self.data["collected_story"]:
+            self.data["collected_story"].append(fragment_id)
+            self._save()
     def get_game_history(self, limit=10):
         return self.data["game_history"][:limit]
     def get_kills_by_type(self):
@@ -561,6 +612,19 @@ class GameSession:
             "mode": "timed",
             "time_survived": 0,
             "play_time": 0,
+            # 新成就统计
+            "turrets_deployed": 0,
+            "chests_opened": 0,
+            "enemies_frozen": 0,
+            "poison_kills": 0,
+            "war_cry_kills": 0,
+            "bleeding_kills": 0,
+            "max_debuffs_at_once": 0,
+            "burning_survive_time": 0,
+            "has_flame_enchant": False,
+            "has_frost_enchant": False,
+            "has_poison_enchant": False,
+            "got_vaccine": False,
         }
     def set_difficulty(self, diff):
         self.data["difficulty"] = diff
@@ -615,6 +679,29 @@ class GameSession:
         self.data["ending"] = ending_type
     def set_died(self, died):
         self.data["died"] = died
+    def add_turret_deployed(self):
+        self.data["turrets_deployed"] += 1
+    def add_chest_opened(self):
+        self.data["chests_opened"] += 1
+    def add_enemy_frozen(self):
+        self.data["enemies_frozen"] += 1
+    def add_poison_kill(self):
+        self.data["poison_kills"] += 1
+    def add_war_cry_kill(self):
+        self.data["war_cry_kills"] += 1
+    def add_bleeding_kill(self):
+        self.data["bleeding_kills"] += 1
+    def update_max_debuffs(self, count):
+        if count > self.data["max_debuffs_at_once"]:
+            self.data["max_debuffs_at_once"] = count
+    def add_burning_survive_time(self, dt):
+        self.data["burning_survive_time"] += dt
+    def set_has_enchant(self, enchant_type, value=True):
+        key = f"has_{enchant_type}_enchant"
+        if key in self.data:
+            self.data[key] = value
+    def set_got_vaccine(self, value=True):
+        self.data["got_vaccine"] = value
     def finalize(self):
         elapsed = (datetime.datetime.now() - self.start_time).total_seconds()
         self.data["play_time"] = elapsed

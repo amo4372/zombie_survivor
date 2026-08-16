@@ -900,7 +900,7 @@ class SkillCardSelector:
         sh = pygame.display.get_surface().get_height()
 
         card_w = int(220 * scale)
-        card_h = int(280 * scale)
+        card_h = int(340 * scale)
         gap = int(30 * scale)
         total_width = len(self.cards) * card_w + (len(self.cards) - 1) * gap
         start_x = (sw - total_width) // 2
@@ -948,7 +948,7 @@ class SkillCardSelector:
 
         # 绘制技能卡
         card_w = int(220 * scale)
-        card_h = int(280 * scale)
+        card_h = int(340 * scale)
         gap = int(30 * scale)
         total_width = len(self.cards) * card_w + (len(self.cards) - 1) * gap
         start_x = (sw - total_width) // 2
@@ -1000,13 +1000,40 @@ class SkillCardSelector:
             type_rect = type_text.get_rect(center=(x + card_w // 2, type_y))
             screen.blit(type_text, type_rect)
 
-            # 描述
+            # 描述（使用下一级词条，高等级技能显示不同描述）
             desc_y = type_y + int(30 * scale)
-            desc_lines = self._wrap_text(skill.description, font, card_w - int(20 * scale))
-            for j, line in enumerate(desc_lines[:4]):
+            next_desc = skill.get_next_level_desc()
+            desc_lines = self._wrap_text(next_desc, font, card_w - int(20 * scale))
+            for j, line in enumerate(desc_lines[:3]):
                 desc_text = font.render(line, True, LIGHT_GRAY)
                 desc_rect = desc_text.get_rect(center=(x + card_w // 2, desc_y + j * int(22 * scale)))
                 screen.blit(desc_text, desc_rect)
+
+            # 属性加成详情（原属性 → 新属性）
+            stat_change = skill.get_stat_change_text()
+            if stat_change:
+                old_text, new_text = stat_change
+                stat_y = desc_y + int(3 * 22 * scale) + int(8 * scale)
+                # 分隔线
+                pygame.draw.line(screen, (*GRAY[:3], 100),
+                                 (x + int(20 * scale), stat_y),
+                                 (x + card_w - int(20 * scale), stat_y), 1)
+                stat_y += int(10 * scale)
+                # 原属性
+                old_label = font.render("当前", True, GRAY)
+                old_val = font.render(old_text, True, GRAY)
+                screen.blit(old_label, (x + int(20 * scale), stat_y))
+                screen.blit(old_val, (x + card_w - int(20 * scale) - old_val.get_width(), stat_y))
+                stat_y += int(18 * scale)
+                # 箭头
+                arrow = font.render("↓", True, GOLD)
+                screen.blit(arrow, (x + card_w // 2 - arrow.get_width() // 2, stat_y - int(2 * scale)))
+                stat_y += int(16 * scale)
+                # 新属性
+                new_label = font.render("选择后", True, GOLD)
+                new_val = font.render(new_text, True, GREEN)
+                screen.blit(new_label, (x + int(20 * scale), stat_y))
+                screen.blit(new_val, (x + card_w - int(20 * scale) - new_val.get_width(), stat_y))
 
             # 前置要求提示
             if is_new and skill.requires:
@@ -1168,11 +1195,24 @@ class ParticleSystem:
             lifetime = random.uniform(*lifetime_range)
             self.particles.append(Particle(x, y, color, size, (vx, vy), lifetime))
 
+    def spawn_particle(self, x, y, vx, vy, color, lifetime, size):
+        """生成单个粒子，带固定速度（用于环形冲击波、拖尾等定向效果）"""
+        self.particles.append(Particle(x, y, color, size, (vx, vy), lifetime))
+
     def spawn_explosion(self, x, y, color, count=20):
         self.spawn(x, y, color, count, (3, 10), (-8, 8), (0.5, 1.5))
 
     def spawn_blood(self, x, y, count=8):
         self.spawn(x, y, RED, count, (2, 5), (-4, 4), (0.3, 0.8))
+
+    def spawn_heal_particles(self, x, y, count=15):
+        """生成治疗粒子（绿色向上飘动）"""
+        for _ in range(count):
+            size = random.randint(3, 7)
+            vx = random.uniform(-1.5, 1.5)
+            vy = random.uniform(-4, -1.5)
+            lifetime = random.uniform(0.5, 1.2)
+            self.particles.append(Particle(x, y, LIME, size, (vx, vy), lifetime))
 
     def spawn_death_aura(self, x, y, color):
         self.death_auras.append(DeathAura(x, y, color))

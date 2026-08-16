@@ -295,6 +295,7 @@ class Weapon:
         self.reload_time = config.get("reload", 0)
         self.reload_timer = 0
         self.is_reloading = False
+        self.reload_speed_mult = 1.0  # 换弹速度加成（由玩家技能设置）
 
     def can_fire(self):
         if self.is_reloading:
@@ -366,7 +367,7 @@ class Weapon:
             self.cooldown_timer -= dt
 
         if self.is_reloading:
-            self.reload_timer -= dt
+            self.reload_timer -= dt * self.reload_speed_mult
             if self.reload_timer <= 0:
                 self.is_reloading = False
                 self.current_ammo = self.max_ammo
