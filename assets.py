@@ -5,8 +5,7 @@
 import pygame
 import os
 import random
-from config import (WHITE, BLACK, RED, GREEN, BLUE, YELLOW, ORANGE, PURPLE, 
-                   GRAY, DARK_GRAY, CYAN, GOLD, CRIMSON, VOID_BLACK, CHARCOAL)
+from config import *
 
 # ============================================================
 # 资源清单表（所有支持的资源）
@@ -237,13 +236,33 @@ ASSET_REGISTRY = {
     },
     # --- 音乐资源 ---
     "music": {
-        "menu":              "assets/music/menu_theme.ogg",
-        "gameplay":          "assets/music/gameplay_theme.ogg",
-        "horde":             "assets/music/horde_theme.ogg",
-        "boss":              "assets/music/boss_theme.ogg",
-        "victory":           "assets/music/victory_theme.ogg",
-        "gameover":          "assets/music/gameover_theme.ogg",
-        "ending":            "assets/music/ending_theme.ogg",
+        # 界面音乐
+        "menu":              "assets/music/menu.ogg",
+        "victory":           "assets/music/victory.ogg",
+        "gameover":          "assets/music/gameover.ogg",
+        "ending":            "assets/music/gameover.ogg",
+        # 地图专属音乐
+        "school":            "assets/music/school.ogg",
+        "street":            "assets/music/street.ogg",
+        "downtown":          "assets/music/downtown.ogg",
+        "suburb":            "assets/music/suburb.ogg",
+        "nuclear":           "assets/music/nuclear.ogg",
+        # 条件触发音乐
+        "boss":              "assets/music/boss.ogg",
+        "horde":             "assets/music/horde.ogg",
+        "tension":           "assets/music/tension.ogg",
+        # 兼容旧名称
+        "gameplay":          "assets/music/school.ogg",
+        # === 经典原版音乐（保留备用）===
+        "menu_classic":      "assets/music/menu_theme.ogg",
+        "victory_classic":   "assets/music/victory_theme.ogg",
+        "gameover_classic":  "assets/music/gameover_theme.ogg",
+        "gameplay_classic":  "assets/music/gameplay_theme.ogg",
+        "boss_classic":      "assets/music/boss_theme.ogg",
+        "horde_classic":     "assets/music/horde_theme.ogg",
+        "ending_classic":    "assets/music/ending_theme.ogg",
+        "ending_letgo":      "assets/music/ending_letgo.ogg",
+        "ending_perfect":    "assets/music/ending_perfect.ogg",
     }
 }
 
@@ -597,11 +616,30 @@ SOUND_MAP = {
 }
 
 MUSIC_MAP = {
+    # 界面
     "menu": "menu",
-    "gameplay": "gameplay",
-    "horde": "horde",
-    "boss": "boss",
     "victory": "victory",
     "gameover": "gameover",
     "ending": "ending",
+    # 地图专属
+    "school": "school",
+    "street": "street",
+    "downtown": "downtown",
+    "suburb": "suburb",
+    "nuclear": "nuclear",
+    # 条件触发
+    "boss": "boss",
+    "horde": "horde",
+    "tension": "tension",
+    # 兼容
+    "gameplay": "gameplay",
+}
+
+# 地图类型到音乐名称的映射
+MAP_MUSIC_MAP = {
+    "school": "school",
+    "street": "street",
+    "downtown": "downtown",
+    "suburb": "suburb",
+    "nuclear_plant": "nuclear",
 }

@@ -5,7 +5,7 @@
 import math
 import random
 import pygame
-from config import WeaponType, YELLOW, ORANGE, RED, GREEN, WHITE, BLACK, CYAN, PURPLE, LIME, BLOOD_RED, RUST, POISON_GREEN
+from config import *
 
 class Projectile:
     def __init__(self, x, y, vx, vy, damage, max_range, color, size, 
@@ -178,6 +178,12 @@ class Weapon:
         self.level = level
         self.cooldown_timer = 0
         self.shake_intensity = 2
+        # 近战攻击标记
+        self.melee_attack_triggered = False
+        self.melee_attack_angle = 0
+        self.melee_attack_x = 0
+        self.melee_attack_y = 0
+        self.melee_attack_damage = 0
         self._setup_weapon()
 
     def _setup_weapon(self):
@@ -280,6 +286,140 @@ class Weapon:
                 "desc": "双发齐射，近距离毁灭性伤害",
                 "ammo": 2, "reload": 2.0
             },
+            # ========== 近战武器 ==========
+            WeaponType.FISTS: {
+                "name": "拳头", "damage": 15, "fire_rate": 0.4,
+                "range": 55, "speed": 0, "spread": 0, "pierce": 1,
+                "color": (220, 180, 150), "projectile_size": 0, "shake": 1,
+                "desc": "基础近战武器，无限使用",
+                "ammo": "∞", "reload": 0, "is_melee": True
+            },
+            WeaponType.KNIFE: {
+                "name": "匕首", "damage": 28, "fire_rate": 0.25,
+                "range": 60, "speed": 0, "spread": 0, "pierce": 1,
+                "color": (192, 192, 192), "projectile_size": 0, "shake": 2,
+                "desc": "快速近战，高暴击率",
+                "ammo": "∞", "reload": 0, "is_melee": True, "crit_chance": 0.3
+            },
+            WeaponType.BAT: {
+                "name": "棒球棍", "damage": 40, "fire_rate": 0.6,
+                "range": 70, "speed": 0, "spread": 0, "pierce": 1,
+                "color": BROWN, "projectile_size": 0, "shake": 4,
+                "desc": "中速近战，有击退效果",
+                "ammo": "∞", "reload": 0, "is_melee": True, "knockback": 15
+            },
+            WeaponType.CHAINSAW: {
+                "name": "电锯", "damage": 22, "fire_rate": 0.08,
+                "range": 55, "speed": 0, "spread": 0, "pierce": 1,
+                "color": ORANGE, "projectile_size": 0, "shake": 3,
+                "desc": "持续高DPS，移动减速",
+                "ammo": "∞", "reload": 0, "is_melee": True, "move_slow": 0.5
+            },
+            # ========== 手枪扩展 ==========
+            WeaponType.REVOLVER: {
+                "name": "左轮手枪", "damage": 45, "fire_rate": 0.7,
+                "range": 450, "speed": 14, "spread": 0.02, "pierce": 2,
+                "color": GOLD, "projectile_size": 5, "shake": 5,
+                "desc": "高伤害低射速，穿透力强",
+                "ammo": 6, "reload": 2.0
+            },
+            WeaponType.DESERT_EAGLE: {
+                "name": "沙漠之鹰", "damage": 60, "fire_rate": 0.8,
+                "range": 500, "speed": 16, "spread": 0.03, "pierce": 3,
+                "color": (200, 200, 200), "projectile_size": 6, "shake": 7,
+                "desc": "超高伤害手枪，后坐力大",
+                "ammo": 7, "reload": 2.5
+            },
+            # ========== 冲锋枪扩展 ==========
+            WeaponType.SMG: {
+                "name": "冲锋枪", "damage": 12, "fire_rate": 0.08,
+                "range": 350, "speed": 13, "spread": 0.07, "pierce": 1,
+                "color": DARK_GRAY, "projectile_size": 3, "shake": 2,
+                "desc": "高射速基础冲锋枪",
+                "ammo": 30, "reload": 1.8
+            },
+            WeaponType.UMP45: {
+                "name": "UMP45", "damage": 18, "fire_rate": 0.12,
+                "range": 400, "speed": 13, "spread": 0.05, "pierce": 1,
+                "color": BLACK, "projectile_size": 4, "shake": 3,
+                "desc": "高伤害冲锋枪，精度较好",
+                "ammo": 25, "reload": 2.0
+            },
+            WeaponType.P90: {
+                "name": "P90", "damage": 11, "fire_rate": 0.06,
+                "range": 380, "speed": 14, "spread": 0.06, "pierce": 1,
+                "color": (180, 160, 120), "projectile_size": 3, "shake": 2,
+                "desc": "极高射速，大容量弹匣",
+                "ammo": 50, "reload": 2.2
+            },
+            # ========== 步枪扩展 ==========
+            WeaponType.AK47: {
+                "name": "AK47", "damage": 32, "fire_rate": 0.12,
+                "range": 500, "speed": 15, "spread": 0.06, "pierce": 2,
+                "color": (139, 90, 43), "projectile_size": 5, "shake": 4,
+                "desc": "高伤害步枪，后坐力较大",
+                "ammo": 30, "reload": 2.2
+            },
+            WeaponType.M4A1: {
+                "name": "M4A1", "damage": 26, "fire_rate": 0.1,
+                "range": 520, "speed": 16, "spread": 0.03, "pierce": 2,
+                "color": BLACK, "projectile_size": 4, "shake": 3,
+                "desc": "均衡可靠的突击步枪",
+                "ammo": 30, "reload": 2.0
+            },
+            WeaponType.SCAR: {
+                "name": "SCAR", "damage": 28, "fire_rate": 0.11,
+                "range": 550, "speed": 15, "spread": 0.02, "pierce": 2,
+                "color": (180, 160, 120), "projectile_size": 5, "shake": 3,
+                "desc": "高精度突击步枪",
+                "ammo": 30, "reload": 2.1
+            },
+            # ========== 狙击枪扩展 ==========
+            WeaponType.AWP: {
+                "name": "AWP", "damage": 150, "fire_rate": 2.0,
+                "range": 1000, "speed": 25, "spread": 0, "pierce": 8,
+                "color": GREEN, "projectile_size": 8, "shake": 12,
+                "desc": "超高伤害狙击枪，一枪毙命",
+                "ammo": 5, "reload": 3.5
+            },
+            # ========== 霰弹枪扩展 ==========
+            WeaponType.AA12: {
+                "name": "AA12", "damage": 10, "fire_rate": 0.2,
+                "range": 280, "speed": 11, "spread": 0.12, "pierce": 1,
+                "pellets": 6, "color": BLACK, "projectile_size": 3, "shake": 4,
+                "desc": "全自动霰弹枪，近距离压制",
+                "ammo": 20, "reload": 3.0
+            },
+            # ========== 重武器扩展 ==========
+            WeaponType.LMG: {
+                "name": "轻机枪", "damage": 20, "fire_rate": 0.1,
+                "range": 500, "speed": 14, "spread": 0.07, "pierce": 2,
+                "color": DARK_GRAY, "projectile_size": 5, "shake": 3,
+                "desc": "大容量弹匣，持续火力压制",
+                "ammo": 100, "reload": 4.0
+            },
+            # ========== 投掷物 ==========
+            WeaponType.GRENADE: {
+                "name": "手雷", "damage": 100, "fire_rate": 1.5,
+                "range": 300, "speed": 8, "spread": 0, "pierce": 1,
+                "color": GREEN, "projectile_size": 6, "shake": 10,
+                "desc": "范围爆炸伤害",
+                "ammo": 3, "reload": 0, "is_throwable": True, "explosion_radius": 100
+            },
+            WeaponType.MOLOTOV: {
+                "name": "燃烧瓶", "damage": 15, "fire_rate": 1.5,
+                "range": 280, "speed": 7, "spread": 0, "pierce": 1,
+                "color": FIRE_ORANGE, "projectile_size": 6, "shake": 5,
+                "desc": "持续燃烧区域伤害",
+                "ammo": 3, "reload": 0, "is_throwable": True, "burn_duration": 5, "burn_radius": 80
+            },
+            WeaponType.SMOKE_GRENADE: {
+                "name": "烟雾弹", "damage": 0, "fire_rate": 1.5,
+                "range": 250, "speed": 7, "spread": 0, "pierce": 1,
+                "color": LIGHT_GRAY, "projectile_size": 6, "shake": 2,
+                "desc": "减速视野内敌人",
+                "ammo": 3, "reload": 0, "is_throwable": True, "slow_radius": 100, "slow_duration": 8
+            },
         }
 
         config = configs.get(self.weapon_type, configs[WeaponType.PISTOL])
@@ -309,6 +449,49 @@ class Weapon:
             return []
 
         self.cooldown_timer = self.fire_rate
+
+        # 近战武器：不发射投射物，触发近战攻击标记
+        if getattr(self, "is_melee", False):
+            self.melee_attack_triggered = True
+            self.melee_attack_angle = angle
+            self.melee_attack_x = x
+            self.melee_attack_y = y
+            self.melee_attack_damage = self.damage * damage_mult
+            if player and hasattr(player, 'recoil_offset'):
+                recoil_strength = getattr(self, 'shake', 2) * 2
+                recoil_angle = angle + math.pi
+                player.recoil_offset[0] += math.cos(recoil_angle) * recoil_strength
+                player.recoil_offset[1] += math.sin(recoil_angle) * recoil_strength
+            return []
+
+        # 投掷物：抛物线轨迹+爆炸
+        if getattr(self, "is_throwable", False):
+            if isinstance(self.current_ammo, (int, float)) and self.current_ammo != "∞":
+                self.current_ammo -= 1
+                if self.current_ammo <= 0:
+                    self.current_ammo = 0
+            throw_speed = getattr(self, "speed", 8)
+            proj = Projectile(
+                x, y,
+                math.cos(angle) * throw_speed * speed_mult,
+                math.sin(angle) * throw_speed * speed_mult - 2,
+                self.damage * damage_mult,
+                self.range,
+                self.color,
+                self.projectile_size,
+                self.pierce,
+                True,
+                getattr(self, "explosion_radius", 80),
+                False, False, False, False,
+                0.4,  # 重力
+                False, 0, 0, 0
+            )
+            proj.is_grenade_type = getattr(self, "weapon_type", None)
+            proj.burn_duration = getattr(self, "burn_duration", 0)
+            proj.burn_radius = getattr(self, "burn_radius", 0)
+            proj.slow_radius = getattr(self, "slow_radius", 0)
+            proj.slow_duration = getattr(self, "slow_duration", 0)
+            return [proj]
 
         # 消耗弹药
         if self.current_ammo != "∞":

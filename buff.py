@@ -3,9 +3,7 @@
 """通用Buff系统 - 支持正面buff和负面debuff，玩家和僵尸共用"""
 import math
 from enum import Enum
-from config import (RED, GREEN, BLUE, YELLOW, ORANGE, PURPLE, CYAN, GRAY, WHITE,
-                    CRIMSON, LIME, TEAL, RUST, POISON_GREEN, FIRE_ORANGE, FIRE_YELLOW, 
-                    SMOKE_GRAY, BLOOD_RED, GOLD)
+from config import *
 
 
 class BuffType(Enum):
@@ -19,6 +17,14 @@ class BuffType(Enum):
     BERSERK = "berserk"               # 狂暴（攻速翻倍，受伤增加）
     IRON_SKIN = "iron_skin"           # 铁皮（护甲提升）
     LUCKY = "lucky"                   # 幸运（暴击率提升）
+    RAGE = "rage"                     # 怒火（击杀后短暂增伤）
+    VAMPIRE = "vampire"               # 吸血鬼（攻击吸血）
+    GOLD_RUSH = "gold_rush"           # 淘金热（经验获取提升）
+    SHADOW_STEP = "shadow_step"       # 暗影步（闪避率提升）
+    FROST_WEAPON = "frost_weapon"     # 冰霜武器（攻击减速）
+    POISON_WEAPON = "poison_weapon"   # 剧毒武器（攻击中毒）
+    FIRE_WEAPON = "fire_weapon"       # 火焰武器（攻击灼烧）
+    WEAKNESS = "weakness"             # 虚弱（伤害降低）
 
     # === 负面 Debuff ===
     BLEED = "bleed"                   # 流血（持续掉血）
@@ -289,10 +295,15 @@ class BuffManager:
                     buff.tick_timer = tick_interval
                     # 持续伤害
                     dmg_pct = buff.config.get("damage_percent", 0)
+                    tick_dmg = buff.config.get("tick_damage", 0)
+                    dmg = 0
                     if dmg_pct > 0 and hasattr(entity, 'max_hp'):
-                        dmg = entity.max_hp * dmg_pct * buff.stacks
-                        if hasattr(entity, 'take_damage'):
-                            entity.take_damage(dmg, damage_type="dot")
+                        dmg += entity.max_hp * dmg_pct * buff.stacks
+                    if tick_dmg > 0:
+                        dmg += tick_dmg * buff.stacks
+                    if dmg > 0 and hasattr(entity, 'take_damage'):
+                        dmg = max(1, int(dmg + 0.999))  # DOT伤害向上取整至少1点
+                        entity.take_damage(dmg, damage_type="dot")
                         damage_dealt += dmg
                         dmg_type = type_map.get(btype.name.lower(), "dot")
                         damage_events.append((dmg, dmg_type))

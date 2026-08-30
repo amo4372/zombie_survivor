@@ -3,7 +3,7 @@
 """对话系统模块 - 修复交互问题"""
 
 import pygame
-from config import WHITE, YELLOW, GRAY, CYAN, DARK_GRAY, BLACK, CHARCOAL
+from config import *
 
 class DialogueSystem:
     def __init__(self):
@@ -51,6 +51,7 @@ class DialogueSystem:
                 self.displayed_text += self.text[len(self.displayed_text)]
 
     def advance(self):
+        """推进对话。"""
         if len(self.displayed_text) < len(self.text):
             self.displayed_text = self.text
             return

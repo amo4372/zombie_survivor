@@ -7,9 +7,7 @@ import math
 import random
 import os
 import time
-from config import (SkillType, WHITE, BLACK, RED, GREEN, BLUE, YELLOW, ORANGE, PURPLE,
-                   GRAY, DARK_GRAY, LIGHT_GRAY, CYAN, GOLD, CRIMSON, AMBER, CHARCOAL,
-                   VOID_BLACK, SLATE, DARK_RED)
+from config import *
 
 
 class FontManager:
@@ -517,6 +515,7 @@ class SkillCaster:
         self.pressed = False
         self.just_released = False
         self.is_aiming = False
+        self.was_aiming_on_release = False
         self.press_start_time = 0
         self.aim_threshold = 0.3
         self.angle = 0
@@ -559,6 +558,7 @@ class SkillCaster:
         bx, by, r = self.get_scaled_pos(scale)
         bx, by, r = int(bx), int(by), int(r)
         self.just_released = False
+        self.was_aiming_on_release = False
         for event in touch_events:
             pos = event["pos"]
             dist = math.hypot(pos[0] - bx, pos[1] - by)
@@ -573,18 +573,20 @@ class SkillCaster:
             elif event["type"] == "move" and self.pressed:
                 if event.get("id", 0) == self.touch_id:
                     self._update_aim(pos[0], pos[1], bx, by, scale)
-                    if not self.is_aiming and time.time() - self.press_start_time >= self.aim_threshold:
-                        self.is_aiming = True
             elif event["type"] == "up":
                 if event.get("id", 0) == self.touch_id:
                     if self.pressed:
                         self.just_released = True
+                        self.was_aiming_on_release = self.is_aiming
                     self.pressed = False
                     self.touch_id = None
                     self.knob_offset_x = 0
                     self.knob_offset_y = 0
                     # 保持最后的angle和distance_ratio供读取
                     self.is_aiming = False
+        # 每帧检测长按阈值（即使没有move事件）
+        if self.pressed and not self.is_aiming and time.time() - self.press_start_time >= self.aim_threshold:
+            self.is_aiming = True
         return self.just_released
 
     def _update_aim(self, tx, ty, bx, by, scale):
@@ -903,12 +905,12 @@ class SkillCardSelector:
         sw = pygame.display.get_surface().get_width()
         sh = pygame.display.get_surface().get_height()
 
-        card_w = int(220 * scale)
-        card_h = int(340 * scale)
-        gap = int(30 * scale)
+        card_w = int(230 * scale)
+        card_h = int(400 * scale)
+        gap = int(25 * scale)
         total_width = len(self.cards) * card_w + (len(self.cards) - 1) * gap
         start_x = (sw - total_width) // 2
-        start_y = (sh - card_h) // 2
+        start_y = (sh - card_h) // 2 + int(10 * scale)
 
         for i, skill in enumerate(self.cards):
             rect = pygame.Rect(start_x + i * (card_w + gap), start_y, card_w, card_h)
@@ -943,20 +945,20 @@ class SkillCardSelector:
 
         # 标题
         title = large_font.render("选择一项技能", True, GOLD)
-        title_rect = title.get_rect(center=(sw // 2, int(120 * scale)))
+        title_rect = title.get_rect(center=(sw // 2, int(80 * scale)))
         screen.blit(title, title_rect)
 
         subtitle = font.render("升级！选择你的强化", True, GRAY)
-        subtitle_rect = subtitle.get_rect(center=(sw // 2, int(160 * scale)))
+        subtitle_rect = subtitle.get_rect(center=(sw // 2, int(115 * scale)))
         screen.blit(subtitle, subtitle_rect)
 
-        # 绘制技能卡
-        card_w = int(220 * scale)
-        card_h = int(340 * scale)
-        gap = int(30 * scale)
+        # 绘制技能卡 - 增大卡片高度保证内容完整显示
+        card_w = int(230 * scale)
+        card_h = int(400 * scale)
+        gap = int(25 * scale)
         total_width = len(self.cards) * card_w + (len(self.cards) - 1) * gap
         start_x = (sw - total_width) // 2
-        start_y = (sh - card_h) // 2
+        start_y = (sh - card_h) // 2 + int(10 * scale)
 
         for i, skill in enumerate(self.cards):
             x = start_x + i * (card_w + gap)
@@ -975,79 +977,89 @@ class SkillCardSelector:
             else:
                 border_color = skill.icon_color
 
-            pygame.draw.rect(screen, (*CHARCOAL[:3], 240), card_rect, border_radius=int(12 * scale))
+            pygame.draw.rect(screen, (*CHARCOAL[:3], 245), card_rect, border_radius=int(12 * scale))
             pygame.draw.rect(screen, border_color, card_rect, max(2, int(3 * scale)), border_radius=int(12 * scale))
 
             # 技能图标区域
-            icon_y = y + int(20 * scale)
-            icon_radius = int(35 * scale)
+            icon_y = y + int(15 * scale)
+            icon_radius = int(32 * scale)
             icon_center = (x + card_w // 2, icon_y + icon_radius)
             pygame.draw.circle(screen, skill.icon_color, icon_center, icon_radius)
             pygame.draw.circle(screen, WHITE, icon_center, icon_radius, max(1, int(2 * scale)))
 
-            # 技能名称
-            name_y = icon_y + icon_radius * 2 + int(15 * scale)
-            name_text = font.render(skill.name, True, WHITE)
+            # 技能名称（自动缩小字号适配）
+            name_y = icon_y + icon_radius * 2 + int(10 * scale)
+            name_font = font
+            name_text = name_font.render(skill.name, True, WHITE)
+            # 如果名称太长，用更小字号
+            if name_text.get_width() > card_w - int(30 * scale):
+                name_font = pygame.font.Font(None, int(20 * scale))
+                name_text = name_font.render(skill.name, True, WHITE)
             name_rect = name_text.get_rect(center=(x + card_w // 2, name_y))
             screen.blit(name_text, name_rect)
 
             # 等级
-            level_y = name_y + int(25 * scale)
+            level_y = name_y + int(22 * scale)
             level_text = font.render(f"Lv.{skill.current_level}/{skill.max_level}", True, GOLD)
             level_rect = level_text.get_rect(center=(x + card_w // 2, level_y))
             screen.blit(level_text, level_rect)
 
             # 类型标签
-            type_y = level_y + int(20 * scale)
+            type_y = level_y + int(18 * scale)
             type_color = CYAN if skill.is_active else GREEN
             type_text = font.render("【主动】" if skill.is_active else "【被动】", True, type_color)
             type_rect = type_text.get_rect(center=(x + card_w // 2, type_y))
             screen.blit(type_text, type_rect)
 
-            # 描述（使用下一级词条，高等级技能显示不同描述）
-            desc_y = type_y + int(30 * scale)
+            # 描述（使用下一级词条，高等级技能显示不同描述）- 最多4行
+            desc_y = type_y + int(22 * scale)
             next_desc = skill.get_next_level_desc()
-            desc_lines = self._wrap_text(next_desc, font, card_w - int(20 * scale))
-            for j, line in enumerate(desc_lines[:3]):
+            desc_lines = self._wrap_text(next_desc, font, card_w - int(24 * scale))
+            max_desc_lines = 4
+            for j, line in enumerate(desc_lines[:max_desc_lines]):
                 desc_text = font.render(line, True, LIGHT_GRAY)
-                desc_rect = desc_text.get_rect(center=(x + card_w // 2, desc_y + j * int(22 * scale)))
+                desc_rect = desc_text.get_rect(center=(x + card_w // 2, desc_y + j * int(19 * scale)))
                 screen.blit(desc_text, desc_rect)
 
-            # 属性加成详情（原属性 -> 新属性）
+            # 实际使用的描述行数
+            actual_desc_lines = min(len(desc_lines), max_desc_lines)
+            desc_end_y = desc_y + actual_desc_lines * int(19 * scale)
+
+            # 属性加成详情（原属性 -> 新属性）- 动态位置
             stat_change = skill.get_stat_change_text()
             if stat_change:
                 old_text, new_text = stat_change
-                stat_y = desc_y + int(3 * 22 * scale) + int(8 * scale)
+                stat_y = desc_end_y + int(10 * scale)
                 # 分隔线
-                pygame.draw.line(screen, (*GRAY[:3], 100),
-                                 (x + int(20 * scale), stat_y),
-                                 (x + card_w - int(20 * scale), stat_y), 1)
-                stat_y += int(10 * scale)
+                pygame.draw.line(screen, (*GRAY[:3], 120),
+                                 (x + int(18 * scale), stat_y),
+                                 (x + card_w - int(18 * scale), stat_y), 1)
+                stat_y += int(8 * scale)
                 # 原属性
                 old_label = font.render("当前", True, GRAY)
                 old_val = font.render(old_text, True, GRAY)
-                screen.blit(old_label, (x + int(20 * scale), stat_y))
-                screen.blit(old_val, (x + card_w - int(20 * scale) - old_val.get_width(), stat_y))
-                stat_y += int(18 * scale)
-                # 箭头
-                arrow = font.render("-", True, GOLD)
-                screen.blit(arrow, (x + card_w // 2 - arrow.get_width() // 2, stat_y - int(2 * scale)))
+                screen.blit(old_label, (x + int(18 * scale), stat_y))
+                screen.blit(old_val, (x + card_w - int(18 * scale) - old_val.get_width(), stat_y))
                 stat_y += int(16 * scale)
+                # 箭头
+                arrow = font.render("v", True, GOLD)
+                screen.blit(arrow, (x + card_w // 2 - arrow.get_width() // 2, stat_y - int(2 * scale)))
+                stat_y += int(14 * scale)
                 # 新属性
                 new_label = font.render("选择后", True, GOLD)
                 new_val = font.render(new_text, True, GREEN)
-                screen.blit(new_label, (x + int(20 * scale), stat_y))
-                screen.blit(new_val, (x + card_w - int(20 * scale) - new_val.get_width(), stat_y))
+                screen.blit(new_label, (x + int(18 * scale), stat_y))
+                screen.blit(new_val, (x + card_w - int(18 * scale) - new_val.get_width(), stat_y))
 
             # 前置要求提示
             if is_new and skill.requires:
-                req_y = y + card_h - int(35 * scale)
+                req_y = y + card_h - int(32 * scale)
                 req_text = font.render("新技能！", True, GOLD)
                 req_rect = req_text.get_rect(center=(x + card_w // 2, req_y))
                 screen.blit(req_text, req_rect)
 
             # 点击提示
-            hint_y = y + card_h - int(15 * scale)
+            hint_y = y + card_h - int(14 * scale)
             hint_text = font.render("点击选择", True, GRAY)
             hint_rect = hint_text.get_rect(center=(x + card_w // 2, hint_y))
             screen.blit(hint_text, hint_rect)
@@ -1137,22 +1149,27 @@ class DamageNumber:
             self.color = self.TYPE_COLORS.get(damage_type, WHITE)
         self.lifetime = 1.0
         self.vy = -2
-        # 根据伤害大小计算字号倍率（小伤害<10=0.7, 普通=1.0, 大伤害>50=1.3, 巨大>100=1.6）
+        # 是否为buff持续伤害
+        self.is_dot = damage_type in ("fire", "poison", "bleed", "corrosion", "freeze", "dot")
+        # 根据伤害大小计算字号倍率（整体放大20%）
         if damage < 10:
-            self.size_mult = 0.7
-        elif damage < 30:
             self.size_mult = 0.85
-        elif damage < 60:
+        elif damage < 30:
             self.size_mult = 1.0
-        elif damage < 100:
+        elif damage < 60:
             self.size_mult = 1.2
-        elif damage < 200:
+        elif damage < 100:
             self.size_mult = 1.4
+        elif damage < 200:
+            self.size_mult = 1.65
         else:
-            self.size_mult = 1.7
+            self.size_mult = 2.0
         # 暴击额外放大
         if is_crit:
-            self.size_mult *= 1.3
+            self.size_mult *= 1.35
+        # buff持续伤害额外放大15%
+        if self.is_dot:
+            self.size_mult *= 1.15
 
     def update(self, dt):
         self.y += self.vy * dt * 60
@@ -1161,6 +1178,7 @@ class DamageNumber:
 
     def draw(self, screen, font, camera_x=0, camera_y=0, scale=1.0):
         alpha = int(255 * self.lifetime)
+        # 暴击显示!，其余纯数字
         text = f"{int(self.damage)}" + ("!" if self.is_crit else "")
         text_surf = font.render(text, True, self.color)
         # 根据size_mult缩放表面
@@ -1175,7 +1193,15 @@ class DamageNumber:
         py = int((self.y - camera_y) * scale)
         # 居中对齐
         text_rect = text_surf.get_rect(center=(px, py))
-        screen.blit(text_surf, text_rect)
+        # buff伤害数字添加描边增强可读性
+        if self.is_dot and self.lifetime > 0.3:
+            import pygame
+            outline = pygame.Surface(text_surf.get_size(), pygame.SRCALPHA)
+            outline.fill((0, 0, 0, 80))
+            outline.blit(text_surf, (0, 0))
+            screen.blit(outline, text_rect)
+        else:
+            screen.blit(text_surf, text_rect)
 
     def is_alive(self):
         return self.lifetime > 0
@@ -1242,8 +1268,17 @@ class ParticleSystem:
 
     def spawn(self, x, y, color, count=5, size_range=(2, 6),
               velocity_range=(-3, 3), lifetime_range=(0.3, 1.0)):
+        # 兼容 float 参数（mod 可能传入浮点值）
+        try:
+            count = int(count)
+        except (TypeError, ValueError):
+            count = 5
+        try:
+            lo, hi = int(size_range[0]), int(size_range[1])
+        except (TypeError, ValueError, IndexError):
+            lo, hi = 2, 6
         for _ in range(count):
-            size = random.randint(*size_range)
+            size = random.randint(lo, hi)
             vx = random.uniform(*velocity_range)
             vy = random.uniform(*velocity_range)
             lifetime = random.uniform(*lifetime_range)
@@ -1255,6 +1290,11 @@ class ParticleSystem:
 
     def spawn_explosion(self, x, y, color, count=20):
         self.spawn(x, y, color, count, (3, 10), (-8, 8), (0.5, 1.5))
+
+    def add(self, x, y, color, count=5, size_range=(2, 6),
+            velocity_range=(-3, 3), lifetime_range=(0.3, 1.0)):
+        """Mod 兼容别名：等同于 spawn()"""
+        self.spawn(x, y, color, count, size_range, velocity_range, lifetime_range)
 
     def spawn_blood(self, x, y, count=8):
         self.spawn(x, y, RED, count, (2, 5), (-4, 4), (0.3, 0.8))
@@ -1305,3 +1345,179 @@ def draw_dashed_line(surface, color, start_pos, end_pos, dash_length=10, gap_len
         seg_end = (x1 + dx_unit * seg_end_dist, y1 + dy_unit * seg_end_dist)
         pygame.draw.line(surface, color, seg_start, seg_end, width)
         current += step
+
+
+
+class ScrollablePanel:
+    """可滚动文本面板 - 支持滚轮/触控拖动，用于显示大量信息"""
+    
+    def __init__(self, x, y, width, height, title="", font=None, title_font=None):
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+        self.title = title
+        self.font = font
+        self.title_font = title_font
+        
+        self.scroll_y = 0
+        self.content_height = 0
+        self.max_scroll = 0
+        
+        # 触控拖动
+        self._dragging = False
+        self._drag_start_y = 0
+        self._drag_start_scroll = 0
+        self._touch_id = None
+        
+        # 样式
+        self.bg_color = (20, 20, 30, 220)
+        self.border_color = (100, 100, 140)
+        self.text_color = (220, 220, 220)
+        self.title_color = (255, 215, 0)
+        self.scrollbar_color = (80, 80, 120)
+        self.scrollbar_thumb_color = (150, 150, 200)
+        
+        # 内容行：[(text, color, indent, is_header)]
+        self._lines = []
+        self._line_height = 20
+        
+    def set_content(self, text_or_lines, font=None):
+        """设置内容，可以是字符串或行列表"""
+        if font:
+            self.font = font
+        self._lines = []
+        if isinstance(text_or_lines, str):
+            self._wrap_text(text_or_lines, self.width - 40)
+        elif isinstance(text_or_lines, list):
+            for item in text_or_lines:
+                if isinstance(item, str):
+                    self._wrap_text(item, self.width - 40, color=self.text_color)
+                elif isinstance(item, tuple):
+                    text = item[0]
+                    color = item[1] if len(item) > 1 else self.text_color
+                    indent = item[2] if len(item) > 2 else 0
+                    is_header = item[3] if len(item) > 3 else False
+                    self._wrap_text(text, self.width - 40 - indent, color=color, indent=indent, is_header=is_header)
+        self._update_content_height()
+        
+    def _wrap_text(self, text, max_width, color=None, indent=0, is_header=False):
+        """自动换行"""
+        if color is None:
+            color = self.text_color
+        if not self.font:
+            self._lines.append((text, color, indent, is_header))
+            return
+        # 按换行符分割
+        paragraphs = text.split('\n')
+        for para in paragraphs:
+            if not para:
+                self._lines.append(("", color, indent, is_header))
+                continue
+            words = list(para)  # 中文按字符
+            current = ""
+            for ch in words:
+                test = current + ch
+                if self.font.size(test)[0] > max_width and current:
+                    self._lines.append((current, color, indent, is_header))
+                    current = ch
+                else:
+                    current = test
+            if current:
+                self._lines.append((current, color, indent, is_header))
+    
+    def _update_content_height(self):
+        """计算内容总高度"""
+        header_height = 30 if self.title else 0
+        line_h = self._line_height
+        self.content_height = header_height + len(self._lines) * line_h + 20
+        self.max_scroll = max(0, self.content_height - self.height + 10)
+        self.scroll_y = min(self.scroll_y, self.max_scroll)
+    
+    def handle_wheel(self, y):
+        """处理滚轮"""
+        self.scroll_y = max(0, min(self.max_scroll, self.scroll_y - y * 40))
+    
+    def handle_touch(self, touch_events):
+        """处理触控事件（dict列表）"""
+        for te in touch_events:
+            te_type = te.get("type", "")
+            te_pos = te.get("pos", (0, 0))
+            te_id = te.get("id", 0)
+            # 检查是否在面板内
+            if not (self.x <= te_pos[0] <= self.x + self.width and
+                    self.y <= te_pos[1] <= self.y + self.height):
+                continue
+            if te_type == "down":
+                self._dragging = True
+                self._drag_start_y = te_pos[1]
+                self._drag_start_scroll = self.scroll_y
+                self._touch_id = te_id
+            elif te_type == "move" and self._dragging and te_id == self._touch_id:
+                delta = te_pos[1] - self._drag_start_y
+                self.scroll_y = max(0, min(self.max_scroll, self._drag_start_scroll - delta))
+            elif te_type == "up":
+                if te_id == self._touch_id:
+                    self._dragging = False
+                    self._touch_id = None
+    
+    def handle_mouse(self, mouse_pos, mouse_pressed):
+        """处理鼠标拖动"""
+        in_panel = (self.x <= mouse_pos[0] <= self.x + self.width and
+                    self.y <= mouse_pos[1] <= self.y + self.height)
+        if mouse_pressed[0] and in_panel:
+            if not self._dragging:
+                self._dragging = True
+                self._drag_start_y = mouse_pos[1]
+                self._drag_start_scroll = self.scroll_y
+            else:
+                delta = mouse_pos[1] - self._drag_start_y
+                self.scroll_y = max(0, min(self.max_scroll, self._drag_start_scroll - delta))
+        else:
+            self._dragging = False
+    
+    def draw(self, screen):
+        """绘制面板"""
+        # 背景
+        bg_surface = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
+        bg_surface.fill(self.bg_color)
+        screen.blit(bg_surface, (self.x, self.y))
+        # 边框
+        pygame.draw.rect(screen, self.border_color, (self.x, self.y, self.width, self.height), 2)
+        
+        # 标题
+        y_offset = 10
+        if self.title and self.title_font:
+            title_surf = self.title_font.render(self.title, True, self.title_color)
+            screen.blit(title_surf, (self.x + 15, self.y + y_offset))
+            y_offset += 30
+        
+        # 裁剪内容区域
+        clip_rect = pygame.Rect(self.x + 5, self.y + y_offset, self.width - 20, self.height - y_offset - 10)
+        old_clip = screen.get_clip()
+        screen.set_clip(clip_rect)
+        
+        # 绘制文本行
+        line_y = self.y + y_offset - self.scroll_y
+        for text, color, indent, is_header in self._lines:
+            if line_y > self.y + self.height:
+                break
+            if line_y + self._line_height > self.y + y_offset:
+                if text:
+                    font = self.title_font if is_header and self.title_font else self.font
+                    if font:
+                        text_surf = font.render(text, True, color)
+                        screen.blit(text_surf, (self.x + 15 + indent, line_y))
+            line_y += self._line_height
+        
+        screen.set_clip(old_clip)
+        
+        # 滚动条
+        if self.max_scroll > 0:
+            bar_x = self.x + self.width - 8
+            bar_y = self.y + y_offset
+            bar_h = self.height - y_offset - 10
+            thumb_h = max(20, int(bar_h * (self.height / self.content_height)))
+            thumb_y = bar_y + int((bar_h - thumb_h) * (self.scroll_y / self.max_scroll)) if self.max_scroll > 0 else bar_y
+            pygame.draw.rect(screen, self.scrollbar_color, (bar_x, bar_y, 4, bar_h))
+            pygame.draw.rect(screen, self.scrollbar_thumb_color, (bar_x, thumb_y, 4, thumb_h))

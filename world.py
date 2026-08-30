@@ -5,8 +5,7 @@
 import pygame
 import random
 import math
-from config import (GameMode, EnemyType, ItemType, MapType, MAP_CONFIGS,
-                    DARK_GRAY, GRAY, BROWN, BLACK, RED, GREEN, BLUE, YELLOW, ORANGE, CYAN, PURPLE, WHITE, CHARCOAL, DARK_RED)
+from config import *
 
 class SpecialItem:
     """特殊道具 - 随机刷新在地图上"""
@@ -18,6 +17,7 @@ class SpecialItem:
         self.alive = True
         self.lifetime = 45.0
         self.pulse_timer = 0
+        self.magnetized = False
 
         self.colors = {
             ItemType.VACCINE: (GREEN, CYAN),
@@ -44,11 +44,19 @@ class SpecialItem:
         self.color = self.colors.get(item_type, (WHITE, GRAY))[0]
         self.glow_color = self.colors.get(item_type, (WHITE, GRAY))[1]
 
-    def update(self, dt):
+    def update(self, dt, player_x=None, player_y=None):
         self.lifetime -= dt
         self.pulse_timer += dt
         if self.lifetime <= 0:
             self.alive = False
+        if self.magnetized and player_x is not None and player_y is not None:
+            dx = player_x - self.x
+            dy = player_y - self.y
+            dist = math.hypot(dx, dy)
+            if dist > 5:
+                speed = 6
+                self.x += (dx / dist) * speed * dt * 60
+                self.y += (dy / dist) * speed * dt * 60
 
     def get_rect(self):
         return pygame.Rect(self.x - self.size, self.y - self.size, self.size * 2, self.size * 2)
@@ -135,11 +143,77 @@ class SpecialItem:
             pygame.draw.circle(screen, WHITE, (px, py), s, max(1, int(scale)))
 
 
+
+
+class TextItem:
+    """可拾取的文本资料道具"""
+    def __init__(self, x, y, text_id):
+        self.x = x
+        self.y = y
+        self.text_id = text_id
+        self.size = 10
+        self.alive = True
+        self.lifetime = 180.0  # 文本道具存在更久
+        self.pulse_timer = 0
+        self.magnetized = False
+        self.color = (200, 180, 100)  # 羊皮纸色
+        self.glow_color = (255, 230, 150)
+
+    def update(self, dt, player_x=None, player_y=None):
+        self.lifetime -= dt
+        self.pulse_timer += dt
+        if self.lifetime <= 0:
+            self.alive = False
+        if self.magnetized and player_x is not None and player_y is not None:
+            dx = player_x - self.x
+            dy = player_y - self.y
+            dist = math.hypot(dx, dy)
+            if dist > 5:
+                speed = 6
+                self.x += (dx / dist) * speed * dt * 60
+                self.y += (dy / dist) * speed * dt * 60
+
+    def get_rect(self):
+        return pygame.Rect(self.x - self.size, self.y - self.size, self.size * 2, self.size * 2)
+
+    def draw(self, screen, camera_x, camera_y, scale=1.0, assets=None):
+        px = int((self.x - camera_x) * scale)
+        py = int((self.y - camera_y) * scale)
+        s = max(2, int(self.size * scale))
+        pulse = abs(math.sin(self.pulse_timer * 2)) * 0.5 + 0.5
+
+        # 发光效果
+        glow_s = int(s * (1 + pulse * 0.6))
+        glow = pygame.Surface((glow_s * 2, glow_s * 2), pygame.SRCALPHA)
+        pygame.draw.circle(glow, (*self.glow_color[:3], int(80 * pulse)), (glow_s, glow_s), glow_s)
+        screen.blit(glow, (px - glow_s, py - glow_s))
+
+        # 纸张外观（折叠的纸条）
+        paper_rect = pygame.Rect(px - s, py - int(s * 0.8), s * 2, int(s * 1.6))
+        pygame.draw.rect(screen, self.color, paper_rect, border_radius=2)
+        pygame.draw.rect(screen, (150, 130, 70), paper_rect, max(1, int(scale)), border_radius=2)
+        # 纸张折痕
+        pygame.draw.line(screen, (170, 150, 90), (px - s + 2, py), (px + s - 2, py), max(1, int(scale)))
+        # 文字线条（模拟文字）
+        for i in range(3):
+            line_y = py - int(s * 0.5) + i * int(s * 0.4)
+            line_w = int(s * 1.2) if i != 2 else int(s * 0.8)
+            pygame.draw.line(screen, (120, 100, 50), (px - int(s * 0.6), line_y), (px - int(s * 0.6) + line_w, line_y), max(1, int(scale * 0.8)))
+
 class GameWorld:
     def __init__(self, chunk_size=2000, map_type=MapType.SCHOOL):
         self.chunk_size = chunk_size
         self.map_type = map_type
         self.map_config = MAP_CONFIGS.get(map_type, MAP_CONFIGS[MapType.SCHOOL])
+        # 地图专属地面瓷砖颜色
+        self.ground_colors = {
+            MapType.SCHOOL: ((55, 52, 48), (62, 58, 53)),       # 校园 - 灰黄地砖
+            MapType.STREET: ((48, 50, 55), (55, 57, 62)),         # 街区 - 灰沥青
+            MapType.DOWNTOWN: ((60, 35, 25), (70, 42, 30)),       # 市中心 - 火光橙红
+            MapType.SUBURB: ((40, 55, 38), (48, 62, 45)),         # 郊区 - 墨绿草地
+            MapType.NUCLEAR_PLANT: ((35, 35, 60), (42, 42, 70)),  # 核电站 - 深紫辐射
+        }
+        self.tile_color_a, self.tile_color_b = self.ground_colors.get(map_type, ((50, 48, 45), (58, 55, 50)))
         self.obstacles = []
         self.generated_chunks = set()
         self.items = []
@@ -177,19 +251,19 @@ class GameWorld:
             if obstacle_type == 'building':
                 w = random.randint(80, 200)
                 h = random.randint(80, 200)
-                color = random.choice([(60, 50, 45), (55, 55, 60), (50, 45, 40)])
+                color = random.choice([(140, 120, 105), (130, 130, 145), (125, 110, 95)])
             elif obstacle_type == 'car':
                 w = random.randint(50, 80)
                 h = random.randint(25, 40)
-                color = random.choice([(80, 30, 30), (30, 40, 60), (50, 50, 50), (60, 50, 30)])
+                color = random.choice([(170, 80, 80), (80, 100, 150), (130, 130, 130), (150, 125, 80)])
             elif obstacle_type == 'fence':
                 w = random.randint(100, 250)
                 h = random.randint(8, 15)
-                color = (70, 65, 55)
+                color = (150, 135, 110)
             elif obstacle_type == 'wall':
                 w = random.randint(60, 150)
                 h = random.randint(15, 25)
-                color = (65, 60, 55)
+                color = (145, 130, 115)
             elif obstacle_type == 'barricade':
                 w = random.randint(40, 80)
                 h = random.randint(20, 35)
@@ -435,7 +509,7 @@ class GameWorld:
         self.ensure_chunks_around(player_x, player_y)
 
         for item in self.items[:]:
-            item.update(dt)
+            item.update(dt, player_x, player_y)
             if not item.alive:
                 self.items.remove(item)
 
@@ -495,8 +569,10 @@ class GameWorld:
                 px = int((x - camera_x) * scale)
                 py = int((y - camera_y) * scale)
                 if -tile_size <= px <= screen_w and -tile_size <= py <= screen_h:
-                    color = CHARCOAL if (x // 100 + y // 100) % 2 == 0 else DARK_GRAY
+                    color = self.tile_color_a if (x // 100 + y // 100) % 2 == 0 else self.tile_color_b
                     pygame.draw.rect(screen, color, (px, py, tile_size + 1, tile_size + 1))
+                    # 地砖缝隙
+                    pygame.draw.rect(screen, (color[0]-8, color[1]-8, color[2]-8), (px, py, tile_size + 1, tile_size + 1), max(1, int(scale)))
 
         for item in self.items:
             item.draw(screen, camera_x, camera_y, scale, assets)
@@ -576,12 +652,26 @@ class GameWorld:
                                 max(1, int(2*scale)), border_radius=max(2, int(4*scale)))
             # === 学校特色障碍物绘制 ===
             elif obs_type == 'desk':
-                # 课桌：桌面+桌腿
-                pygame.draw.rect(screen, color, draw_rect)
-                pygame.draw.rect(screen, (color[0]-20, color[1]-20, color[2]-20), draw_rect, max(1, int(2*scale)))
-                # 桌洞
-                hole_rect = pygame.Rect(draw_rect.x + 5, draw_rect.y + 3, draw_rect.width - 10, draw_rect.height // 3)
-                pygame.draw.rect(screen, (color[0]-30, color[1]-30, color[2]-30), hole_rect)
+                # 课桌：桌面（浅色）+ 桌腿（深色）+ 桌洞
+                desk_top = pygame.Rect(draw_rect.x, draw_rect.y, draw_rect.width, max(4, draw_rect.height // 3))
+                pygame.draw.rect(screen, (color[0]+25, color[1]+20, color[2]+15), desk_top)  # 桌面浅色
+                pygame.draw.rect(screen, (color[0]-15, color[1]-15, color[2]-15), draw_rect, max(1, int(2*scale)))
+                # 桌腿
+                leg_w = max(2, int(3 * scale))
+                pygame.draw.rect(screen, (color[0]-30, color[1]-30, color[2]-30),
+                                 (draw_rect.x + 2, desk_top.bottom, leg_w, draw_rect.height - desk_top.height))
+                pygame.draw.rect(screen, (color[0]-30, color[1]-30, color[2]-30),
+                                 (draw_rect.right - leg_w - 2, desk_top.bottom, leg_w, draw_rect.height - desk_top.height))
+                # 桌洞（储物空间）
+                if draw_rect.width > 15:
+                    hole_rect = pygame.Rect(draw_rect.x + 4, desk_top.bottom + 2, draw_rect.width - 8, max(3, draw_rect.height // 4))
+                    pygame.draw.rect(screen, (color[0]-40, color[1]-40, color[2]-40), hole_rect)
+                # 桌面上的书/文具（随机）
+                if draw_rect.width > 20 and random.random() < 0.6:
+                    book_w = random.randint(5, max(6, draw_rect.width // 3))
+                    book_x = random.randint(draw_rect.x + 3, max(draw_rect.x + 4, draw_rect.right - book_w - 3))
+                    book_color = random.choice([(180, 60, 60), (60, 80, 160), (180, 150, 50), (100, 60, 120)])
+                    pygame.draw.rect(screen, book_color, (book_x, desk_top.y + 2, book_w, max(2, desk_top.height - 4)))
             elif obs_type == 'chair':
                 # 椅子：座面+靠背
                 pygame.draw.rect(screen, color, draw_rect)
@@ -733,12 +823,16 @@ class HordeManager:
         self.base_spawn_rate_horde = 0.35
         self.base_spawn_rate_normal = 1.8
 
+        # 兼容中英文难度名称
+        diff_map = {"easy":"简单", "normal":"普通", "hard":"困难", "hell":"地狱",
+                    "Easy":"简单", "Normal":"普通", "Hard":"困难", "Hell":"地狱"}
+        difficulty = diff_map.get(difficulty, difficulty)
         diff_mod = {
             "简单": {"dur_mod":1.2, "cd_mod":1.2, "boss":0.04, "spawn_h":0.5, "spawn_n":2.2},
             "普通": {"dur_mod":1.0, "cd_mod":1.0, "boss":0.08, "spawn_h":0.35, "spawn_n":1.8},
             "困难": {"dur_mod":0.85, "cd_mod":0.85, "boss":0.12, "spawn_h":0.28, "spawn_n":1.4},
             "地狱": {"dur_mod":0.70, "cd_mod":0.70, "boss":0.16, "spawn_h":0.20, "spawn_n":1.0},
-        }[difficulty]
+        }.get(difficulty, {"dur_mod":1.0, "cd_mod":1.0, "boss":0.08, "spawn_h":0.35, "spawn_n":1.8})
 
         self.dur_mod = diff_mod["dur_mod"]
         self.cd_mod = diff_mod["cd_mod"]
@@ -922,12 +1016,17 @@ class HordeManager:
             EnemyType.ZOMBIE_NORMAL,
             EnemyType.ZOMBIE_FAST,
             EnemyType.ZOMBIE_TANK,
+            EnemyType.ZOMBIE_GHOUL,
+            EnemyType.ZOMBIE_BERSERKER,
         ]
         mid_pool = [
             EnemyType.ZOMBIE_RANGED,
             EnemyType.ZOMBIE_CRAWLER,
             EnemyType.ZOMBIE_SPITTER,
             EnemyType.ZOMBIE_LEAPER,
+            EnemyType.ZOMBIE_FROST,
+            EnemyType.ZOMBIE_VENOM,
+            EnemyType.ZOMBIE_HUNTER,
         ]
         elite_pool = [
             EnemyType.ELITE_BRUTE,
@@ -942,6 +1041,9 @@ class HordeManager:
             EnemyType.ZOMBIE_HEALER,
             EnemyType.ZOMBIE_PHANTOM,
             EnemyType.ZOMBIE_WRAITH,
+            EnemyType.ZOMBIE_BOMBER,
+            EnemyType.ZOMBIE_SHAMAN,
+            EnemyType.ZOMBIE_JUGGERNAUT,
         ]
 
         final_pool = base_pool.copy()

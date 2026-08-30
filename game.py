@@ -12,15 +12,12 @@ import traceback
 import datetime
 import time
 
-from config import (BASE_WIDTH, BASE_HEIGHT, GameState, ControlMode, GameMode, 
-                   EnemyType, WeaponType, SkillType, ItemType, MapType, MAP_CONFIGS,
-                   STORY_MAP_ORDER, STORY_FRAGMENTS, STORY_INTRO_DIALOGUE, STORY_ENDING_DIALOGUE,
-                   WHITE, BLACK, RED, GREEN, 
-                   BLUE, YELLOW, ORANGE, GRAY, DARK_GRAY, CYAN, PURPLE, GOLD, AMBER, CRIMSON,
-                   CHARCOAL, VOID_BLACK, DARK_RED, LIME, TEAL, RUST, POISON_GREEN, BLOOD_RED,
-                   SMOKE_GRAY, FIRE_ORANGE, FIRE_YELLOW, MUZZLE_FLASH)
-from assets import AssetManager, SOUND_MAP, MUSIC_MAP
+from config import *
+from assets import AssetManager, SOUND_MAP, MUSIC_MAP, MAP_MUSIC_MAP
 from records import GameRecords, GameSession
+from codex import MONSTER_CODEX, WEAPON_CODEX, MONSTER_CATEGORIES, WEAPON_CATEGORIES, codex_unlock_manager
+from skill_tree_view import SkillTreeRenderer, skill_tree_unlock_manager
+from mod_loader import (load_all_mods, trigger_hook, HOOK_GAME_START, HOOK_GAME_TICK, HOOK_ENEMY_SPAWN, HOOK_ENEMY_DEATH, HOOK_PLAYER_DAMAGE, HOOK_KEYDOWN, HOOK_RENDER_HUD, HOOK_GAME_OVER, HOOK_WAVE_COMPLETE)
 from logger import GameLogger
 from ui import (FontManager, Button, VirtualJoystick, TouchButton, DamageNumber, 
                 FloatingText, ParticleSystem, AimButton, SkillSelector, SkillCaster, 
@@ -29,10 +26,25 @@ from skills import SkillTree
 from weapons import Weapon, Projectile
 from entities import Player, Enemy, ExpOrb, RiotGear
 from buff import BuffType
-from world import GameWorld, HordeManager, SpecialItem
+from world import GameWorld, HordeManager, SpecialItem, TextItem
+from lighting import LightingSystem
+from runes import RuneManager, random_rune, RUNE_CONFIG, RuneType
+import mod_loader
 from dialogue import DialogueSystem
 from skill_wheel import SkillWheel, WeaponWheel
 from renderer import Camera, Renderer
+
+# 向 Mod 钩子系统注入已加载的常用类引用（mod 回调可直接使用 FloatingText 等）
+mod_loader.mod_hooks._global_classes = {
+    "FloatingText": FloatingText,
+    "WeaponType": WeaponType,
+    "EnemyType": EnemyType,
+    "BuffType": BuffType,
+    "SkillType": SkillType,
+    "ParticleSystem": ParticleSystem,
+    "Player": Player,
+    "Enemy": Enemy,
+}
 
 class Config:
     def __init__(self):
@@ -43,6 +55,9 @@ class Config:
         self.difficulty = "普通"
         self.show_damage_numbers = True
         self.screen_shake = True
+        self.use_external_assets = True  # 是否使用外部图片资源
+        self.render_buff_effects = True  # 是否渲染buff等额外效果
+        self.graphics_quality = "balanced"  # performance / balanced / quality
         self.config_file = "config.json"
         self.load()
 
@@ -56,6 +71,11 @@ class Config:
                     self.sound_volume = data.get("sound_volume", 0.7)
                     self.music_volume = data.get("music_volume", 0.5)
                     self.difficulty = data.get("difficulty", "普通")
+                    self.show_damage_numbers = data.get("show_damage_numbers", True)
+                    self.screen_shake = data.get("screen_shake", True)
+                    self.use_external_assets = data.get("use_external_assets", True)
+                    self.render_buff_effects = data.get("render_buff_effects", True)
+                    self.graphics_quality = data.get("graphics_quality", "balanced")
         except Exception as e:
             logger.error(f"配置加载失败: {e}")
 
@@ -65,7 +85,12 @@ class Config:
             "game_mode": self.game_mode.name,
             "sound_volume": self.sound_volume,
             "music_volume": self.music_volume,
-            "difficulty": self.difficulty
+            "difficulty": self.difficulty,
+            "show_damage_numbers": self.show_damage_numbers,
+            "screen_shake": self.screen_shake,
+            "use_external_assets": self.use_external_assets,
+            "render_buff_effects": self.render_buff_effects,
+            "graphics_quality": self.graphics_quality,
         }
         try:
             with open(self.config_file, "w", encoding="utf-8") as f:
@@ -130,6 +155,7 @@ class Game:
 
         self.font_small = FontManager.get(14)
         self.font = FontManager.get(18)
+        self.font_medium = self.font  # 别名，兼容renderer
         self.font_large = FontManager.get(24)
         self.font_title = FontManager.get(40)
 
@@ -137,6 +163,7 @@ class Game:
         self.previous_state = None
 
         self.player = None
+        # 观战模式
         self.world = None
         self.horde_manager = None
         self.camera = None
@@ -145,10 +172,26 @@ class Game:
 
         self.enemies = []
         self.projectiles = []
+        self.special_items = []  # 场景道具（武器箱/宝箱/生命/弹药等）
+        self.text_items = []  # 可拾取文本资料
+        self.collected_texts = set()  # 已收集的文本ID
+        self.current_viewing_text = None  # 当前查看的文本
+        self._load_collected_texts()
+        self.rune_buffs = {}  # 符文永久buff（局内）
         self.exp_orbs = []
         self.damage_numbers = []
         self.floating_texts = []
         self.enemy_projectiles = []
+
+        # 近战攻击状态
+        self.melee_attack_active = False
+        self.melee_attack_timer = 0
+        self.melee_attack_duration = 0.25
+        self.melee_attack_angle = 0
+        self.melee_attack_range = 60
+        self.melee_attack_damage = 0
+        self.melee_attack_weapon = None
+        self.melee_hit_enemies = set()
 
         # 技能相关
         self.selected_skill = SkillType.GRENADE
@@ -159,11 +202,20 @@ class Game:
         self.skill_selector = None
         self.skill_caster = None
         self.skill_card_selector = SkillCardSelector()
+        self.skill_tree_renderer = SkillTreeRenderer()
+        # 加载 mod
+        try:
+            self.loaded_mods = load_all_mods()
+        except Exception as e:
+            print(f"[Mod] 加载失败: {e}")
+            self.loaded_mods = []
 
         # 菜单滚动
         self.menu_scroll_offset = 0
         self.settings_scroll_offset = 0
         self.tutorial_scroll_offset = 0
+        self.records_scroll_offset = 0
+        self.story_archive_scroll = 0
         self.is_menu_dragging = False
         self.menu_drag_start_y = 0
         self.menu_drag_start_offset = 0
@@ -215,7 +267,7 @@ class Game:
             "击败敌人获得经验，升级选择技能",
             "防爆套装为主动技能，Tab切换选中，G释放",
             "盾牌有观察窗，受损过多会破碎",
-            "钩爪集成在防爆套装技能，装备后即可使用",
+            "钩爪为独立主动技能，升级后射程更远、可连射、命中爆炸",
             "尸潮会定期来袭，准备好面对无尽的黑暗...",
             "找到疫苗可以拯救你的朋友...",
             "祝你好运，幸存者！"
@@ -224,6 +276,9 @@ class Game:
         # 资源管理器
         self.assets = AssetManager(base_path)
         self.assets.print_status()
+        # 应用配置的音量
+        self.assets.set_sound_volume(self.config.sound_volume)
+        self.assets.set_music_volume(self.config.music_volume)
 
         # 全局记录系统
         self.records = GameRecords(base_path)
@@ -231,6 +286,7 @@ class Game:
 
         #成就页面滚动
         self.ach_scroll_offset = 0
+        self._ach_touch_last_y = None
         #成就解锁toast队列
         self.ach_toast_queue = []
         #成就返回按钮
@@ -258,7 +314,8 @@ class Game:
         self.touch_buttons = {
             "shoot": TouchButton(BASE_WIDTH - 500, BASE_HEIGHT - 145, 62, "射", RED),
             "weapon_switch": WeaponSwitchButton(BASE_WIDTH - 520, BASE_HEIGHT - 320, 42, "换", PURPLE),
-            "pause": TouchButton(BASE_WIDTH - 60, 55, 38, "II", GRAY),
+            "pause": TouchButton(60, 55, 38, "II", GRAY),
+            "chat": TouchButton(60, BASE_HEIGHT - 200, 42, "聊", CYAN),
         }
         # 技能切换按钮（右上列）
         self.skill_selector = SkillSelector(BASE_WIDTH - 220, BASE_HEIGHT - 320, 42)
@@ -286,14 +343,16 @@ class Game:
     def _setup_menus(self):
         cx = BASE_WIDTH // 2 - 100
         self.menu_buttons = [
-            Button(cx, 220, 200, 50, "继续游戏", color=CYAN),
-            Button(cx, 280, 200, 50, "开始游戏", color=GREEN),
-            Button(cx, 340, 200, 50, "剧情资料库", color=GOLD),
-            Button(cx, 400, 200, 50, "记录", color=GOLD),
-            Button(cx, 460, 200, 50, "成就", color=AMBER),
-            Button(cx, 520, 200, 50, "设置", color=GRAY),
-            Button(cx, 580, 200, 50, "教程", color=BLUE),
-            Button(cx, 640, 200, 50, "退出", color=RED),
+            Button(cx, 180, 200, 45, "继续游戏", color=CYAN),
+            Button(cx, 235, 200, 45, "开始游戏", color=GREEN),
+            Button(cx, 345, 200, 45, "剧情资料库", color=GOLD),
+            Button(cx, 400, 200, 45, "图鉴", color=CYAN),
+            Button(cx, 455, 200, 45, "记录", color=GOLD),
+            Button(cx, 510, 200, 45, "成就", color=AMBER),
+            Button(cx, 565, 200, 45, "Mod管理", color=PURPLE),
+            Button(cx, 620, 200, 45, "设置", color=GRAY),
+            Button(cx, 675, 200, 45, "教程", color=BLUE),
+            Button(cx, 730, 200, 45, "退出", color=RED),
         ]
         # 模式选择按钮
         self.mode_select_buttons = [
@@ -305,16 +364,53 @@ class Game:
         # 剧情资料库相关
         self.story_archive_scroll = 0
         self.story_archive_selected = None
+        self.story_back_btn = Button(640 - 100, 720 - 60, 200, 45, "返回菜单", color=DARK_RED)
+        # 图鉴相关
+        self.codex_tab = "monster"  # monster / weapon
+        self.codex_category = "全部"
+        self.codex_scroll = 0
+        self.codex_selected = None
+        self.codex_back_btn = Button(640 - 100, 720 - 60, 200, 45, "返回菜单", color=DARK_RED)
+        # Mod管理相关
+        self.mod_manager_scroll = 0
+        self.mod_selected = None
+        self.mod_list_cache = []
+        # 绑定 Mod API 到游戏实例
+        if hasattr(mod_loader, 'mod_api'):
+            mod_loader.mod_api._bind_game(self)
+        self.codex_tab_buttons = [
+            Button(120, 80, 120, 40, "怪物图鉴", color=CRIMSON),
+            Button(260, 80, 120, 40, "武器图鉴", color=CYAN),
+            Button(400, 80, 120, 40, "世界观", color=PURPLE),
+        ]
+        self.codex_world_selected = "origin"  # 当前选中的世界观条目
+        # 难度选择按钮
+        self.difficulty_select_buttons = [
+            Button(cx, 200, 220, 55, "简单", color=GREEN),
+            Button(cx, 275, 220, 55, "普通", color=GOLD),
+            Button(cx, 350, 220, 55, "困难", color=ORANGE),
+            Button(cx, 425, 220, 55, "地狱", color=CRIMSON),
+            Button(cx, 520, 200, 45, "返回", color=RED),
+        ]
+        # 设置按钮（游戏功能设置，不含难度）
         self.settings_buttons = [
-            Button(cx, 180, 200, 45, "控制: 键控", color=GRAY),
-            Button(cx, 245, 200, 45, "模式: 限时", color=GRAY),
-            Button(cx, 310, 200, 45, "难度: 普通", color=GRAY),
-            Button(cx, 420, 200, 50, "返回", color=RED),
+            Button(cx, 150, 200, 45, "音效音量: 70%", color=GRAY),
+            Button(cx, 205, 200, 45, "音乐音量: 50%", color=GRAY),
+            Button(cx, 260, 200, 45, "画质: 均衡", color=GRAY),
+            Button(cx, 315, 200, 45, "外部图片: 开", color=GRAY),
+            Button(cx, 370, 200, 45, "Buff特效: 开", color=GRAY),
+            Button(cx, 425, 200, 45, "伤害数字: 开", color=GRAY),
+            Button(cx, 480, 200, 45, "屏幕震动: 开", color=GRAY),
+            Button(cx, 535, 200, 45, "控制: 键控", color=GRAY),
+            Button(cx, 595, 200, 50, "返回", color=RED),
         ]
         self.pause_buttons = [
-            Button(cx, 240, 200, 50, "继续", color=GREEN),
-            Button(cx, 310, 200, 50, "返回菜单", color=RED),
+            Button(cx, 200, 200, 50, "继续", color=GREEN),
+            Button(cx, 270, 200, 50, "技能树", color=GOLD),
+            Button(cx, 340, 200, 50, "设置", color=BLUE),
+            Button(cx, 410, 200, 50, "返回菜单", color=RED),
         ]
+        self.settings_from_pause = False  # 标记设置是否从暂停菜单进入
         logger.info("菜单按钮初始化完成")
 
     def save_game_state(self):
@@ -336,12 +432,37 @@ class Game:
                 "has_vaccine": self.has_vaccine,
                 "total_time": self.horde_manager.total_time if self.horde_manager else 0,
                 "horde_count": self.horde_manager.horde_count if self.horde_manager else 0,
+                "horde_active": self.horde_manager.horde_active if self.horde_manager else False,
+                "horde_timer": self.horde_manager.timer if self.horde_manager else 0,
+                "horde_scale": self.horde_manager.current_scale if self.horde_manager else 1,
+                "boss_guaranteed": self.horde_manager.boss_guaranteed if self.horde_manager else False,
+                "boss_spawned_this_horde": self.horde_manager.boss_spawned_this_horde if self.horde_manager else False,
+                "vaccine_boss_spawned": self.horde_manager.vaccine_boss_spawned if self.horde_manager else False,
+                "endless_glitch_shown": self.horde_manager.endless_glitch_shown if self.horde_manager else False,
+                "endless_countdown_left": self.horde_manager.endless_countdown_left if self.horde_manager else 90,
+                "map_time_elapsed": getattr(self, 'map_time_elapsed', 0),
+                "special_event_triggered": getattr(self, 'special_event_triggered', False),
+                "story_collected": list(getattr(self, 'story_collected_fragments', [])),
                 "current_map_index": getattr(self, 'current_map_index', 0),
                 "weapons": [w.weapon_type.name if hasattr(w.weapon_type, 'name') else str(w.weapon_type) 
                            for w in self.player.weapons],
                 "current_weapon_idx": getattr(self.player, "current_weapon_idx", 0),
+                "weapon_ammo": {w.weapon_type.name if hasattr(w.weapon_type, 'name') else str(w.weapon_type): 
+                               getattr(w, 'current_ammo', None) for w in self.player.weapons},
                 "skill_tree": self._serialize_skill_tree(),
-                "buff_charm_used": getattr(self.player, 'skill_slot_count', 3),
+                "skill_slot_count": getattr(self.player, 'skill_slot_count', 3),
+                "throwables": getattr(self.player, 'throwables', {}),
+                "selected_throwable": getattr(self, 'selected_throwable', 'incendiary'),
+                "riot_gear": {
+                    "equipped": self.player.riot_gear.equipped,
+                    "stamina": self.player.riot_gear.stamina,
+                    "viewing_window_hp": self.player.riot_gear.viewing_window_hp,
+                    "shield_broken": self.player.riot_gear.shield_broken,
+                    "equip_cooldown": getattr(self.player, 'riot_gear_cooldown', 0),
+                    "adrenaline_level": self.player.riot_gear.adrenaline_level,
+                },
+                "active_buffs": self._serialize_active_buffs(),
+                "enemies": self._serialize_enemies(),
                 "save_time": __import__('datetime').datetime.now().isoformat(),
             }
             with open("savegame.json", "w", encoding="utf-8") as f:
@@ -353,15 +474,74 @@ class Game:
             return False
 
     def _serialize_skill_tree(self):
-        """序列化技能树"""
+        """序列化技能树（技能等级+技能点）"""
         try:
             skills = {}
             st = self.player.skill_tree
-            for skill in st.skills.values():
+            for skill in st.skills:
                 skills[skill.skill_type.name if hasattr(skill.skill_type, 'name') else str(skill.skill_type)] = skill.current_level
-            return skills
+            return {
+                "levels": skills,
+                "skill_points": st.skill_points,
+                "pending_level_up": getattr(self.player, 'pending_level_up', False),
+            }
+        except Exception as e:
+            logger.log_exception(e)
+            return {"levels": {}, "skill_points": 0, "pending_level_up": False}
+
+    def _serialize_active_buffs(self):
+        """序列化玩家当前激活的buff"""
+        try:
+            buffs = []
+            bm = self.player.buff_manager
+            active = getattr(bm, 'active_buffs', getattr(bm, 'buffs', {}))
+            if isinstance(active, dict):
+                for btype, buff in active.items():
+                    buffs.append({
+                        "type": btype.name if hasattr(btype, 'name') else str(btype),
+                        "duration": getattr(buff, 'duration', 0),
+                        "stacks": getattr(buff, 'stacks', 1),
+                        "value": getattr(buff, 'value', None),
+                    })
+            elif isinstance(active, list):
+                for buff in active:
+                    btype = getattr(buff, 'buff_type', getattr(buff, 'type', None))
+                    buffs.append({
+                        "type": btype.name if hasattr(btype, 'name') else str(btype) if btype else "unknown",
+                        "duration": getattr(buff, 'duration', 0),
+                        "stacks": getattr(buff, 'stacks', 1),
+                        "value": getattr(buff, 'value', None),
+                    })
+            return buffs
         except:
-            return {}
+            return []
+
+    def _serialize_enemies(self):
+        """序列化当前场上的敌人（僵尸+Boss）"""
+        try:
+            enemies_data = []
+            for enemy in getattr(self, 'enemies', []):
+                if not getattr(enemy, 'alive', True):
+                    continue
+                etype = enemy.enemy_type
+                enemies_data.append({
+                    "type": etype.name if hasattr(etype, 'name') else str(etype),
+                    "x": enemy.x,
+                    "y": enemy.y,
+                    "hp": enemy.hp,
+                    "wave": getattr(enemy, 'wave', 1),
+                    "difficulty": getattr(enemy, 'difficulty', 'normal'),
+                    "split_count": getattr(enemy, 'split_count', 0),
+                    "is_boss": getattr(enemy, 'is_boss', False),
+                    "is_elite": getattr(enemy, 'is_elite', False),
+                    "special_windup_timer": getattr(enemy, 'special_windup_timer', 0),
+                    "special_windup_type": getattr(enemy, 'special_windup_type', None),
+                    "special_windup_radius": getattr(enemy, 'special_windup_radius', 0),
+                })
+            return enemies_data
+        except Exception as e:
+            logger.log_exception(e)
+            return []
 
     def has_saved_game(self):
         """检查是否存在存档"""
@@ -379,7 +559,7 @@ class Game:
             
             # 恢复模式和难度
             mode_name = save_data.get("game_mode", "ENDLESS")
-            from config import GameMode
+            from config import GameMode, SkillType, WeaponType
             self.config.game_mode = getattr(GameMode, mode_name, GameMode.ENDLESS)
             self.config.difficulty = save_data.get("difficulty", "普通")
             
@@ -390,16 +570,39 @@ class Game:
             self.player.x = save_data.get("player_x", 0)
             self.player.y = save_data.get("player_y", 0)
             self.player.hp = save_data.get("player_hp", self.player.max_hp)
+            self.player.max_hp = save_data.get("player_max_hp", self.player.max_hp)
             self.player.level = save_data.get("player_level", 1)
             self.player.exp = save_data.get("player_exp", 0)
             self.player.score = save_data.get("player_score", 0)
             self.has_vaccine = save_data.get("has_vaccine", False)
-            
-            # 恢复时间
+
+            # 恢复技能槽数量
+            self.player.skill_slot_count = save_data.get("skill_slot_count", 3)
+
+            # 恢复投掷物
+            self.player.throwables = save_data.get("throwables", {})
+            self.selected_throwable = save_data.get("selected_throwable", "incendiary")
+
+            # 恢复时间和尸潮状态
             if self.horde_manager:
                 self.horde_manager.total_time = save_data.get("total_time", 0)
                 self.horde_manager.horde_count = save_data.get("horde_count", 0)
-            
+                self.horde_manager.horde_active = save_data.get("horde_active", False)
+                self.horde_manager.timer = save_data.get("horde_timer", 0)
+                self.horde_manager.current_scale = save_data.get("horde_scale", 1)
+                self.horde_manager.boss_guaranteed = save_data.get("boss_guaranteed", False)
+                self.horde_manager.boss_spawned_this_horde = save_data.get("boss_spawned_this_horde", False)
+                self.horde_manager.vaccine_boss_spawned = save_data.get("vaccine_boss_spawned", False)
+                self.horde_manager.endless_glitch_shown = save_data.get("endless_glitch_shown", False)
+                self.horde_manager.endless_countdown_left = save_data.get("endless_countdown_left", 90)
+            # 恢复故事模式地图时间和事件状态
+            self.map_time_elapsed = save_data.get("map_time_elapsed", 0)
+            self.special_event_triggered = save_data.get("special_event_triggered", False)
+            self.special_event_active = False
+            collected = save_data.get("story_collected", [])
+            if collected:
+                self.story_collected_fragments = set(collected)
+
             # 恢复故事模式地图
             if self.config.game_mode == GameMode.STORY:
                 map_idx = save_data.get("current_map_index", 0)
@@ -409,9 +612,8 @@ class Game:
                     self.current_map = STORY_MAP_ORDER[map_idx]
                     self.map_config = MAP_CONFIGS[self.current_map]
                     self.world = GameWorld(map_type=self.current_map)
-            
+
             # 恢复武器
-            from config import WeaponType
             weapon_names = save_data.get("weapons", [])
             if weapon_names:
                 self.player.weapons = []
@@ -419,23 +621,104 @@ class Game:
                     wtype = getattr(WeaponType, wname, WeaponType.PISTOL)
                     self.player.add_weapon(wtype)
                 self.player.current_weapon_idx = save_data.get("current_weapon_idx", 0)
-            
-            # 恢复技能等级
-            skill_levels = save_data.get("skill_tree", {})
+            # 恢复武器弹药
+            weapon_ammo = save_data.get("weapon_ammo", {})
+            for w in self.player.weapons:
+                wname = w.weapon_type.name if hasattr(w.weapon_type, 'name') else str(w.weapon_type)
+                if wname in weapon_ammo and weapon_ammo[wname] is not None:
+                    w.current_ammo = weapon_ammo[wname]
+
+            # 恢复技能等级、技能点、待升级状态
+            skill_data = save_data.get("skill_tree", {})
+            # 兼容旧格式：直接是等级字典
+            if isinstance(skill_data, dict) and "levels" in skill_data:
+                skill_levels = skill_data.get("levels", {})
+                self.player.skill_tree.skill_points = skill_data.get("skill_points", 0)
+                self.player.pending_level_up = skill_data.get("pending_level_up", False)
+            else:
+                skill_levels = skill_data
             for sname, level in skill_levels.items():
                 try:
-                    from config import SkillType
                     stype = getattr(SkillType, sname)
                     skill = self.player.skill_tree.get_skill(stype)
                     if skill:
                         skill.current_level = level
                 except:
                     pass
+            # 如果有待升级，重新生成技能卡
+            if getattr(self.player, 'pending_level_up', False):
+                try:
+                    self.player.skill_cards = self.player.skill_tree.get_random_skill_cards(
+                        getattr(self.player, 'skill_slot_count', 3))
+                    # 解锁全局技能树（三选一出现过就算）
+                    for sc in self.player.skill_cards:
+                        if hasattr(sc, 'skill_type'):
+                            skill_tree_unlock_manager.unlock_skill(sc.skill_type)
+                        elif hasattr(sc, 'type'):
+                            skill_tree_unlock_manager.unlock_skill(sc.type)
+                except:
+                    self.player.pending_level_up = False
             # 应用肾上腺素被动效果
             ad_skill = self.player.skill_tree.get_skill(SkillType.ADRENALINE)
             if ad_skill:
                 self.player.riot_gear.adrenaline_level = ad_skill.current_level
+
+            # 恢复防爆套装状态
+            rg_data = save_data.get("riot_gear", {})
+            if rg_data:
+                self.player.riot_gear.adrenaline_level = rg_data.get("adrenaline_level", 0)
+                if rg_data.get("equipped", False):
+                    self.player.riot_gear.equip()
+                self.player.riot_gear.stamina = rg_data.get("stamina", self.player.riot_gear.max_stamina)
+                self.player.riot_gear.viewing_window_hp = rg_data.get("viewing_window_hp", self.player.riot_gear.max_viewing_window_hp)
+                self.player.riot_gear.shield_broken = rg_data.get("shield_broken", False)
+                self.player.riot_gear_cooldown = rg_data.get("equip_cooldown", 0)
+
+            # 恢复激活的buff
+            active_buffs = save_data.get("active_buffs", [])
+            for bd in active_buffs:
+                try:
+                    btype = getattr(BuffType, bd["type"], None)
+                    if btype:
+                        self.player.buff_manager.add_buff(btype, duration=bd.get("duration", 5), stacks=bd.get("stacks", 1))
+                        if bd.get("value") is not None:
+                            buff = self.player.buff_manager.get_buff(btype)
+                            if buff:
+                                buff.value = bd["value"]
+                except:
+                    pass
             
+            # 恢复敌人（僵尸+Boss）
+            enemies_data = save_data.get("enemies", [])
+            if enemies_data:
+                from entities import Enemy
+                from config import EnemyType
+                self.enemies = []
+                for ed in enemies_data:
+                    try:
+                        etype = getattr(EnemyType, ed["type"], None)
+                        if etype is None:
+                            continue
+                        enemy = Enemy(
+                            ed["x"], ed["y"], etype,
+                            ed.get("wave", 1),
+                            ed.get("difficulty", self.config.difficulty)
+                        )
+                        enemy.hp = ed.get("hp", enemy.max_hp)
+                        enemy.split_count = ed.get("split_count", 0)
+                        enemy.special_windup_timer = ed.get("special_windup_timer", 0)
+                        enemy.special_windup_type = ed.get("special_windup_type", None)
+                        enemy.special_windup_radius = ed.get("special_windup_radius", 0)
+                        self.enemies.append(enemy)
+                        try:
+                            codex_unlock_manager.unlock_monster(enemy.enemy_type.name if hasattr(enemy, "enemy_type") else enemy.type.name)
+                        except Exception:
+                            pass
+                    except Exception as e:
+                        logger.log_exception(e)
+                        continue
+                logger.info(f"已恢复 {len(self.enemies)} 个敌人")
+
             logger.info(f"存档已加载，模式: {mode_name}, 时间: {save_data.get('total_time', 0):.0f}s")
             self.floating_texts.append(FloatingText(self.player.x, self.player.y - 60, 
                 "对局已恢复！", color=GREEN, lifetime=3.0))
@@ -453,6 +736,15 @@ class Game:
         except:
             pass
 
+    def _unlock_achievement(self, key):
+        """即时解锁成就并显示提示"""
+        if self.records and self.records.unlock_achievement(key):
+            ach = self.records.get_achievements().get(key, {})
+            desc = ach.get("desc", key)
+            self.floating_texts.append(FloatingText(self.player.x, self.player.y - 60,
+                f"成就解锁: {desc}", color=GOLD, lifetime=4.0))
+            logger.info(f"成就解锁: {key} - {desc}")
+
     def start_game(self):
         logger.info("开始新游戏")
         # 初始化游戏会话记录
@@ -460,7 +752,12 @@ class Game:
         self.session.set_difficulty(self.config.difficulty)
         self.session.set_mode(self.config.game_mode)
         # 播放游戏音乐
-        self.assets.play_music("gameplay")
+        # 播放地图专属音乐
+        map_name = self.world.map_type.name.lower() if hasattr(self.world, 'map_type') else 'school'
+        map_music = MAP_MUSIC_MAP.get(map_name, 'school')
+        self.assets.play_music(map_music)
+        self._current_map_music = map_music
+        self._music_context = 'explore'  # explore / boss / horde / tension
         try:
             # 故事模式：从第一张地图开始
             if self.config.game_mode == GameMode.STORY:
@@ -483,11 +780,39 @@ class Game:
             logger.info(f"世界创建完成，地图: {self.map_config['name']}")
 
             self.player = Player(0, 0)
+            # Mod 游戏开始钩子
+            try:
+                trigger_hook(HOOK_GAME_START, self)
+            except Exception:
+                pass
+            # 解锁初始武器图鉴
+            try:
+                codex_unlock_manager.unlock_weapon(WeaponType.FISTS.name)
+            except Exception:
+                pass
+                    # 问题3a: 应用难度配置到玩家初始资源
+            try:
+                from config import DIFFICULTY_CONFIG
+                diff_cfg = DIFFICULTY_CONFIG.get(self.config.difficulty, {})
+                if diff_cfg:
+                    self.player.max_hp = int(100 * diff_cfg.get("player_hp_mult", 1.0))
+                    self.player.hp = self.player.max_hp
+                    self.player.damage_mult = diff_cfg.get("player_damage_mult", 1.0)
+                    self.player.exp_mult = diff_cfg.get("exp_mult", 1.0)
+                    self._difficulty_drop_mult = diff_cfg.get("drop_rate_mult", 1.0)
+                    logger.info(f"难度应用: {self.config.difficulty}, HP={self.player.max_hp}, 伤害倍率={self.player.damage_mult}")
+            except Exception as e:
+                logger.warning(f"难度配置应用失败: {e}")
+                self._difficulty_drop_mult = 1.0
             logger.info(f"玩家创建: ({self.player.x}, {self.player.y})")
 
             self.horde_manager = HordeManager(self.config.game_mode, self.config.difficulty)
+            self._was_horde = False
+            self.last_boss_death_pos = None
             self.camera = Camera(BASE_WIDTH, BASE_HEIGHT)
+            self.camera.shake_enabled = self.config.screen_shake
             self.particles = ParticleSystem()
+            self.lifesteal_flash = 0.0  # 吸血屏幕效果强度(0-1)
             # 屏幕血渍系统（持久化，受伤时添加，随时间淡出流淌）
             self.screen_blood = []  # [(x, y, radius, alpha, drip_speed, drip_offset)]
             self.war_cry_timer = 0.0  # 战吼状态计时器
@@ -564,6 +889,14 @@ class Game:
             if item["timer"] <= 0:
                 self.story_fragment_items.remove(item)
                 continue
+            # 磁吸移动（被钩爪勾中）
+            if item.get("magnetized"):
+                dx = self.player.x - item["x"]
+                dy = self.player.y - item["y"]
+                dist = math.hypot(dx, dy)
+                if dist > 5:
+                    item["x"] += (dx / dist) * 6 * dt * 60
+                    item["y"] += (dy / dist) * 6 * dt * 60
             # 玩家拾取检测
             dist = math.hypot(self.player.x - item["x"], self.player.y - item["y"])
             if dist < self.player.size + 20:
@@ -680,9 +1013,22 @@ class Game:
         # 重置敌人和投射物
         self.enemies = []
         self.projectiles = []
+        self.special_items = []  # 场景道具（武器箱/宝箱/生命/弹药等）
+        self.text_items = []  # 可拾取文本资料
+        self.current_viewing_text = None
+        self.rune_buffs = {}  # 符文永久buff（局内）
         self.enemy_projectiles = []
         self.smoke_zones = []
         self.grenades = []
+        # 近战攻击状态
+        self.melee_attack_active = False
+        self.melee_attack_timer = 0
+        self.melee_attack_duration = 0.25
+        self.melee_attack_angle = 0
+        self.melee_attack_range = 60
+        self.melee_attack_damage = 0
+        self.melee_attack_weapon = None
+        self.melee_hit_enemies = set()
         # 重置尸潮管理器
         self.horde_manager = HordeManager(GameMode.STORY, self.config.difficulty)
         # 玩家位置重置
@@ -860,6 +1206,8 @@ class Game:
         """使用指定技能"""
         if not self.player:
             return False
+        if not self.player.can_act():
+            return False
 
         skill = self.player.skill_tree.get_skill(skill_type)
         if not skill or skill.current_level == 0:
@@ -883,7 +1231,7 @@ class Game:
             SkillType.TURRET: 15.0,
             SkillType.AIRSTRIKE: 20.0, 
             SkillType.SHIELD_BASH: 3.0,
-            SkillType.GRAPPLE_PULL: 6.0, 
+            SkillType.GRAPPLE_PULL: 2.0, 
             SkillType.TIME_SLOW: 25.0, 
             SkillType.OVERLOAD: 30.0,
             SkillType.RIOT_GEAR: 30.0,
@@ -924,6 +1272,8 @@ class Game:
         """使用带瞄准方向和距离的技能 - distance_ratio: 0.1~1.0"""
         if not self.player:
             return False
+        if not self.player.can_act():
+            return False
 
         skill = self.player.skill_tree.get_skill(skill_type)
         if not skill or skill.current_level == 0:
@@ -946,7 +1296,7 @@ class Game:
             SkillType.TURRET: 15.0,
             SkillType.AIRSTRIKE: 20.0, 
             SkillType.SHIELD_BASH: 3.0,
-            SkillType.GRAPPLE_PULL: 6.0, 
+            SkillType.GRAPPLE_PULL: 2.0, 
             SkillType.TIME_SLOW: 25.0, 
             SkillType.OVERLOAD: 30.0,
             SkillType.RIOT_GEAR: 30.0,
@@ -1146,7 +1496,7 @@ class Game:
         return True
 
     def _throw_skill_grenade(self, target_x, target_y):
-        """技能手雷：抛物线投射物，类型frag，落地后大爆炸"""
+        """技能手雷：抛物线投射物，根据技能等级解锁附魔"""
         if not hasattr(self, 'grenades_in_flight'):
             self.grenades_in_flight = []
         dx = target_x - self.player.x
@@ -1158,8 +1508,23 @@ class Game:
             vy = dy / total_dist * speed
         else:
             vx, vy = 0, -300
+        
+        # 根据手雷技能等级累加附魔效果（高等级保留低等级效果）
+        grenade_skill = self.player.skill_tree.get_skill(SkillType.GRENADE)
+        skill_level = grenade_skill.current_level if grenade_skill else 1
+        g_effects = ["frag"]  # 基础破片效果
+        if skill_level >= 2:
+            g_effects.append("fire")     # 燃烧区域+燃烧DOT
+        if skill_level >= 3:
+            g_effects.append("frost")    # 减速区域+减速Debuff
+        if skill_level >= 4:
+            g_effects.append("poison")   # 剧毒DOT
+        if skill_level >= 5:
+            g_effects.append("nuke")     # 核弹：范围+伤害大幅提升
+
         self.grenades_in_flight.append({
             "type": "frag",
+            "effects": g_effects,
             "x": self.player.x, "y": self.player.y,
             "vx": vx, "vy": vy,
             "timer": 1.1,
@@ -1182,7 +1547,16 @@ class Game:
     def _create_turret_effect(self, tx, ty):
         if not hasattr(self, 'turrets'):
             self.turrets = []
-        self.turrets.append({"x": tx, "y": ty, "timer": 10.0, "fire_timer": 0})
+        turret_skill = self.player.skill_tree.get_skill(SkillType.TURRET) if self.player else None
+        if turret_skill and turret_skill.current_level > 0:
+            t_damage = int(turret_skill.get_effective_damage())
+            t_range = int(turret_skill.get_effective_radius())
+            is_max = turret_skill.is_maxed()
+        else:
+            t_damage = 30
+            t_range = 250
+            is_max = False
+        self.turrets.append({"x": tx, "y": ty, "timer": 10.0, "fire_timer": 0, "damage": t_damage, "range": t_range, "multi": is_max})
         if self.session:
             self.session.add_turret_deployed()
 
@@ -1196,15 +1570,18 @@ class Game:
 
             if turret["fire_timer"] <= 0:
                 turret["fire_timer"] = 0.5
-                closest = None
-                closest_dist = 250
+                t_range = turret.get("range", 250)
+                t_damage = turret.get("damage", 30)
+                t_multi = turret.get("multi", False)
+                # 找最近的1-2个目标
+                targets = []
                 for enemy in self.enemies:
                     dist = math.hypot(enemy.x - turret["x"], enemy.y - turret["y"])
-                    if dist < closest_dist:
-                        closest_dist = dist
-                        closest = enemy
-
-                if closest:
+                    if dist < t_range:
+                        targets.append((dist, enemy))
+                targets.sort(key=lambda t: t[0])
+                max_targets = 2 if t_multi else 1
+                for _, closest in targets[:max_targets]:
                     dx = closest.x - turret["x"]
                     dy = closest.y - turret["y"]
                     dist = math.hypot(dx, dy)
@@ -1212,7 +1589,7 @@ class Game:
                         proj = Projectile(
                             turret["x"], turret["y"],
                             dx / dist * 12, dy / dist * 12,
-                            30, 300, YELLOW, 4, pierce=2
+                            t_damage, 300, YELLOW, 4, pierce=2
                         )
                         self.projectiles.append(proj)
                         self.particles.spawn(turret["x"], turret["y"], YELLOW, 3)
@@ -1222,7 +1599,13 @@ class Game:
                 self.turrets.remove(turret)
 
     def _skill_airstrike(self):
-        """空袭技能"""
+        """空袭技能 - 根据等级累加效果
+        Lv1: 单点轰炸
+        Lv2: 飞机掠过，沿线连投5弹
+        Lv3: 飞机连投 + 燃烧区域
+        Lv4: 双机双向持续轰炸 + 燃烧
+        Lv5: 超级核爆：中心巨型爆炸 + 双机轰炸 + 燃烧 + EMP眩晕
+        """
         if self.config.control_mode == ControlMode.KEYBOARD:
             mouse_pos = pygame.mouse.get_pos()
             target_x = mouse_pos[0] / self.scale + self.camera.x
@@ -1232,13 +1615,78 @@ class Game:
             target_x = self.player.x + math.cos(angle_rad) * 500
             target_y = self.player.y + math.sin(angle_rad) * 500
 
-        self.floating_texts.append(FloatingText(
-            target_x, target_y - 50, "空袭来袭!", color=RED, lifetime=2.0
-        ))
         if not hasattr(self, 'airstrikes'):
             self.airstrikes = []
-        self.airstrikes.append({"x": target_x, "y": target_y, "timer": 2.0, "warned": False})
+
+        # 获取技能等级
+        airstrike_skill = self.player.skill_tree.get_skill(SkillType.AIRSTRIKE)
+        skill_level = airstrike_skill.current_level if airstrike_skill else 1
+
+        # 累加效果列表
+        effects = ["basic"]
+        if skill_level >= 3:
+            effects.append("fire")
+        if skill_level >= 5:
+            effects.append("emp")
+            effects.append("nuke")
+
+        if skill_level == 1:
+            # Lv1: 单点轰炸
+            self.floating_texts.append(FloatingText(
+                target_x, target_y - 50, "空袭来袭!", color=RED, lifetime=2.0
+            ))
+            self.airstrikes.append({"x": target_x, "y": target_y, "timer": 2.0, "warned": False, "effects": effects})
+        elif skill_level >= 2:
+            # Lv2+: 飞机掠过连投
+            label = "超级核爆!" if skill_level >= 5 else ("燃烧空袭!" if skill_level >= 3 else "空袭来袭!")
+            label_color = (255, 200, 0) if skill_level >= 5 else (FIRE_ORANGE if skill_level >= 3 else RED)
+            self.floating_texts.append(FloatingText(
+                target_x, target_y - 50, label, color=label_color, lifetime=2.5
+            ))
+            # 第一架飞机（随机角度）
+            self._create_plane_run(target_x, target_y, effects, bomb_count=5 if skill_level < 5 else 7)
+            # Lv4+: 第二架飞机（垂直角度，持续轰炸）
+            if skill_level >= 4:
+                self._create_plane_run(target_x, target_y, effects, bomb_count=5 if skill_level < 5 else 7, angle_offset=90)
+            # Lv5: 中心超级核爆（延迟1.5秒后引爆）
+            if skill_level >= 5:
+                self.airstrikes.append({
+                    "x": target_x, "y": target_y, "timer": 1.5, "warned": False,
+                    "effects": ["nuke", "fire", "emp"], "is_nuke": True
+                })
         return True
+
+    def _create_plane_run(self, target_x, target_y, effects, bomb_count=5, angle_offset=0):
+        """创建一个飞机连投空袭"""
+        import random as _rnd
+        # 飞机飞行角度（随机，可加偏移）
+        base_angle = _rnd.uniform(0, 360) + angle_offset
+        rad = math.radians(base_angle)
+        # 飞机从远处飞来
+        fly_dist = 800
+        plane_x = target_x - math.cos(rad) * fly_dist
+        plane_y = target_y - math.sin(rad) * fly_dist
+        plane_speed = 600
+        plane_vx = math.cos(rad) * plane_speed
+        plane_vy = math.sin(rad) * plane_speed
+        # 沿飞行方向排列炸弹
+        bombs = []
+        line_length = 300
+        for i in range(bomb_count):
+            t = (i / max(1, bomb_count - 1)) - 0.5  # -0.5 到 0.5
+            bx = target_x + math.cos(rad) * t * line_length
+            by = target_y + math.sin(rad) * t * line_length
+            bombs.append({"x": bx, "y": by, "exploded": False})
+        self.airstrikes.append({
+            "type": "plane_run",
+            "phase": "incoming",
+            "plane_x": plane_x, "plane_y": plane_y,
+            "plane_vx": plane_vx, "plane_vy": plane_vy,
+            "target_x": target_x, "target_y": target_y,
+            "bombs": bombs, "bomb_index": 0,
+            "bomb_drop_timer": 0.0, "timer": 0,
+            "effects": effects, "warned": False,
+        })
 
     def _update_airstrikes(self, dt):
         """更新空袭效果 - 飞机呼啸+一行炸弹连锁爆炸"""
@@ -1251,7 +1699,7 @@ class Game:
             # 旧版单点空袭兼容
             if strike.get("type") != "plane_run":
                 if strike["timer"] <= 0:
-                    self._explode_airstrike(strike["x"], strike["y"])
+                    self._explode_airstrike(strike["x"], strike["y"], strike.get("effects", ["basic"]), strike.get("is_nuke", False))
                     self.airstrikes.remove(strike)
                 elif strike["timer"] <= 1.0 and not strike.get("warned", False):
                     strike["warned"] = True
@@ -1284,7 +1732,7 @@ class Game:
                     bomb = strike["bombs"][strike["bomb_index"]]
                     if not bomb["exploded"]:
                         bomb["exploded"] = True
-                        self._explode_airstrike(bomb["x"], bomb["y"])
+                        self._explode_airstrike(bomb["x"], bomb["y"], strike.get("effects", ["basic"]))
                         self.assets.play_sound("explosion")
                     strike["bomb_index"] += 1
                     strike["bomb_drop_timer"] = 0.12  # 每0.12秒一枚，连锁爆炸
@@ -1302,26 +1750,67 @@ class Game:
                 if strike["timer"] <= 0:
                     self.airstrikes.remove(strike)
 
-    def _explode_airstrike(self, x, y):
-        """单点空袭爆炸效果"""
-        self.particles.spawn_explosion(x, y, ORANGE, 150)
-        self.particles.spawn_explosion(x, y, RED, 100)
-        self.particles.spawn_explosion(x, y, FIRE_YELLOW, 80)
-        self.particles.spawn_explosion(x, y, WHITE, 50)
-        self.camera.shake(25, 1.0)
+    def _explode_airstrike(self, x, y, effects=None, is_nuke=False):
+        """空袭爆炸效果 - 支持累加附魔效果
+        effects: ["basic", "fire", "emp", "nuke"]
+        is_nuke: 是否为超级核爆（范围/伤害大幅提升）
+        """
+        if effects is None:
+            effects = ["basic"]
+        has_fire = "fire" in effects or is_nuke
+        has_emp = "emp" in effects or is_nuke
+        has_nuke = "nuke" in effects or is_nuke
+
+        # 空袭伤害/半径随技能等级缩放
+        airstrike_skill = self.player.skill_tree.get_skill(SkillType.AIRSTRIKE) if self.player else None
+        if airstrike_skill and airstrike_skill.current_level > 0:
+            as_damage = airstrike_skill.get_effective_damage()
+            as_radius = airstrike_skill.get_effective_radius()
+        else:
+            as_damage = 400
+            as_radius = 200
+        explosion_radius = int(as_radius * 2.2 if has_nuke else as_radius)
+        base_damage = int(as_damage * 3.0 if has_nuke else as_damage)
+        shake_intensity = 60 if has_nuke else 25
+        shake_duration = 1.5 if has_nuke else 1.0
+
+        self.assets.play_sound("explosion")
+        # 核心爆炸粒子
+        self.particles.spawn_explosion(x, y, ORANGE, 200 if has_nuke else 150)
+        self.particles.spawn_explosion(x, y, RED, 150 if has_nuke else 100)
+        self.particles.spawn_explosion(x, y, FIRE_YELLOW, 120 if has_nuke else 80)
+        self.particles.spawn_explosion(x, y, WHITE, 100 if has_nuke else 50)
+        if has_nuke:
+            self.particles.spawn_explosion(x, y, PURPLE, 120)
+            self.particles.spawn_explosion(x, y, (255, 255, 255), 200)
+            # 核爆蘑菇云
+            for _ in range(60):
+                angle = random.uniform(0, math.pi * 2)
+                dist = random.uniform(0, 80)
+                self.particles.spawn(x + math.cos(angle)*dist, y + math.sin(angle)*dist - 30,
+                    (255, 200, 100), 1, (30, 60), (-2, 2), (2.0, 4.0))
+        self.camera.shake(shake_intensity, shake_duration)
+
+        # 冲击波环
+        ring_count = 16 if has_nuke else 8
+        for i in range(ring_count):
+            radius = 20 + i * (30 if has_nuke else 25)
+            self.particles.spawn(x, y, WHITE, 1, (radius, radius), (0, 0), (0.2, 0.4))
 
         # 烟雾
-        for _ in range(30):
+        smoke_count = 60 if has_nuke else 30
+        for _ in range(smoke_count):
             angle = random.uniform(0, math.pi * 2)
-            dist = random.uniform(20, 150)
+            dist = random.uniform(20, explosion_radius * 0.7)
             sx = x + math.cos(angle) * dist
             sy = y + math.sin(angle) * dist
             self.particles.spawn(sx, sy, SMOKE_GRAY, 1, (20, 40), (-3, 3), (2.0, 4.0))
 
-        # 火焰
-        for _ in range(25):
+        # 火焰粒子
+        fire_count = 50 if has_nuke else 25
+        for _ in range(fire_count):
             angle = random.uniform(0, math.pi * 2)
-            dist = random.uniform(10, 100)
+            dist = random.uniform(10, explosion_radius * 0.5)
             fx = x + math.cos(angle) * dist
             fy = y + math.sin(angle) * dist
             self.particles.spawn(fx, fy, FIRE_ORANGE, 1, (10, 25), (-4, 4), (1.0, 2.5))
@@ -1334,21 +1823,45 @@ class Game:
             sy = y + math.sin(angle) * random.uniform(0, 40)
             self.particles.spawn(sx, sy, (255, 255, 200), 1, (4, 10), (-speed, speed), (0.3, 1.5))
 
-        # 伤害
+        # 燃烧区域（fire 效果）
+        if has_fire:
+            if not hasattr(self, 'fire_zones'):
+                self.fire_zones = []
+            fire_radius = 150 if has_nuke else 100
+            self.fire_zones.append({
+                "x": x, "y": y, "radius": fire_radius,
+                "timer": 10.0 if has_nuke else 6.0, "damage_timer": 0.0,
+            })
+            self.floating_texts.append(FloatingText(x, y - 30, "燃烧区域!", color=FIRE_ORANGE, lifetime=1.5))
+
+        # 伤害 + 击退
         for enemy in self.enemies:
             dist = math.hypot(enemy.x - x, enemy.y - y)
-            if dist < 200:
-                damage = 400 * (1 - dist / 200)
+            if dist < explosion_radius:
+                damage = base_damage * (1 - dist / explosion_radius)
                 if dist > 0:
-                    push_x = (enemy.x - x) / dist * 100
-                    push_y = (enemy.y - y) / dist * 100
+                    push_force = 200 if has_nuke else 100
+                    push_x = (enemy.x - x) / dist * push_force
+                    push_y = (enemy.y - y) / dist * push_force
                     enemy.x += push_x
                     enemy.y += push_y
-                    enemy.knockdown(0.8)
+                    enemy.knockdown(1.2 if has_nuke else 0.8)
                 enemy.take_damage(damage)
                 self.damage_numbers.append(DamageNumber(enemy.x, enemy.y, damage, is_crit=True))
+                # 燃烧DOT
+                if has_fire:
+                    enemy.apply_buff(BuffType.BURN, duration=5.0)
+                # EMP眩晕
+                if has_emp:
+                    enemy.apply_buff(BuffType.STUN, duration=4.0 if has_nuke else 2.0)
                 if not enemy.alive:
                     self._on_enemy_death(enemy)
+
+        # 核爆：对玩家也有轻微自伤（远处），增加真实感
+        if has_nuke and self.player:
+            pdist = math.hypot(self.player.x - x, self.player.y - y)
+            if pdist < explosion_radius * 0.5:
+                self.player.take_damage(20)  # 轻微自伤
 
 
     def _skill_shield_bash(self):
@@ -1363,13 +1876,7 @@ class Game:
         return True
 
     def _skill_grapple(self):
-        """钩爪技能"""
-        if not self.player.riot_gear.equipped:
-            self.floating_texts.append(FloatingText(
-                self.player.x, self.player.y - 40, 
-                "需要先装备防爆套装!", color=RED, lifetime=1.5
-            ))
-            return False
+        """钩爪技能（独立技能，无需防爆套装）"""
         self._perform_grapple()
         return True
 
@@ -1395,25 +1902,49 @@ class Game:
         return True
 
     def _skill_ice_nova(self):
-        """冰霜新星"""
+        """冰霜新星 - 伤害/半径随技能等级缩放"""
+        ice_skill = self.player.skill_tree.get_skill(SkillType.ICE_NOVA) if self.player else None
+        if ice_skill and ice_skill.current_level > 0:
+            nova_radius = int(ice_skill.get_effective_radius())
+            nova_damage = int(ice_skill.get_effective_damage())
+            is_max = ice_skill.is_maxed()
+        else:
+            nova_radius = 200
+            nova_damage = 40
+            is_max = False
+        freeze_dur = 4.0 if is_max else 2.0
         for enemy in self.enemies:
             dist = math.hypot(enemy.x - self.player.x, enemy.y - self.player.y)
-            if dist < 200:
-                enemy.frozen_timer = 2.0
+            if dist < nova_radius:
+                enemy.frozen_timer = freeze_dur
+                if nova_damage > 0:
+                    enemy.take_damage(nova_damage)
+                    self.damage_numbers.append(DamageNumber(enemy.x, enemy.y, nova_damage, color=CYAN))
         self.particles.spawn_explosion(self.player.x, self.player.y, BLUE, 60)
         self.camera.shake(8, 0.3)
+        label = "绝对零度!" if is_max else "冰霜新星!"
         self.floating_texts.append(FloatingText(
-            self.player.x, self.player.y - 40, "冰霜新星!", color=BLUE, lifetime=1.5
+            self.player.x, self.player.y - 40, label, color=BLUE, lifetime=1.5
         ))
         return True
 
     def _skill_black_hole(self, x, y):
-        """黑洞技能"""
+        """黑洞技能 - 半径随技能等级缩放"""
+        bh_skill = self.player.skill_tree.get_skill(SkillType.BLACK_HOLE) if self.player else None
+        if bh_skill and bh_skill.current_level > 0:
+            bh_radius = int(bh_skill.get_effective_radius())
+            bh_damage = int(bh_skill.get_effective_damage())
+            is_max = bh_skill.is_maxed()
+        else:
+            bh_radius = 150
+            bh_damage = 30
+            is_max = False
         if not hasattr(self, 'black_holes'):
             self.black_holes = []
-        self.black_holes.append({"x": x, "y": y, "timer": 5.0, "radius": 150})
+        self.black_holes.append({"x": x, "y": y, "timer": 10.0 if is_max else 5.0, "radius": bh_radius, "damage": bh_damage})
+        label = "奇点生成!" if is_max else "黑洞生成!"
         self.floating_texts.append(FloatingText(
-            x, y - 30, "黑洞生成!", color=PURPLE, lifetime=1.5
+            x, y - 30, label, color=PURPLE, lifetime=1.5
         ))
         return True
 
@@ -1432,7 +1963,7 @@ class Game:
                     enemy.x += (dx / dist) * 3
                     enemy.y += (dy / dist) * 3
                 if dist < 30:
-                    enemy.take_damage(50 * dt)
+                    enemy.take_damage(bh.get("damage", 30) * dt)
                     if not enemy.alive:
                         self._on_enemy_death(enemy)
             # 视觉效果
@@ -1442,15 +1973,25 @@ class Game:
                 self.black_holes.remove(bh)
 
     def _skill_chain_lightning(self, angle):
-        """连锁闪电"""
+        """连锁闪电 - 伤害/范围随技能等级缩放，满级雷神之怒"""
+        cl_skill = self.player.skill_tree.get_skill(SkillType.CHAIN_LIGHTNING) if self.player else None
+        if cl_skill and cl_skill.current_level > 0:
+            cl_damage = int(cl_skill.get_effective_damage())
+            cl_range = int(cl_skill.get_effective_radius())
+            is_max = cl_skill.is_maxed()
+        else:
+            cl_damage = 50
+            cl_range = 200
+            is_max = False
         start_x = self.player.x
         start_y = self.player.y
-        target_x = start_x + math.cos(angle) * 350
-        target_y = start_y + math.sin(angle) * 350
+        initial_range = cl_range + 150  # 初始搜索范围略大
+        target_x = start_x + math.cos(angle) * initial_range
+        target_y = start_y + math.sin(angle) * initial_range
 
         # 寻找最近的敌人作为起点
         closest = None
-        closest_dist = 350
+        closest_dist = initial_range
         for enemy in self.enemies:
             dist = math.hypot(enemy.x - target_x, enemy.y - target_y)
             if dist < closest_dist:
@@ -1461,9 +2002,10 @@ class Game:
             # 连锁伤害
             hit_enemies = [closest]
             current_target = closest
-            for _ in range(4):  # 最多连锁4次
+            max_chains = 7 if is_max else 4  # 满级更多连锁
+            for _ in range(max_chains):
                 next_target = None
-                next_dist = 200
+                next_dist = cl_range
                 for enemy in self.enemies:
                     if enemy not in hit_enemies:
                         dist = math.hypot(enemy.x - current_target.x, enemy.y - current_target.y)
@@ -1478,9 +2020,9 @@ class Game:
 
             # 造成伤害
             for i, enemy in enumerate(hit_enemies):
-                damage = 80 * (0.7 ** i)  # 递减伤害
+                damage = cl_damage * (0.7 ** i)  # 递减伤害
                 enemy.take_damage(damage)
-                self.damage_numbers.append(DamageNumber(enemy.x, enemy.y, damage, color=YELLOW))
+                self.damage_numbers.append(DamageNumber(enemy.x, enemy.y, damage, color=YELLOW, is_crit=is_max))
                 self.particles.spawn(enemy.x, enemy.y, YELLOW, 8)
                 if not enemy.alive:
                     self._on_enemy_death(enemy)
@@ -1529,12 +2071,20 @@ class Game:
         return True
 
     def _skill_medic_pod(self, x, y):
-        """医疗舱"""
+        """医疗舱 - 半径随技能等级缩放，满级清除debuff"""
+        mp_skill = self.player.skill_tree.get_skill(SkillType.MEDIC_POD) if self.player else None
+        if mp_skill and mp_skill.current_level > 0:
+            mp_radius = int(mp_skill.get_effective_radius())
+            is_max = mp_skill.is_maxed()
+        else:
+            mp_radius = 100
+            is_max = False
         if not hasattr(self, 'medic_pods'):
             self.medic_pods = []
-        self.medic_pods.append({"x": x, "y": y, "timer": 8.0, "heal_timer": 0})
+        self.medic_pods.append({"x": x, "y": y, "timer": 8.0, "heal_timer": 0, "radius": mp_radius, "purify": is_max})
+        label = "生命之泉!" if is_max else "医疗舱部署!"
         self.floating_texts.append(FloatingText(
-            x, y - 30, "医疗舱部署!", color=GREEN, lifetime=1.5
+            x, y - 30, label, color=GREEN, lifetime=1.5
         ))
         return True
 
@@ -1548,8 +2098,10 @@ class Game:
             if pod["heal_timer"] <= 0:
                 pod["heal_timer"] = 1.0
                 dist = math.hypot(self.player.x - pod["x"], self.player.y - pod["y"])
-                if dist < 100:
-                    self.player.heal(10)
+                if dist < pod.get("radius", 100):
+                    self.player.heal(15 if pod.get("purify") else 10)
+                    if pod.get("purify"):
+                        self.player.buff_manager.clear_debuffs()
                     self.floating_texts.append(FloatingText(
                         self.player.x, self.player.y - 40, "+10", color=GREEN, lifetime=0.5
                     ))
@@ -1558,22 +2110,35 @@ class Game:
                 self.medic_pods.remove(pod)
 
     def _skill_shockwave(self):
-        """冲击波"""
+        """冲击波 - 伤害/半径随技能等级缩放，满级附加眩晕"""
+        sw_skill = self.player.skill_tree.get_skill(SkillType.SHOCKWAVE) if self.player else None
+        if sw_skill and sw_skill.current_level > 0:
+            sw_radius = int(sw_skill.get_effective_radius())
+            sw_damage = int(sw_skill.get_effective_damage())
+            is_max = sw_skill.is_maxed()
+        else:
+            sw_radius = 150
+            sw_damage = 60
+            is_max = False
         for enemy in self.enemies:
             dist = math.hypot(enemy.x - self.player.x, enemy.y - self.player.y)
-            if dist < 150 and dist > 0:
-                push_x = (enemy.x - self.player.x) / dist * 100
-                push_y = (enemy.y - self.player.y) / dist * 100
+            if dist < sw_radius and dist > 0:
+                push_force = 200 if is_max else 100
+                push_x = (enemy.x - self.player.x) / dist * push_force
+                push_y = (enemy.y - self.player.y) / dist * push_force
                 enemy.x += push_x
                 enemy.y += push_y
-                enemy.take_damage(50)
-                self.damage_numbers.append(DamageNumber(enemy.x, enemy.y, 50, color=ORANGE))
+                enemy.take_damage(sw_damage)
+                self.damage_numbers.append(DamageNumber(enemy.x, enemy.y, sw_damage, color=ORANGE))
+                if is_max:
+                    enemy.apply_buff(BuffType.STUN, duration=1.0)
                 if not enemy.alive:
                     self._on_enemy_death(enemy)
         self.particles.spawn_explosion(self.player.x, self.player.y, ORANGE, 40)
         self.camera.shake(15, 0.5)
+        label = "地震波!" if is_max else "冲击波!"
         self.floating_texts.append(FloatingText(
-            self.player.x, self.player.y - 40, "冲击波!", color=ORANGE, lifetime=1.5
+            self.player.x, self.player.y - 40, label, color=ORANGE, lifetime=1.5
         ))
         return True
 
@@ -1617,14 +2182,74 @@ class Game:
         self.assets.play_sound("pickup_item")
         return True
 
+    def _reset_touch_controls(self):
+        """重置所有触控控件状态（状态切换时调用，防止摇杆卡死）"""
+        try:
+            if hasattr(self, 'joystick') and self.joystick:
+                self.joystick.active = False
+                self.joystick.touch_id = None
+                self.joystick.knob_x = self.joystick.base_x
+                self.joystick.knob_y = self.joystick.base_y
+                self.joystick.value_x = 0
+                self.joystick.value_y = 0
+        except Exception:
+            pass
+        try:
+            if hasattr(self, 'aim_button') and self.aim_button:
+                self.aim_button.pressed = False
+                self.aim_button.touch_id = None
+                self.aim_button.just_pressed = False
+                self.aim_button.just_released = False
+        except Exception:
+            pass
+        try:
+            if hasattr(self, 'skill_selector') and self.skill_selector:
+                self.skill_selector.pressed = False
+                self.skill_selector.touch_id = None
+        except Exception:
+            pass
+        try:
+            if hasattr(self, 'throwable_caster') and self.throwable_caster:
+                self.throwable_caster.is_aiming = False
+        except Exception:
+            pass
+        try:
+            if hasattr(self, 'skill_tree_renderer') and self.skill_tree_renderer:
+                self.skill_tree_renderer._dragging = False
+        except Exception:
+            pass
+
     def handle_events(self):
+        # ===== 统一事件收集（所有状态共享，避免重复消费导致事件丢失）=====
+        all_events = pygame.event.get()
         self.touch_events = []
+        # 预处理：将所有 FINGER 事件和鼠标事件统一转换为 touch_events（dict 格式）
+        for event in all_events:
+            if event.type == pygame.FINGERDOWN:
+                x = event.x * self.scaled_width
+                y = event.y * self.scaled_height
+                self.touch_events.append({"type": "down", "pos": (x, y), "id": event.finger_id})
+            elif event.type == pygame.FINGERUP:
+                x = event.x * self.scaled_width
+                y = event.y * self.scaled_height
+                self.touch_events.append({"type": "up", "pos": (x, y), "id": event.finger_id})
+            elif event.type == pygame.FINGERMOTION:
+                x = event.x * self.scaled_width
+                y = event.y * self.scaled_height
+                self.touch_events.append({"type": "move", "pos": (x, y), "id": event.finger_id})
+            elif event.type == pygame.MOUSEBUTTONDOWN:
+                self.touch_events.append({"type": "down", "pos": event.pos, "id": -1})
+            elif event.type == pygame.MOUSEBUTTONUP:
+                self.touch_events.append({"type": "up", "pos": event.pos, "id": -1})
+            elif event.type == pygame.MOUSEMOTION:
+                self.touch_events.append({"type": "move", "pos": event.pos, "id": -1})
+
         mouse_pos = pygame.mouse.get_pos()
         mouse_pressed = pygame.mouse.get_pressed()
 
         # 技能卡选择界面
         if self.state == GameState.SKILL_SELECT:
-            for event in pygame.event.get():
+            for event in all_events:
                 if event.type == pygame.QUIT:
                     self.running = False
                 elif event.type == pygame.VIDEORESIZE:
@@ -1658,7 +2283,7 @@ class Game:
             return mouse_pos, mouse_pressed
 
         if self.state == GameState.DIALOGUE and self.dialogue.active:
-            for event in pygame.event.get():
+            for event in all_events:
                 if event.type == pygame.QUIT:
                     logger.info("收到退出事件")
                     self.running = False
@@ -1728,9 +2353,9 @@ class Game:
                     self.touch_events.append({"type": "move", "pos": (x, y), "id": event.finger_id})
             return mouse_pos, mouse_pressed
 
-        # 菜单/设置/教程的滚轮和触摸滚动
-        if self.state in (GameState.MENU, GameState.SETTINGS, GameState.TUTORIAL, GameState.RECORDS):
-            for event in pygame.event.get():
+        # 菜单/设置/教程/剧情资料库/难度选择的滚轮和触摸滚动
+        if self.state in (GameState.MENU, GameState.SETTINGS, GameState.TUTORIAL, GameState.RECORDS, GameState.STORY_ARCHIVE, GameState.CODEX, GameState.MODE_SELECT, GameState.DIFFICULTY_SELECT, GameState.MOD_MANAGER, GameState.ACHIEVEMENTS):
+            for event in all_events:
                 if event.type == pygame.QUIT:
                     logger.info("收到退出事件")
                     self.running = False
@@ -1742,7 +2367,9 @@ class Game:
                         self._update_scale()
                         logger.info(f"窗口调整: {event.w}x{event.h}")
                 elif event.type == pygame.MOUSEWHEEL:
-                    if self.state == GameState.MENU:
+                    if self.state == GameState.SKILL_TREE and hasattr(self, 'skill_tree_renderer'):
+                        self.skill_tree_renderer.handle_wheel(event.y, getattr(event, 'x', 0))
+                    elif self.state == GameState.MENU:
                         self.menu_scroll_offset = max(0, self.menu_scroll_offset - event.y * 40)
                     elif self.state == GameState.SETTINGS:
                         self.settings_scroll_offset = max(0, self.settings_scroll_offset - event.y * 40)
@@ -1750,6 +2377,14 @@ class Game:
                         self.tutorial_scroll_offset = max(0, self.tutorial_scroll_offset - event.y * 40)
                     elif self.state == GameState.RECORDS:
                         self.records_scroll_offset = max(0, getattr(self, 'records_scroll_offset', 0) - event.y * 40)
+                    elif self.state == GameState.STORY_ARCHIVE:
+                        self.story_archive_scroll = max(0, self.story_archive_scroll - event.y * 40)
+                    elif self.state == GameState.CODEX:
+                        self.codex_scroll = max(0, self.codex_scroll - event.y * 40)
+                    elif self.state == GameState.MOD_MANAGER:
+                        self.mod_manager_scroll = max(0, self.mod_manager_scroll - event.y * 40)
+                    elif self.state == GameState.ACHIEVEMENTS:
+                        self.ach_scroll_offset = max(0, self.ach_scroll_offset - event.y * 40)
                 elif event.type == pygame.FINGERDOWN:
                     x = event.x * self.scaled_width
                     y = event.y * self.scaled_height
@@ -1762,6 +2397,16 @@ class Game:
                         self.menu_drag_start_offset = self.settings_scroll_offset
                     elif self.state == GameState.TUTORIAL:
                         self.menu_drag_start_offset = self.tutorial_scroll_offset
+                    elif self.state == GameState.RECORDS:
+                        self.menu_drag_start_offset = getattr(self, 'records_scroll_offset', 0)
+                    elif self.state == GameState.STORY_ARCHIVE:
+                        self.menu_drag_start_offset = self.story_archive_scroll
+                    elif self.state == GameState.CODEX:
+                        self.menu_drag_start_offset = self.codex_scroll
+                    elif self.state == GameState.MOD_MANAGER:
+                        self.menu_drag_start_offset = self.mod_manager_scroll
+                    elif self.state == GameState.ACHIEVEMENTS:
+                        self.menu_drag_start_offset = self.ach_scroll_offset
                 elif event.type == pygame.FINGERMOTION:
                     x = event.x * self.scaled_width
                     y = event.y * self.scaled_height
@@ -1775,6 +2420,16 @@ class Game:
                             self.settings_scroll_offset = new_offset
                         elif self.state == GameState.TUTORIAL:
                             self.tutorial_scroll_offset = new_offset
+                        elif self.state == GameState.RECORDS:
+                            self.records_scroll_offset = new_offset
+                        elif self.state == GameState.STORY_ARCHIVE:
+                            self.story_archive_scroll = new_offset
+                        elif self.state == GameState.CODEX:
+                            self.codex_scroll = new_offset
+                        elif self.state == GameState.MOD_MANAGER:
+                            self.mod_manager_scroll = new_offset
+                        elif self.state == GameState.ACHIEVEMENTS:
+                            self.ach_scroll_offset = new_offset
                 elif event.type == pygame.FINGERUP:
                     x = event.x * self.scaled_width
                     y = event.y * self.scaled_height
@@ -1797,7 +2452,7 @@ class Game:
         is_paused_or_over = self.state in (GameState.PAUSED, GameState.GAME_OVER)
 
         if self.state == GameState.ACHIEVEMENTS:
-            for event in pygame.event.get():
+            for event in all_events:
                 if event.type == pygame.QUIT:
                     logger.info("收到退出事件")
                     self.running = False
@@ -1813,14 +2468,22 @@ class Game:
                 elif event.type == pygame.FINGERMOTION:
                     x = event.x * self.scaled_width
                     y = event.y * self.scaled_height
+                    # 触控拖动滚动
+                    if hasattr(self, '_ach_touch_last_y') and self._ach_touch_last_y is not None:
+                        delta = y - self._ach_touch_last_y
+                        self.ach_scroll_offset -= delta
+                        self.ach_scroll_offset = max(0, self.ach_scroll_offset)
+                    self._ach_touch_last_y = y
                     self.touch_events.append({"type": "move", "pos": (x, y), "id": event.finger_id})
                 elif event.type == pygame.FINGERDOWN:
                     x = event.x * self.scaled_width
                     y = event.y * self.scaled_height
+                    self._ach_touch_last_y = y
                     self.touch_events.append({"type": "down", "pos": (x, y), "id": event.finger_id})
                 elif event.type == pygame.FINGERUP:
                     x = event.x * self.scaled_width
                     y = event.y * self.scaled_height
+                    self._ach_touch_last_y = None
                     self.touch_events.append({"type": "up", "pos": (x, y), "id": event.finger_id})
                 elif event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_ESCAPE:
@@ -1833,7 +2496,7 @@ class Game:
                         self.touch_events.append({"type":"up","pos":event.pos,"id":0})
             return mouse_pos, mouse_pressed
         
-        for event in pygame.event.get():
+        for event in all_events:
             if event.type == pygame.QUIT:
                 logger.info("收到退出事件")
                 self.running = False
@@ -1897,25 +2560,38 @@ class Game:
 
     def _handle_keydown(self, key):
         import time
+        # Mod 按键钩子：返回 True 则阻止默认处理
+        try:
+            results = trigger_hook(HOOK_KEYDOWN, key)
+            if any(r is True for r in results):
+                return
+        except Exception:
+            pass
         if self.state == GameState.PLAYING:
-            if key == pygame.K_1:
+            if key == pygame.K_1 and self.player.can_act():
                 self.player.switch_weapon(0)
-            elif key == pygame.K_2:
+            elif key == pygame.K_2 and self.player.can_act():
                 self.player.switch_weapon(1)
-            elif key == pygame.K_3:
+            elif key == pygame.K_3 and self.player.can_act():
                 self.player.switch_weapon(2)
             elif key == pygame.K_TAB:
-                # Tab：短按切换下一个技能
-                unlocked = self._get_unlocked_skills()
-                if len(unlocked) > 0:
-                    current_idx = unlocked.index(self.selected_skill) if self.selected_skill in unlocked else -1
-                    next_idx = (current_idx + 1) % len(unlocked)
-                    self.selected_skill = unlocked[next_idx]
-                    skill = self.player.skill_tree.get_skill(self.selected_skill)
-                    self.floating_texts.append(FloatingText(
-                        self.player.x, self.player.y - 40,
-                        f"技能: {skill.name if skill else '?'}", color=GOLD, lifetime=1.5
-                    ))
+                # Tab：短按切换下一个技能（非观战模式且玩家可操作时）
+                if self.player.can_act():
+                    unlocked = self._get_unlocked_skills()
+                    if len(unlocked) > 0:
+                        current_idx = unlocked.index(self.selected_skill) if self.selected_skill in unlocked else -1
+                        next_idx = (current_idx + 1) % len(unlocked)
+                        self.selected_skill = unlocked[next_idx]
+                        skill = self.player.skill_tree.get_skill(self.selected_skill)
+                        self.floating_texts.append(FloatingText(
+                            self.player.x, self.player.y - 40,
+                            f"技能: {skill.name if skill else '?'}", color=GOLD, lifetime=1.5
+                        ))
+            elif key == pygame.K_t:
+                # T：打开技能树
+                self.prev_state = self.state
+                self.state = GameState.SKILL_TREE
+                self.skill_tree_renderer.show()
             elif key == pygame.K_g:
                 import time
                 self.key_g_press_start = time.time()
@@ -1932,10 +2608,11 @@ class Game:
                 self.throwable_caster.is_aiming = False
             elif key == pygame.K_e:
                 # E：切换投掷物类型
-                self._cycle_throwable()
+                if self.player.can_act():
+                    self._cycle_throwable()
             elif key == pygame.K_r:
                 # R：短按切换下一把武器
-                if self.weapon_switch_cooldown <= 0:
+                if self.player.can_act() and self.weapon_switch_cooldown <= 0:
                     self.player.next_weapon()
                     self.weapon_switch_cooldown = 0.3
                     weapon = self.player.get_current_weapon()
@@ -1944,25 +2621,67 @@ class Game:
                         f"切换: {weapon.name}", color=PURPLE, lifetime=1.0
                     ))
             elif key == pygame.K_f:
-                # F：投掷物
-                self._throw_grenade()
+                    pass
             elif key == pygame.K_ESCAPE:
                 self.state = GameState.PAUSED
         elif self.state == GameState.PAUSED:
             if key == pygame.K_ESCAPE:
                 self.state = GameState.PLAYING
+        elif self.state == GameState.SETTINGS:
+            if key == pygame.K_ESCAPE:
+                self.config.save()
+                if getattr(self, 'settings_from_pause', False):
+                    self.settings_from_pause = False
+                    self.state = GameState.PAUSED
+                else:
+                    self.state = GameState.MENU
         elif self.state == GameState.RECORDS:
             if key == pygame.K_ESCAPE:
                 self.state = GameState.MENU
+        elif self.state == GameState.CODEX:
+            if key == pygame.K_ESCAPE:
+                self.state = GameState.MENU
+                self.codex_scroll = 0
+                self.codex_selected = None
+        elif self.state == GameState.SKILL_TREE:
+            if key == pygame.K_ESCAPE or key == pygame.K_t:
+                self.state = getattr(self, 'prev_state', GameState.PLAYING)
+                self.skill_tree_renderer.hide()
+            elif key in (pygame.K_LEFT, pygame.K_RIGHT, pygame.K_UP, pygame.K_DOWN):
+                if hasattr(self, 'skill_tree_renderer'):
+                    self.skill_tree_renderer.handle_key(key)
+        elif self.state == GameState.TEXT_VIEWER:
+            if key == pygame.K_ESCAPE or key == pygame.K_e or key == pygame.K_RETURN or key == pygame.K_SPACE:
+                self.state = getattr(self, 'prev_state', GameState.PLAYING)
+                self.current_viewing_text = None
+        elif self.state == GameState.STORY_ARCHIVE:
+            if key == pygame.K_ESCAPE:
+                self.state = GameState.MENU
+                self.story_archive_scroll = 0
+                self.story_archive_selected = None
+        elif self.state == GameState.MOD_MANAGER:
+            if key == pygame.K_ESCAPE:
+                self.state = GameState.MENU
+                self.mod_manager_scroll = 0
+                self.mod_selected = None
 
     def _handle_keyup(self, key):
         import time
+        # 技能树方向键释放
+        if self.state == GameState.SKILL_TREE and hasattr(self, 'skill_tree_renderer'):
+            self.skill_tree_renderer.handle_key_up(key)
+            return
         if self.state != GameState.PLAYING:
             return
         if key == pygame.K_g:
             hold_time = time.time() - self.key_g_press_start
             self.key_g_held = False
             self.skill_caster.is_aiming = False #松开关闭瞄准标记
+
+            if not self.player.can_act():
+                self.g_aim_started = False
+                self.player.riot_gear.end_aim()
+                return
 
             selected_skill = self.selected_skill
             if hold_time < self.key_g_long_threshold:
@@ -1997,6 +2716,10 @@ class Game:
             hold_time = time.time() - self.key_q_press_start
             self.key_q_held = False
             self.throwable_caster.is_aiming = False
+
+            if not self.player.can_act():
+                self.q_aim_started = False
+                return
 
             if hold_time < self.key_q_long_threshold:
                 # 短按：朝鼠标方向快速投掷
@@ -2140,13 +2863,7 @@ class Game:
             self.camera.shake(6, 0.25)
 
     def _perform_grapple_aimed(self, angle, max_dist=800):
-        """带瞄准方向和距离的钩爪"""
-        if not self.player.riot_gear.equipped:
-            self.floating_texts.append(FloatingText(
-                self.player.x, self.player.y - 40, 
-                "需要先装备防爆套装!", color=RED, lifetime=1.5
-            ))
-            return False
+        """带瞄准方向和距离的钩爪（独立技能，无需防爆套装）"""
         target_x = self.player.x + math.cos(angle) * max_dist
         target_y = self.player.y + math.sin(angle) * max_dist
         return self._perform_grapple_at(target_x, target_y)
@@ -2160,14 +2877,7 @@ class Game:
         return self._perform_grapple_at(target_x, target_y)
 
     def _perform_grapple_at(self, target_x, target_y):
-        """在指定位置执行钩爪核心逻辑 - 新逻辑"""
-        if not self.player.riot_gear.equipped:
-            self.floating_texts.append(FloatingText(
-                self.player.x, self.player.y - 40, 
-                "需要先装备防爆套装!", color=RED, lifetime=1.5
-            ))
-            return False
-
+        """在指定位置执行钩爪核心逻辑 - 新逻辑（独立技能）"""
         # 寻找钩爪路径上的目标
         dx = target_x - self.player.x
         dy = target_y - self.player.y
@@ -2341,6 +3051,28 @@ class Game:
             self.airstrikes = []
         self.airstrikes.append({"x": target_x, "y": target_y, "timer": 2.0, "warned": False})
 
+    def _save_collected_texts(self):
+        """保存已收集的文本资料到文件"""
+        import json
+        try:
+            save_path = "collected_texts.json"
+            data = {"collected": list(self.collected_texts)}
+            with open(save_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+    def _load_collected_texts(self):
+        """从文件加载已收集的文本资料"""
+        import json
+        try:
+            save_path = "collected_texts.json"
+            with open(save_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            self.collected_texts = set(data.get("collected", []))
+        except Exception:
+            self.collected_texts = set()
+
     def _apply_item_effect(self, item_type):
         """应用特殊道具效果"""
         # 记录道具收集
@@ -2348,6 +3080,12 @@ class Game:
             self.session.add_item_collected()
         # 播放拾取音效
         self.assets.play_sound("pickup_item")
+        # 兼容int类型（客户端同步过来的）
+        if isinstance(item_type, int):
+            try:
+                item_type = ItemType(item_type)
+            except:
+                pass
         if item_type == ItemType.VACCINE:
             self.has_vaccine = True
             if self.session:
@@ -2386,10 +3124,27 @@ class Game:
             else:
                 new_weapon = random.choice(all_weapons)
             self.player.add_weapon(new_weapon)
+            # 图鉴解锁：获得武器后解锁
+            try:
+                codex_unlock_manager.unlock_weapon(new_weapon.name)
+            except Exception:
+                pass
             if self.session:
                 self.session.add_weapon_collected()
             self.assets.play_sound("pickup_weapon_box")
             self.particles.spawn_explosion(self.player.x, self.player.y, (200, 160, 80), 15)
+
+            # 概率掉落可拾取文本资料
+            try:
+                from codex import PICKABLE_TEXTS
+                uncollected = [tid for tid in PICKABLE_TEXTS if tid not in self.collected_texts]
+                if uncollected and random.random() < 0.35:
+                    text_id = random.choice(uncollected)
+                    tx = self.player.x + random.randint(-50, 50)
+                    ty = self.player.y + random.randint(-50, 50)
+                    self.text_items.append(TextItem(tx, ty, text_id))
+            except Exception:
+                pass
             self.floating_texts.append(FloatingText(self.player.x, self.player.y - 40, f"武器箱: {Weapon(new_weapon).name}!", color=(200, 160, 80), lifetime=3.0))
         elif item_type == ItemType.TREASURE_CHEST:
             # 宝箱：多重奖励
@@ -2400,6 +3155,11 @@ class Game:
             all_weapons = [wt for wt in WeaponType if wt not in (WeaponType.PISTOL,)]
             new_weapon = random.choice(all_weapons)
             self.player.add_weapon(new_weapon)
+            # 图鉴解锁
+            try:
+                codex_unlock_manager.unlock_weapon(new_weapon.name)
+            except Exception:
+                pass
             rewards.append(Weapon(new_weapon).name)
             # 2. 大量经验
             self.player.gain_exp(100)
@@ -2407,11 +3167,15 @@ class Game:
             # 3. 治疗
             self.player.heal(30)
             rewards.append("+30HP")
-            # 4. 随机正面buff
-            buff_choices = [BuffType.SPEED_BOOST, BuffType.DAMAGE_BOOST, BuffType.HASTE, BuffType.SHIELD, BuffType.REGEN]
-            chosen_buff = random.choice(buff_choices)
-            self.player.buff_manager.add_buff(chosen_buff, duration=15.0)
-            rewards.append(chosen_buff.name)
+            # 4. 随机符文（局内永久buff，使用新符文系统）
+            luck = self.rune_manager.get_bonus("drop_rate_mult") if hasattr(self, 'rune_manager') else 0
+            rune_type = random_rune(luck_bonus=luck)
+            if hasattr(self, 'rune_manager') and self.rune_manager.add_rune(rune_type):
+                cfg = RUNE_CONFIG[rune_type]
+                rewards.append(f"符文: {cfg['name']}")
+                self._apply_rune_bonuses()
+            else:
+                rewards.append("符文(已满)")
             # 5. 弹药补给
             for weapon in self.player.weapons:
                 if hasattr(weapon, 'current_ammo') and weapon.current_ammo != "Inf":
@@ -2424,6 +3188,18 @@ class Game:
             self.particles.spawn_explosion(self.player.x, self.player.y, (255, 215, 0), 30)
             self.particles.spawn(self.player.x, self.player.y, (255, 255, 200), 20)
             reward_text = "宝箱: " + ", ".join(rewards[:3])
+
+            # 6. 概率掉落可拾取文本资料
+            try:
+                from codex import PICKABLE_TEXTS
+                uncollected = [tid for tid in PICKABLE_TEXTS if tid not in self.collected_texts]
+                if uncollected and random.random() < 0.6:
+                    text_id = random.choice(uncollected)
+                    tx = self.player.x + random.randint(-60, 60)
+                    ty = self.player.y + random.randint(-60, 60)
+                    self.text_items.append(TextItem(tx, ty, text_id))
+            except Exception:
+                pass
             self.floating_texts.append(FloatingText(self.player.x, self.player.y - 50, reward_text, color=(255, 215, 0), lifetime=4.0))
 
         elif item_type == ItemType.SKILL_SLOT:
@@ -2488,6 +3264,128 @@ class Game:
                 "EMP脉冲弹 x2！(按Q投掷)", color=CYAN, lifetime=3.0))
             self.assets.play_sound("pickup_grenade")
             self.particles.spawn_explosion(self.player.x, self.player.y, CYAN, 15)
+
+        elif item_type == ItemType.RUNE:
+            # 符文：局内永久buff
+            luck = self.rune_manager.get_bonus("drop_rate_mult") if hasattr(self, 'rune_manager') else 0
+            rune_type = random_rune(luck_bonus=luck)
+            if hasattr(self, 'rune_manager') and self.rune_manager.add_rune(rune_type):
+                cfg = RUNE_CONFIG[rune_type]
+                self.floating_texts.append(FloatingText(self.player.x, self.player.y - 40,
+                    f"获得符文: {cfg['name']}!", color=cfg['color'], lifetime=3.5))
+                self.assets.play_sound("level_up")
+                self.particles.spawn_explosion(self.player.x, self.player.y, cfg['color'], 20)
+                # 立即应用属性加成
+                self._apply_rune_bonuses()
+            else:
+                self.floating_texts.append(FloatingText(self.player.x, self.player.y - 40,
+                    "符文已达上限！", color=GRAY, lifetime=2.0))
+
+        elif item_type == ItemType.GOLDEN_CHEST:
+            # 黄金宝箱：必出符文+大量资源
+            self.floating_texts.append(FloatingText(self.player.x, self.player.y - 40,
+                "黄金宝箱开启！", color=GOLD, lifetime=2.5))
+            self.assets.play_sound("level_up")
+            # 必出1-2枚符文
+            luck = self.rune_manager.get_bonus("drop_rate_mult") if hasattr(self, 'rune_manager') else 0
+            rune_count = 2 if random.random() < 0.3 + luck else 1
+            for _ in range(rune_count):
+                rune_type = random_rune(luck_bonus=luck + 0.5)  # 黄金宝箱提升稀有度
+                if hasattr(self, 'rune_manager'):
+                    self.rune_manager.add_rune(rune_type)
+                    cfg = RUNE_CONFIG[rune_type]
+                    self.floating_texts.append(FloatingText(self.player.x, self.player.y - 70,
+                        f"符文: {cfg['name']}!", color=cfg['color'], lifetime=3.0))
+            # 大量资源
+            self.player.hp = min(self.player.max_hp, self.player.hp + 50)
+            if hasattr(self.player, 'ammo'):
+                for w in self.player.weapons:
+                    if hasattr(w, 'ammo') and w.ammo is not None:
+                        w.ammo = getattr(w, 'max_ammo', w.ammo + 30)
+            self.floating_texts.append(FloatingText(self.player.x, self.player.y - 100,
+                "生命+50, 弹药全满!", color=GREEN, lifetime=2.5))
+            self.particles.spawn_explosion(self.player.x, self.player.y, GOLD, 30)
+            if hasattr(self, '_apply_rune_bonuses'):
+                self._apply_rune_bonuses()
+
+        elif item_type == ItemType.MYSTERY_BOX:
+            # 神秘盒：随机效果（可能好可能坏）
+            self.assets.play_sound("pickup_grenade")
+            effects = [
+                ("good", "full_heal", "神秘盒: 生命全满!", GREEN),
+                ("good", "max_hp_up", "神秘盒: 最大生命+20!", GREEN),
+                ("good", "damage_up", "神秘盒: 伤害永久+10%!", ORANGE),
+                ("good", "speed_up", "神秘盒: 移速永久+10%!", CYAN),
+                ("good", "rune", "神秘盒: 获得符文!", GOLD),
+                ("good", "ammo", "神秘盒: 弹药全满!", YELLOW),
+                ("bad", "damage", "神秘盒: 受到20点伤害!", RED),
+                ("bad", "slow", "神秘盒: 移速降低5秒!", BLUE),
+                ("bad", "zombies", "神秘盒: 引来一群僵尸!", RED),
+            ]
+            effect = random.choice(effects)
+            etype, ekind, emsg, ecolor = effect
+            self.floating_texts.append(FloatingText(self.player.x, self.player.y - 40,
+                emsg, color=ecolor, lifetime=3.0))
+            if etype == "good":
+                if ekind == "full_heal":
+                    self.player.hp = self.player.max_hp
+                elif ekind == "max_hp_up":
+                    self.player.max_hp += 20
+                    self.player.hp += 20
+                elif ekind == "damage_up":
+                    self.player.damage_mult = getattr(self.player, 'damage_mult', 1.0) + 0.10
+                elif ekind == "speed_up":
+                    self.player.speed_mult = getattr(self.player, 'speed_mult', 1.0) + 0.10
+                elif ekind == "rune":
+                    if hasattr(self, 'rune_manager'):
+                        rt = random_rune()
+                        self.rune_manager.add_rune(rt)
+                        self._apply_rune_bonuses()
+                elif ekind == "ammo":
+                    for w in self.player.weapons:
+                        if hasattr(w, 'ammo') and w.ammo is not None:
+                            w.ammo = getattr(w, 'max_ammo', w.ammo + 30)
+            else:
+                if ekind == "damage":
+                    self.player.hp -= 20
+                elif ekind == "slow":
+                    if hasattr(self, 'buff_manager'):
+                        self.buff_manager.add_buff(BuffType.SLOW, 5.0)
+                elif ekind == "zombies":
+                    # 在玩家周围生成5只普通僵尸
+                    for _ in range(5):
+                        angle = random.uniform(0, math.pi * 2)
+                        dist = random.uniform(150, 250)
+                        zx = self.player.x + math.cos(angle) * dist
+                        zy = self.player.y + math.sin(angle) * dist
+                        from entities import Enemy, EnemyType
+                        self.enemies.append(Enemy(zx, zy, EnemyType.ZOMBIE, 1, self.config.difficulty))
+            self.particles.spawn_explosion(self.player.x, self.player.y, PURPLE, 15)
+
+    def _apply_rune_bonuses(self):
+        """应用所有符文的属性加成到玩家"""
+        if not hasattr(self, 'rune_manager') or not hasattr(self, 'player') or self.player is None:
+            return
+        rm = self.rune_manager
+        # 保存基础值（只在第一次应用时保存）
+        if not hasattr(self.player, '_rune_base_max_hp'):
+            self.player._rune_base_max_hp = self.player.max_hp
+            self.player._rune_base_damage_mult = getattr(self.player, 'damage_mult', 1.0)
+            self.player._rune_base_speed_mult = getattr(self.player, 'speed_mult', 1.0)
+            self.player._rune_base_crit_chance = getattr(self.player, 'crit_chance', 0.05)
+            self.player._rune_base_crit_damage = getattr(self.player, 'crit_damage_mult', 1.5)
+            self.player._rune_base_lifesteal = getattr(self.player, 'lifesteal', 0.0)
+            self.player._rune_base_armor = getattr(self.player, 'armor', 0)
+            self.player._rune_base_fire_rate = getattr(self.player, 'fire_rate_mult', 1.0)
+        # 应用加成
+        self.player.max_hp = self.player._rune_base_max_hp + rm.get_bonus("max_hp")
+        self.player.damage_mult = self.player._rune_base_damage_mult + rm.get_bonus("damage_mult")
+        self.player.speed_mult = self.player._rune_base_speed_mult + rm.get_bonus("speed_mult")
+        self.player.crit_chance = self.player._rune_base_crit_chance + rm.get_bonus("crit_chance")
+        self.player.crit_damage_mult = self.player._rune_base_crit_damage + rm.get_bonus("crit_damage_mult")
+        self.player.lifesteal = self.player._rune_base_lifesteal + rm.get_bonus("lifesteal")
+        self.player.armor = self.player._rune_base_armor + rm.get_bonus("armor")
+        self.player.fire_rate_mult = self.player._rune_base_fire_rate + rm.get_bonus("fire_rate_mult")
 
     def _cycle_throwable(self):
         """切换到下一种有库存的投掷物"""
@@ -2602,6 +3500,125 @@ class Game:
         })
         self.assets.play_sound("grenade_throw")
 
+    def _start_melee_attack(self, weapon, angle):
+        """开始近战攻击"""
+        self.melee_attack_active = True
+        base_rate = getattr(weapon, "fire_rate", 0.3)
+        
+        # 应用近战攻速技能
+        melee_speed_skill = self.player.skill_tree.get_skill(SkillType.MELEE_SPEED)
+        speed_mult = 1.0
+        if melee_speed_skill and melee_speed_skill.current_level > 0:
+            speed_mult = 1.0 + melee_speed_skill.current_level * 0.2
+        effective_rate = base_rate / speed_mult
+        
+        self.melee_attack_timer = effective_rate * 0.8
+        self.melee_attack_duration = effective_rate * 0.8
+        self.melee_attack_angle = angle
+        
+        # 应用近战范围技能
+        base_range = getattr(weapon, "range", 60)
+        melee_range_skill = self.player.skill_tree.get_skill(SkillType.MELEE_RANGE)
+        if melee_range_skill and melee_range_skill.current_level > 0:
+            base_range *= (1.0 + melee_range_skill.current_level * 0.15)
+        self.melee_attack_range = base_range
+        
+        self.melee_attack_damage = weapon.melee_attack_damage
+        self.melee_attack_weapon = weapon
+        self.melee_hit_enemies = set()
+        
+        # 连击系统：增加连击计数
+        if not hasattr(self, 'melee_combo_count'):
+            self.melee_combo_count = 0
+            self.melee_combo_timer = 0
+        self.melee_combo_count += 1
+        self.melee_combo_timer = 2.0  # 连击2秒内有效
+        
+        if weapon.weapon_type == WeaponType.CHAINSAW:
+            self.melee_attack_duration = 0.15
+            self.melee_attack_timer = 0.15
+
+    def _update_melee_attack(self, dt):
+        """更新近战攻击，进行伤害判定"""
+        if not self.melee_attack_active:
+            return
+        
+        self.melee_attack_timer -= dt
+        attack_progress = 1 - (self.melee_attack_timer / max(0.01, self.melee_attack_duration))
+        
+        if attack_progress < 0.7:
+            attack_arc = math.pi * 0.8
+            for enemy in self.enemies:
+                if id(enemy) in self.melee_hit_enemies:
+                    continue
+                dx = enemy.x - self.player.x
+                dy = enemy.y - self.player.y
+                dist = math.hypot(dx, dy)
+                if dist > self.melee_attack_range + enemy.size:
+                    continue
+                enemy_angle = math.atan2(dy, dx)
+                angle_diff = abs(((enemy_angle - self.melee_attack_angle + math.pi) % (math.pi * 2)) - math.pi)
+                if angle_diff > attack_arc / 2:
+                    continue
+                damage = self.melee_attack_damage
+                
+                # 应用近战伤害技能
+                melee_dmg_skill = self.player.skill_tree.get_skill(SkillType.MELEE_DAMAGE)
+                if melee_dmg_skill and melee_dmg_skill.current_level > 0:
+                    damage *= (1.0 + melee_dmg_skill.current_level * 0.25)
+                
+                # 应用狂暴技能（低血量增伤）
+                berserker_skill = self.player.skill_tree.get_skill(SkillType.BERSERKER)
+                if berserker_skill and berserker_skill.current_level > 0:
+                    hp_ratio = self.player.hp / self.player.max_hp
+                    if hp_ratio < 0.5:
+                        dmg_bonus = berserker_skill.current_level * 0.3
+                        if berserker_skill.current_level >= 3 and hp_ratio < 0.2:
+                            dmg_bonus += 0.5
+                        damage *= (1.0 + dmg_bonus)
+                
+                # 应用连击大师技能
+                combo_skill = self.player.skill_tree.get_skill(SkillType.COMBO_MASTER)
+                if combo_skill and combo_skill.current_level > 0:
+                    max_layers = [0, 5, 8, 10][combo_skill.current_level]
+                    per_layer = [0, 0.05, 0.08, 0.10][combo_skill.current_level]
+                    combo_count = min(getattr(self, 'melee_combo_count', 0), max_layers)
+                    damage *= (1.0 + combo_count * per_layer)
+                
+                # 匕首暴击
+                if self.melee_attack_weapon and self.melee_attack_weapon.weapon_type == WeaponType.KNIFE:
+                    crit_chance = getattr(self.melee_attack_weapon, "crit_chance", 0.3)
+                    if random.random() < crit_chance:
+                        damage *= 2
+                        self.damage_numbers.append(DamageNumber(enemy.x, enemy.y - 20, int(damage), is_crit=True))
+                
+                # 近战吸血
+                lifesteal_skill = self.player.skill_tree.get_skill(SkillType.MELEE_LIFESTEAL)
+                if lifesteal_skill and lifesteal_skill.current_level > 0:
+                    steal_amount = damage * lifesteal_skill.current_level * 0.1
+                    self.player.hp = min(self.player.max_hp, self.player.hp + steal_amount)
+                
+                if self.melee_attack_weapon and self.melee_attack_weapon.weapon_type == WeaponType.BAT:
+                    knockback = getattr(self.melee_attack_weapon, "knockback", 15)
+                    enemy.x += math.cos(self.melee_attack_angle) * knockback
+                    enemy.y += math.sin(self.melee_attack_angle) * knockback
+                enemy.take_damage(damage)
+                self.damage_numbers.append(DamageNumber(enemy.x, enemy.y, int(damage)))
+                self.melee_hit_enemies.add(id(enemy))
+                self.particles.spawn(enemy.x, enemy.y, enemy.color, 8, size_range=(3, 6), velocity_range=(-50, 50), lifetime_range=(0.3, 0.6))
+                if not enemy.alive:
+                    self._on_enemy_death(enemy)
+        
+        if self.melee_attack_timer <= 0:
+            self.melee_attack_active = False
+            self.melee_attack_weapon = None
+        
+        # 更新连击计时器
+        if hasattr(self, 'melee_combo_timer') and self.melee_combo_timer > 0:
+            self.melee_combo_timer -= dt
+            if self.melee_combo_timer <= 0:
+                self.melee_combo_count = 0
+
     def _update_grenades(self, dt):
         """更新飞行中的投掷物"""
         if not hasattr(self, 'grenades_in_flight'):
@@ -2628,6 +3645,11 @@ class Game:
         """投掷物爆炸效果"""
         x, y = g["x"], g["y"]
         gtype = g["type"]
+        effects = g.get("effects", [gtype])  # 兼容旧格式
+        has_nuke = "nuke" in effects
+        has_fire = "fire" in effects or has_nuke
+        has_frost = "frost" in effects or has_nuke
+        has_poison = "poison" in effects or has_nuke
 
         if gtype == "incendiary":
             # 燃烧弹：大范围持续燃烧区域
@@ -2696,44 +3718,107 @@ class Game:
                     self.damage_numbers.append(DamageNumber(enemy.x, enemy.y, 50, color=CYAN))
             self.floating_texts.append(FloatingText(x, y - 30, "EMP脉冲!", color=CYAN, lifetime=2.0))
 
-        elif gtype == "frag":
-            # 技能手雷：超增强爆炸效果
+        elif gtype in ("frag", "frag_fire", "frag_frost", "frag_poison", "frag_nuke"):
+            # 技能手雷：根据附魔类型有不同效果，伤害/半径随技能等级缩放
+            grenade_skill = self.player.skill_tree.get_skill(SkillType.GRENADE) if self.player else None
+            if grenade_skill and grenade_skill.current_level > 0:
+                scaled_damage = grenade_skill.get_effective_damage()
+                scaled_radius = grenade_skill.get_effective_radius()
+            else:
+                scaled_damage = 300
+                scaled_radius = 200
+            explosion_radius = int(scaled_radius * 1.5 if has_nuke else scaled_radius)
+            base_damage = int(scaled_damage * 1.6 if has_nuke else scaled_damage)
+            
             self.assets.play_sound("explosion")
             self.particles.spawn_explosion(x, y, ORANGE, 120)
             self.particles.spawn_explosion(x, y, RED, 80)
             self.particles.spawn_explosion(x, y, FIRE_YELLOW, 60)
-            self.camera.shake(35, 1.0)
+            if has_nuke:
+                self.particles.spawn_explosion(x, y, WHITE, 150)
+                self.particles.spawn_explosion(x, y, PURPLE, 100)
+            self.camera.shake(50 if has_nuke else 35, 1.2 if has_nuke else 1.0)
+            
             # 冲击波环
-            for i in range(8):
+            ring_count = 12 if has_nuke else 8
+            for i in range(ring_count):
                 radius = 20 + i * 25
-                alpha = int(220 - i * 25)
+                alpha = int(220 - i * 18)
                 self.particles.spawn(x, y, WHITE, 1, (radius, radius), (0, 0), (0.2, 0.4))
+            
             # 烟雾
-            for _ in range(25):
+            for _ in range(40 if has_nuke else 25):
                 angle = random.uniform(0, math.pi * 2)
-                dist = random.uniform(10, 100)
+                dist = random.uniform(10, explosion_radius * 0.6)
                 self.particles.spawn(x + math.cos(angle) * dist, y + math.sin(angle) * dist,
                     SMOKE_GRAY, 1, (15, 30), (-2, 2), (1.0, 2.5))
+            
             # 火焰
-            for _ in range(20):
+            for _ in range(30 if has_nuke else 20):
                 angle = random.uniform(0, math.pi * 2)
-                dist = random.uniform(5, 70)
+                dist = random.uniform(5, explosion_radius * 0.4)
                 self.particles.spawn(x + math.cos(angle) * dist, y + math.sin(angle) * dist,
                     FIRE_ORANGE, 1, (8, 20), (-3, 3), (0.4, 1.5))
+            
             # 范围伤害
             for enemy in self.enemies:
                 dist = math.hypot(enemy.x - x, enemy.y - y)
-                if dist < 200:
-                    damage = 300 * (1 - dist / 200)
+                if dist < explosion_radius:
+                    damage = base_damage * (1 - dist / explosion_radius)
                     if dist > 0:
-                        enemy.x += (enemy.x - x) / dist * 120
-                        enemy.y += (enemy.y - y) / dist * 120
-                    enemy.knockdown(0.5)
+                        push = 180 if has_nuke else 120
+                        enemy.x += (enemy.x - x) / dist * push
+                        enemy.y += (enemy.y - y) / dist * push
+                    enemy.knockdown(0.8 if has_nuke else 0.5)
                     enemy.take_damage(damage)
                     self.damage_numbers.append(DamageNumber(enemy.x, enemy.y, damage, damage_type="explosion"))
+                    
+                    # 附魔效果
+                    if has_fire:
+                        enemy.apply_buff(BuffType.BURN, duration=5.0)
+                    if has_frost:
+                        enemy.apply_buff(BuffType.SLOW, duration=3.0)
+                    if has_poison:
+                        enemy.apply_buff(BuffType.POISON, duration=5.0)
+                    
                     if not enemy.alive:
                         self._on_enemy_death(enemy)
-            self.floating_texts.append(FloatingText(x, y - 30, "手雷爆炸!", color=ORANGE, lifetime=1.5))
+            
+            # 燃烧附魔：创建持续燃烧区域
+            if has_fire:
+                if not hasattr(self, 'fire_zones'):
+                    self.fire_zones = []
+                self.fire_zones.append({
+                    "x": x, "y": y, "radius": 120 if has_nuke else 80,
+                    "timer": 8.0 if has_nuke else 5.0, "damage_timer": 0.0,
+                })
+            
+            # 冰霜附魔：创建减速区域
+            if has_frost:
+                if not hasattr(self, 'smoke_zones'):
+                    self.smoke_zones = []
+                self.smoke_zones.append({
+                    "x": x, "y": y, "radius": 150 if has_nuke else 100,
+                    "timer": 6.0 if has_nuke else 4.0, "damage_timer": 0.0,
+                })
+            
+            # 显示附魔名称
+            enchant_names = {
+                "frag": "手雷爆炸!",
+                "frag_fire": "燃烧手雷!",
+                "frag_frost": "冰霜手雷!",
+                "frag_poison": "剧毒手雷!",
+                "frag_nuke": "核弹爆炸!!!",
+            }
+            enchant_colors = {
+                "frag": ORANGE,
+                "frag_fire": FIRE_ORANGE,
+                "frag_frost": CYAN,
+                "frag_poison": POISON_GREEN,
+                "frag_nuke": PURPLE,
+            }
+            self.floating_texts.append(FloatingText(x, y - 30, enchant_names.get(gtype, "手雷爆炸!"), 
+                                                     color=enchant_colors.get(gtype, ORANGE), lifetime=2.0))
 
     def _spawn_enemy_throwable(self, throw_data):
         """生成怪物投掷物"""
@@ -2846,6 +3931,67 @@ class Game:
                 if random.random() < 0.4:
                     self.player.buff_manager.add_buff(BuffType.STUN, duration=1.0)
 
+    def _spawn_horde_rewards(self):
+        """尸潮过后根据规模刷新奖励"""
+        scale = getattr(self.horde_manager, 'current_scale', 1)
+        horde_count = getattr(self.horde_manager, 'horde_count', 0)
+        
+        # 奖励数量和类型根据规模、时间、难度综合计算
+        base_count = {1: 1, 2: 2, 3: 3, 4: 4}.get(scale, 1)
+        # 时间系数：每存活3分钟，奖励+1（上限+3）
+        time_bonus = min(3, int(self.horde_manager.total_time / 180))
+        # 难度系数：困难+1，地狱+2
+        diff_bonus = {"困难": 1, "地狱": 2, "hard": 1, "hell": 2}.get(self.config.difficulty, 0)
+        reward_count = base_count + time_bonus + diff_bonus
+        
+        # 奖励生成中心：优先使用 boss 死亡位置，否则使用玩家位置
+        _boss_pos = getattr(self, 'last_boss_death_pos', None)
+        center_x, center_y = _boss_pos if _boss_pos else (self.player.x, self.player.y)
+        
+        for i in range(reward_count):
+            # 在中心附近随机位置生成
+            angle = random.uniform(0, math.pi * 2)
+            dist = random.uniform(80, 200)
+            rx = center_x + math.cos(angle) * dist
+            ry = center_y + math.sin(angle) * dist
+            
+            # 奖励类型选择：根据规模和运气
+            luck = self.rune_manager.get_bonus("drop_rate_mult") if hasattr(self, 'rune_manager') else 0
+            chest_chance = 0.35 + min(0.25, self.horde_manager.total_time / 600) + diff_bonus * 0.08 + luck * 0.1
+            golden_chance = 0.05 + min(0.1, self.horde_manager.total_time / 1200) + luck * 0.05
+            rune_chance = 0.15 + luck * 0.1
+            mystery_chance = 0.08
+            
+            roll = random.random()
+            if scale >= 4 or (scale >= 3 and roll < golden_chance):
+                item_type = ItemType.GOLDEN_CHEST  # 巨型尸潮必出黄金宝箱
+            elif scale >= 3 or (scale >= 2 and roll < chest_chance):
+                item_type = ItemType.TREASURE_CHEST
+            elif roll < chest_chance + rune_chance:
+                item_type = ItemType.RUNE
+            elif roll < chest_chance + rune_chance + mystery_chance:
+                item_type = ItemType.MYSTERY_BOX
+            else:
+                # 武器箱或道具
+                if random.random() < 0.55:
+                    item_type = ItemType.WEAPON_BOX
+                else:
+                    item_type = random.choice([
+                        ItemType.HEALTH_PACK, ItemType.AMMO_BOX, ItemType.DAMAGE_BOOST,
+                        ItemType.SPEED_BOOST, ItemType.SHIELD_REPAIR, ItemType.BUFF_CHARM
+                    ])
+            
+            self.special_items.append(SpecialItem(rx, ry, item_type))
+        
+        # 显示奖励提示
+        scale_names = {1: "小型", 2: "中型", 3: "大型", 4: "巨型"}
+        self.floating_texts.append(FloatingText(
+            self.player.x, self.player.y - 60,
+            f"{scale_names.get(scale, '')}尸潮击退! 奖励已刷新",
+            color=GOLD, lifetime=3.0
+        ))
+        self.assets.play_sound("level_up")
+
     def _update_fire_zones(self, dt):
         """更新燃烧区域"""
         if not hasattr(self, 'fire_zones'):
@@ -2902,6 +4048,8 @@ class Game:
 
     def _update_buff_visuals(self, dt):
         """更新玩家和敌人的buff视觉粒子效果"""
+        if not self.config.render_buff_effects:
+            return
         from buff import BUFF_CONFIGS
         # 玩家buff
         self._spawn_buff_particles(self.player, dt, BUFF_CONFIGS)
@@ -3036,6 +4184,18 @@ class Game:
                 self.particles.update(dt)
         elif self.state == GameState.RECORDS:
             pass
+        elif self.state == GameState.SKILL_TREE:
+            if hasattr(self, 'skill_tree_renderer') and self.skill_tree_renderer:
+                mouse_pos = pygame.mouse.get_pos()
+                mouse_pressed = pygame.mouse.get_pressed()
+                touch_events = getattr(self, 'touch_events', [])
+                self.skill_tree_renderer.handle_input(mouse_pos, mouse_pressed, touch_events, self.scale)
+                # 返回按钮：回到暂停菜单
+                if self.skill_tree_renderer.back_requested:
+                    self.skill_tree_renderer.back_requested = False
+                    self.skill_tree_renderer.hide()
+                    self.state = GameState.PAUSED
+                    logger.info("技能树返回暂停菜单")
 
         # 更新轮盘动画
         if self.skill_wheel_active:
@@ -3046,6 +4206,7 @@ class Game:
         # 更新炮塔、空袭、黑洞、医疗舱
         self._update_turrets(dt)
         self._update_airstrikes(dt)
+        self._update_melee_attack(dt)
         self._update_grenades(dt)
         self._update_enemy_throwables(dt)
         self._update_fire_zones(dt)
@@ -3054,9 +4215,20 @@ class Game:
         self._update_medic_pods(dt)
 
     def _update_playing(self, dt):
+        # 衰减吸血屏幕效果
+        # Mod 每帧钩子
+        try:
+            trigger_hook(HOOK_GAME_TICK, self, dt)
+        except Exception:
+            pass
+        if self.lifesteal_flash > 0:
+            self.lifesteal_flash = max(0, self.lifesteal_flash - dt * 1.5)
+
+        # 聊天输入模式：游戏继续运行，仅跳过玩家输入处理
         keys = pygame.key.get_pressed()
         move_x, move_y = 0, 0
         mouse_angle = 0.0
+        sprinting = False  # 默认值，确保所有路径都有定义
 
         import time
         if self.config.control_mode == ControlMode.KEYBOARD:
@@ -3069,6 +4241,8 @@ class Game:
                 move_x = -1
             if keys[pygame.K_d] or keys[pygame.K_RIGHT]:
                 move_x = 1
+            # 疾跑检测（Ctrl键）
+            sprinting = (keys[pygame.K_LCTRL] or keys[pygame.K_RCTRL])
             player_screen_x = (self.player.x - self.camera.x) * self.scale
             player_screen_y = (self.player.y - self.camera.y) * self.scale
             mouse_pos = pygame.mouse.get_pos()
@@ -3119,17 +4293,18 @@ class Game:
                 self.q_aim_started = False
         else:
             # 触控模式
-            self.joystick.handle_touch(self.touch_events, self.scale)
+            _tev = self.touch_events
+            self.joystick.handle_touch(_tev, self.scale)
             move_x, move_y = self.joystick.get_direction()
 
             # 攻击/瞄准摇杆
-            self.aim_button.handle_touch(self.touch_events, self.scale)
+            self.aim_button.handle_touch(_tev, self.scale)
             mouse_angle = self.aim_button.get_angle()
             self.player.facing_angle = math.degrees(mouse_angle)
 
             # === 技能轮盘处理 ===
             if self.skill_wheel_active:
-                selected_skill = self.skill_wheel.handle_touch(self.touch_events, self.scale)
+                selected_skill = self.skill_wheel.handle_touch(_tev, self.scale)
                 if selected_skill is not None:
                     self.selected_skill = selected_skill.skill_type if hasattr(selected_skill, 'skill_type') else selected_skill
                     self.skill_wheel_active = False
@@ -3143,7 +4318,7 @@ class Game:
                     self.skill_wheel_active = False
             
             if not self.skill_wheel_active:
-                self.skill_selector.handle_touch(self.touch_events, self.scale)
+                self.skill_selector.handle_touch(_tev, self.scale)
                 if self.skill_selector.is_showing_wheel():
                     unlocked_objs = self._get_unlocked_skill_objects()
                     current_skill_obj = self.player.skill_tree.get_skill(self.selected_skill)
@@ -3163,7 +4338,7 @@ class Game:
 
             # === 武器轮盘处理 ===
             if self.weapon_wheel_active:
-                selected_idx = self.weapon_wheel.handle_touch(self.touch_events, self.scale)
+                selected_idx = self.weapon_wheel.handle_touch(_tev, self.scale)
                 if selected_idx is not None:
                     self.player.switch_weapon(selected_idx)
                     self.weapon_wheel_active = False
@@ -3178,7 +4353,7 @@ class Game:
             
             if not self.weapon_wheel_active:
                 ws_btn = self.touch_buttons["weapon_switch"]
-                ws_btn.handle_touch(self.touch_events, self.scale)
+                ws_btn.handle_touch(_tev, self.scale)
                 if ws_btn.wheel_just_opened():
                     self.weapon_wheel.show(self.player.weapons, self.player.current_weapon_idx)
                     self.weapon_wheel_active = True
@@ -3196,31 +4371,25 @@ class Game:
             self.skill_caster.set_player_pos(self.player.x, self.player.y, self.camera.x, self.camera.y)
             self.skill_caster.set_max_distance(self._get_skill_max_distance(self.selected_skill))
             # 保存释放前的瞄准状态（handle_touch会在up时重置is_aiming）
-            was_aiming = self.skill_caster.is_aiming
-            saved_angle = self.skill_caster.angle
-            saved_dist_ratio = self.skill_caster.distance_ratio
-            cast_result = self.skill_caster.handle_touch(self.touch_events, self.scale)
+            cast_result = self.skill_caster.handle_touch(_tev, self.scale)
             if cast_result:
-                if was_aiming:
-                    self._use_skill_aimed(self.selected_skill, saved_angle, saved_dist_ratio)
+                if self.skill_caster.was_aiming_on_release:
+                    self._use_skill_aimed(self.selected_skill, self.skill_caster.angle, self.skill_caster.distance_ratio)
                 else:
                     self._use_skill(self.selected_skill)
 
             # 投掷物释放按钮 - 支持短按快投、长按瞄准
             self.throwable_caster.set_player_pos(self.player.x, self.player.y, self.camera.x, self.camera.y)
             self.throwable_caster.set_max_distance(self.throwable_max_dist)
-            t_was_aiming = self.throwable_caster.is_aiming
-            t_saved_angle = self.throwable_caster.angle
-            t_saved_dist_ratio = self.throwable_caster.distance_ratio
-            throw_result = self.throwable_caster.handle_touch(self.touch_events, self.scale)
+            throw_result = self.throwable_caster.handle_touch(_tev, self.scale)
             if throw_result:
-                if t_was_aiming:
-                    self._throw_grenade_aimed(t_saved_angle, t_saved_dist_ratio)
+                if self.throwable_caster.was_aiming_on_release:
+                    self._throw_grenade_aimed(self.throwable_caster.angle, self.throwable_caster.distance_ratio)
                 else:
                     self._throw_grenade()
 
             # 投掷物切换按钮
-            self.throwable_switch_btn.handle_touch(self.touch_events, self.scale)
+            self.throwable_switch_btn.handle_touch(_tev, self.scale)
             if self.throwable_switch_btn.just_released:
                 self._cycle_throwable()
 
@@ -3228,7 +4397,7 @@ class Game:
             for name, btn in self.touch_buttons.items():
                 if name == "weapon_switch":
                     continue  # 已在上面处理
-                btn.handle_touch(self.touch_events, self.scale)
+                btn.handle_touch(_tev, self.scale)
                 if name == "shoot" and btn.just_released:
                     if self.player.riot_gear.equipped:
                         self._perform_bash(self.player.facing_angle)
@@ -3251,7 +4420,17 @@ class Game:
         if self.weapon_switch_cooldown > 0:
             self.weapon_switch_cooldown -= dt
 
-        self.player.update(dt, move_x, move_y, mouse_angle, self.world)
+        # 应用符文速度加成
+        rune_speed_mult = 1.0 + getattr(self, 'rune_buffs', {}).get("speed", 0)
+        orig_speed_mult = self.player.speed_mult
+        self.player.speed_mult *= rune_speed_mult
+        self.player.update(dt, move_x, move_y, mouse_angle, self.world, sprinting=sprinting)
+        # 符文：再生效果
+        if hasattr(self, 'rune_manager'):
+            regen = self.rune_manager.get_bonus("regen")
+            if regen > 0 and self.player.hp < self.player.max_hp:
+                self.player.hp = min(self.player.max_hp, self.player.hp + regen * dt)
+        self.player.speed_mult = orig_speed_mult
         # 盾牌冲撞更新（移动+碰撞伤害）
         self._update_charge(dt)
         # 显示玩家受到的buff伤害数字
@@ -3287,11 +4466,18 @@ class Game:
         # 尸潮音乐切换
         if self.horde_manager.is_horde_active():
             self.assets.play_music("horde")
+            self._music_context = 'horde'
         elif hasattr(self, '_was_horde') and self._was_horde and not self.horde_manager.is_horde_active():
             # 尸潮结束，记录存活
             if self.session:
                 self.session.add_horde_survived()
-            self.assets.play_music("gameplay")
+            # 尸潮结束，恢复地图专属音乐
+            map_name = self.world.map_type.name.lower() if hasattr(self.world, 'map_type') else 'school'
+            map_music = MAP_MUSIC_MAP.get(map_name, 'school')
+            self.assets.play_music(map_music)
+            self._music_context = 'explore'
+            # 尸潮奖励：根据规模刷新对应奖励
+            self._spawn_horde_rewards()
         self._was_horde = self.horde_manager.is_horde_active()
 
         # ========== 故事模式核心逻辑 ==========
@@ -3316,7 +4502,7 @@ class Game:
         if self.config.control_mode == ControlMode.KEYBOARD:
             mouse_left = pygame.mouse.get_pressed()[0]
             # 装备防爆套装，鼠标左键执行肘击，不再开火
-            if mouse_left:
+            if mouse_left and self.player.can_act():
                 if self.player.riot_gear.equipped and self.riot_anim_state == "idle":
                     self._perform_bash(math.degrees(mouse_angle))
                 else:
@@ -3324,22 +4510,35 @@ class Game:
         else:
             auto_shoot = self.aim_button.is_shooting
 
-        if auto_shoot and not self.player.riot_gear.equipped and self.riot_anim_state != "equipping":
+        if auto_shoot and self.player.can_act() and not self.player.riot_gear.equipped and self.riot_anim_state != "equipping":
             weapon = self.player.get_current_weapon()
             if weapon.can_fire():
+                # 符文伤害加成
+                rune_dmg_mult = 1.0 + getattr(self, 'rune_buffs', {}).get("damage", 0)
                 proj_list = weapon.fire(
                     self.player.x, self.player.y, mouse_angle,
-                    self.player.damage_mult * self.player.damage_boost_mult * self.player.buff_manager.get_damage_mult(), self.player.speed_mult,
+                    self.player.damage_mult * self.player.damage_boost_mult * self.player.buff_manager.get_damage_mult() * rune_dmg_mult, self.player.speed_mult,
                     player=self.player
                 )
                 self.projectiles.extend(proj_list)
+                
+                # 近战武器攻击处理
+                if getattr(weapon, "melee_attack_triggered", False):
+                    weapon.melee_attack_triggered = False
+                    self._start_melee_attack(weapon, mouse_angle)
+                
                 # 记录射击
                 if self.session:
                     self.session.add_shot_fired()
                 # 播放射击音效
-                wtype = weapon.weapon_type.name.lower()
-                sound_key = wtype if wtype in SOUND_MAP else "pistol"
-                self.assets.play_sound_random(SOUND_MAP.get(sound_key, ["shoot_pistol"]))
+                if getattr(weapon, "is_melee", False):
+                    self.assets.play_sound_random(["melee_swing", "shoot_pistol"])
+                elif getattr(weapon, "is_throwable", False):
+                    self.assets.play_sound("grenade_throw")
+                else:
+                    wtype = weapon.weapon_type.name.lower()
+                    sound_key = wtype if wtype in SOUND_MAP else "pistol"
+                    self.assets.play_sound_random(SOUND_MAP.get(sound_key, ["shoot_pistol"]))
                 if self.config.screen_shake:
                     self.camera.shake(weapon.shake_intensity, 0.08)
 
@@ -3400,6 +4599,16 @@ class Game:
             if drops_vaccine:
                 enemy.drops_vaccine = True  # 标记此Boss必爆疫苗
             self.enemies.append(enemy)
+            # 见到怪物即解锁图鉴（在 mod 钩子之前，确保不被吞掉）
+            try:
+                codex_unlock_manager.unlock_monster(spawn_type.name)
+            except Exception:
+                pass
+            # mod 钩子：敌人生成
+            try:
+                trigger_hook(HOOK_ENEMY_SPAWN, enemy)
+            except:
+                pass
             if getattr(enemy, "is_boss", False):
                 self._boss_dialogue(spawn_type)
                 # 尸潮规模提示
@@ -3410,10 +4619,12 @@ class Game:
                     f"【{scale_name}】", color=scale_color, lifetime=3.0
                 ))
 
-                # 更新敌人
+        # 更新敌人
         for enemy in self.enemies[:]:
-            result = enemy.update(dt, self.player.x, self.player.y, self.player)
-            # 显示敌人受到的buff伤害数字
+            # 选择最近的玩家作为目标
+            target_x, target_y, target_obj = self.player.x, self.player.y, self.player
+            result = enemy.update(dt, target_x, target_y, target_obj, self.world)
+            # 显示敌人受到的buff伤害数字（Enemy.update内部已处理buff_manager.update）
             for dmg, dtype in getattr(enemy, 'buff_damage_events', []):
                 if dmg > 0:
                     self.damage_numbers.append(DamageNumber(
@@ -3423,10 +4634,19 @@ class Game:
                     ))
             enemy.buff_damage_events = []
 
+            # 光照系统更新（同步画质设置）
+            if hasattr(self, 'lighting'):
+                if self.lighting.quality != self.config.graphics_quality:
+                    self.lighting.set_quality(self.config.graphics_quality)
+                self.lighting.update(dt)
+
             # 爆炸僵尸自爆
             if result == "explode":
                 self.particles.spawn_explosion(enemy.x, enemy.y, RUST, 40)
                 self.camera.shake(10, 0.5)
+                # 爆炸光源（性能模式下跳过）
+                if hasattr(self, 'lighting') and getattr(self.lighting, 'quality', 'balanced') != 'performance':
+                    self.lighting.add_light(enemy.x, enemy.y, 200, (255, 150, 50), intensity=1.0, lifetime=0.4, flicker=True)
                 for other in self.enemies[:]:
                     if other is not enemy and other.alive:
                         dist = math.hypot(other.x - enemy.x, other.y - enemy.y)
@@ -3489,6 +4709,10 @@ class Game:
                     spawn_y = enemy.y + math.sin(angle) * 100
                     minion = Enemy(spawn_x, spawn_y, random.choice([EnemyType.ZOMBIE_FAST, EnemyType.ZOMBIE_CRAWLER, EnemyType.ZOMBIE_SPITTER]), 1, self.difficulty)
                     self.enemies.append(minion)
+                    try:
+                        codex_unlock_manager.unlock_monster(minion.enemy_type.name if hasattr(minion, "enemy_type") else minion.type.name)
+                    except Exception:
+                        pass
                 self.player.buff_manager.add_buff(BuffType.POISON, 8.0)
                 self.camera.shake(10, 0.5)
                 self.particles.spawn_explosion(enemy.x, enemy.y, PURPLE, 60)
@@ -3692,6 +4916,10 @@ class Game:
                     spawn_y = enemy.y + math.sin(angle) * 80
                     minion = Enemy(spawn_x, spawn_y, random.choice([EnemyType.ZOMBIE_NORMAL, EnemyType.ZOMBIE_FAST, EnemyType.ZOMBIE_CRAWLER]), 1, self.difficulty)
                     self.enemies.append(minion)
+                    try:
+                        codex_unlock_manager.unlock_monster(minion.enemy_type.name if hasattr(minion, "enemy_type") else minion.type.name)
+                    except Exception:
+                        pass
                 self.assets.play_sound("boss_queen_summon")
                 self.particles.spawn_explosion(enemy.x, enemy.y, PURPLE, 30)
 
@@ -3839,10 +5067,12 @@ class Game:
                     if self.config.screen_shake:
                         self.camera.shake(6, 0.4)
 
-            # 普通远程敌人攻击（普通远程僵尸，Boss的射击已经在result dict处理）
+            # 普通远程敌人攻击（选择最近玩家作为目标）
             if getattr(enemy, "attack_range", 0) > 0 and not getattr(enemy, "is_boss", False):
-                dist_e_p = math.hypot(enemy.x - self.player.x, enemy.y - self.player.y)
-                r_result = enemy._ranged_attack(dt, self.player.x, self.player.y, dist_e_p)
+                # 选择最近的玩家作为远程攻击目标
+                r_target_x, r_target_y = self.player.x, self.player.y
+                dist_e_p = math.hypot(enemy.x - r_target_x, enemy.y - r_target_y)
+                r_result = enemy._ranged_attack(dt, r_target_x, r_target_y, dist_e_p)
                 if r_result:
                     dx = r_result["target_x"] - r_result["x"]
                     dy = r_result["target_y"] - r_result["y"]
@@ -3991,6 +5221,29 @@ class Game:
                                     self.damage_numbers.append(DamageNumber(e.x, e.y, actual_damage, is_crit=is_crit, damage_type="explosion"))
                                     if not e.alive:
                                         self._on_enemy_death(e)
+                            
+                            # 投掷物特殊效果：燃烧瓶创建持续燃烧区域
+                            if hasattr(proj, 'is_grenade_type') and proj.is_grenade_type == WeaponType.MOLOTOV:
+                                if not hasattr(self, 'fire_zones'):
+                                    self.fire_zones = []
+                                burn_r = getattr(proj, 'burn_radius', 80)
+                                burn_d = getattr(proj, 'burn_duration', 5.0)
+                                self.fire_zones.append({
+                                    "x": proj.x, "y": proj.y, "radius": burn_r,
+                                    "timer": burn_d, "damage_timer": 0.0,
+                                })
+                                self.floating_texts.append(FloatingText(proj.x, proj.y - 30, "燃烧区域!", color=(255,120,30), lifetime=1.5))
+                            # 投掷物特殊效果：烟雾弹创建减速烟雾区域
+                            if hasattr(proj, 'is_grenade_type') and proj.is_grenade_type == WeaponType.SMOKE_GRENADE:
+                                if not hasattr(self, 'smoke_zones'):
+                                    self.smoke_zones = []
+                                slow_r = getattr(proj, 'slow_radius', 100)
+                                slow_d = getattr(proj, 'slow_duration', 8.0)
+                                self.smoke_zones.append({
+                                    "x": proj.x, "y": proj.y, "radius": slow_r,
+                                    "timer": slow_d, "damage_timer": 0.0,
+                                })
+                                self.floating_texts.append(FloatingText(proj.x, proj.y - 30, "烟雾区域!", color=(180,180,180), lifetime=1.5))
                         break  # 爆炸后不再继续检测
 
                     is_crit = random.random() < self.player.crit_chance
@@ -4061,7 +5314,10 @@ class Game:
                     self.particles.spawn_blood(enemy.x, enemy.y, 5)
 
                     if self.player.life_steal > 0:
-                        self.player.heal(actual_damage * self.player.life_steal)
+                        heal_amt = actual_damage * self.player.life_steal
+                        self.player.heal(heal_amt)
+                        # 吸血屏幕效果，强度与吸血量挂钩
+                        self.lifesteal_flash = min(1.0, self.lifesteal_flash + heal_amt / 30.0)
 
                     if not enemy.alive:
                         self._on_enemy_death(enemy)
@@ -4152,6 +5408,27 @@ class Game:
             if not item.alive:
                 self.world.items.remove(item)
 
+        # 更新和拾取文本资料
+        for text_item in self.text_items[:]:
+            text_item.update(dt, self.player.x, self.player.y)
+            if math.hypot(text_item.x - self.player.x, text_item.y - self.player.y) < 25:
+                # 拾取文本资料
+                self.collected_texts.add(text_item.text_id)
+                self.current_viewing_text = text_item.text_id
+                self.text_items.remove(text_item)
+                self.assets.play_sound("pickup_exp")
+                self.floating_texts.append(FloatingText(self.player.x, self.player.y - 40, "获得文本资料！", (200, 180, 100)))
+                # 保存已收集文本
+                try:
+                    self._save_collected_texts()
+                except Exception:
+                    pass
+                # 进入文本查看界面
+                self.state = GameState.TEXT_VIEWER
+                continue
+            if not text_item.alive:
+                self.text_items.remove(text_item)
+
         self.particles.update(dt)
         for dn in self.damage_numbers[:]:
             dn.update(dt)
@@ -4162,13 +5439,14 @@ class Game:
             if not ft.is_alive():
                 self.floating_texts.remove(ft)
 
+        # 摄像机跟随
         self.camera.follow(self.player.x, self.player.y, dt)
 
         if self.player.hp <= 0:
-            # 保存游戏记录
+            # 单人模式：正常游戏结束
             if self.session:
                 self.session.set_died(True)
-                new_unlock_keys = self.session.finalize()
+                new_unlock_keys = self.session.finalize() or []
                 for k in new_unlock_keys:
                     ach_data = self.records.data["achievements"].get(k)
                     if ach_data:
@@ -4198,8 +5476,24 @@ class Game:
         for t in remove_list:
             self.ach_toast_queue.remove(t)
 
+    def _get_all_player_targets(self):
+        """获取所有存活玩家目标列表（单人模式只有本地玩家），用于怪物AI选择目标"""
+        targets = []
+        if self.player and self.player.alive:
+            targets.append({
+                "id": "player",
+                "x": self.player.x, "y": self.player.y,
+                "obj": self.player, "is_local": True
+            })
+        return targets
+
+    def _damage_player_target(self, target, damage, damage_type="melee", attack_x=0, attack_y=0):
+        """对玩家目标造成伤害（单人模式只有本地玩家）"""
+        if target["is_local"]:
+            self.player.take_damage(damage, damage_type=damage_type, attack_x=attack_x, attack_y=attack_y)
+
     def _update_grapple_collision(self):
-        """更新钩爪碰撞检测 - 检测钩爪头是否碰到敌人"""
+        """更新钩爪碰撞检测 - 敌人/道具/经验球/文本资料/宝箱全部可勾"""
         if not self.player.riot_gear.grapple_active:
             return
         if self.player.riot_gear.grapple_state != "shooting":
@@ -4209,13 +5503,47 @@ class Game:
         if not head_pos:
             return
 
+        grapple_skill = self.player.skill_tree.get_skill(SkillType.GRAPPLE_PULL)
+        grapple_lvl = grapple_skill.current_level if grapple_skill else 1
+
         # 检测钩爪头与敌人的碰撞
         for enemy in self.enemies:
             if not enemy.alive:
                 continue
             dist = math.hypot(enemy.x - head_pos[0], enemy.y - head_pos[1])
-            if dist < enemy.size + 10:
-                # 勾中敌人！
+            if dist < enemy.size + 12:
+                # 钩爪伤害
+                base_dmg = 15 + grapple_lvl * 10
+                enemy.take_damage(base_dmg)
+                self.damage_numbers.append(DamageNumber(enemy.x, enemy.y, base_dmg, color=ORANGE))
+                # 高等级AOE
+                if grapple_lvl >= 5:
+                    aoe_radius = 120
+                    aoe_dmg = base_dmg * 2
+                    for e2 in self.enemies:
+                        if e2 is not enemy and e2.alive:
+                            d2 = math.hypot(e2.x - enemy.x, e2.y - enemy.y)
+                            if d2 < aoe_radius:
+                                e2.take_damage(aoe_dmg)
+                                self.damage_numbers.append(DamageNumber(e2.x, e2.y, aoe_dmg, color=RED))
+                    # 爆炸特效
+                    for _ in range(20):
+                        ang = random.uniform(0, math.pi * 2)
+                        spd = random.uniform(2, 6)
+                        self.particles.spawn(enemy.x, enemy.y, FIRE_ORANGE, 1, (6, 12),
+                                            (math.cos(ang)*spd, math.sin(ang)*spd), (0.5, 1.0))
+                elif grapple_lvl >= 3:
+                    aoe_radius = 60
+                    aoe_dmg = int(base_dmg * 0.5)
+                    for e2 in self.enemies:
+                        if e2 is not enemy and e2.alive:
+                            d2 = math.hypot(e2.x - enemy.x, e2.y - enemy.y)
+                            if d2 < aoe_radius:
+                                e2.take_damage(aoe_dmg)
+                # 4级以上眩晕
+                if grapple_lvl >= 4:
+                    enemy.apply_buff(BuffType.STUN, duration=1.0)
+                # 勾中敌人
                 self.player.riot_gear.set_grapple_target(enemy)
                 self.player.riot_gear.grapple_state = "hit"
                 self.player.riot_gear.grapple_hit_stun_timer = self.player.riot_gear.grapple_hit_stun_duration
@@ -4225,36 +5553,70 @@ class Game:
                 ))
                 return
 
-        # 检测钩爪头与经验球的碰撞
+        # 检测经验球 - 磁化拉向玩家
         for orb in self.exp_orbs:
             if not orb.alive:
                 continue
             dist = math.hypot(orb.x - head_pos[0], orb.y - head_pos[1])
-            if dist < orb.size + 10:
-                # 直接拉取经验球
+            if dist < orb.size + 12:
                 orb.magnetized = True
                 self.player.riot_gear._reset_grapple()
                 return
 
-        # 检测钩爪头与道具的碰撞
+        # 检测世界道具 - 磁化拉向玩家
         for item in self.world.items:
             if not item.alive:
                 continue
             dist = math.hypot(item.x - head_pos[0], item.y - head_pos[1])
-            if dist < item.size + 10:
-                # 直接拉取道具
-                self._apply_item_effect(item.item_type)
-                item.alive = False
+            if dist < item.size + 12:
+                item.magnetized = True
                 self.player.riot_gear._reset_grapple()
                 return
 
+        # 检测文本资料
+        if hasattr(self, 'text_items'):
+            for ti in self.text_items:
+                if not ti.alive:
+                    continue
+                dist = math.hypot(ti.x - head_pos[0], ti.y - head_pos[1])
+                if dist < 20:
+                    ti.magnetized = True
+                    self.player.riot_gear._reset_grapple()
+                    return
+
+        # 检测剧情碎片
+        if hasattr(self, 'story_fragment_items'):
+            for si in self.story_fragment_items:
+                dist = math.hypot(si["x"] - head_pos[0], si["y"] - head_pos[1])
+                if dist < 20:
+                    si["magnetized"] = True
+                    self.player.riot_gear._reset_grapple()
+                    return
+
+        # 检测特殊道具/宝箱
+        if hasattr(self, 'special_items'):
+            for si in self.special_items:
+                if not si.alive:
+                    continue
+                dist = math.hypot(si.x - head_pos[0], si.y - head_pos[1])
+                if dist < getattr(si, 'size', 15) + 12:
+                    si.magnetized = True
+                    self.player.riot_gear._reset_grapple()
+                    return
+
     def _on_enemy_death(self, enemy):
         # 记录击杀
+        # Mod 敌人死亡钩子
+        try:
+            trigger_hook(HOOK_ENEMY_DEATH, enemy, self.player)
+        except Exception:
+            pass
         if self.session:
             self.session.add_kill(enemy.enemy_type)
         # 播放击杀音效
         if getattr(enemy, "is_boss", False):
             self.assets.play_sound("boss_death")
+            self.last_boss_death_pos = (enemy.x, enemy.y)
         else:
             self.assets.play_sound_random(["zombie_death", "zombie_groan"])
         self.particles.spawn_blood(enemy.x, enemy.y, 15)
@@ -4279,6 +5641,10 @@ class Game:
                 small_enemy.max_hp = small_enemy.hp = 15
                 small_enemy.damage = 5
                 self.enemies.append(small_enemy)
+                try:
+                    codex_unlock_manager.unlock_monster(small_enemy.enemy_type.name if hasattr(small_enemy, "enemy_type") else small_enemy.type.name)
+                except Exception:
+                    pass
             self.floating_texts.append(FloatingText(
                 enemy.x, enemy.y - 30, "分裂!", color=BLOOD_RED, lifetime=1.5
             ))
@@ -4305,6 +5671,7 @@ class Game:
         if vampire_skill and vampire_skill.current_level > 0:
             heal_amount = self.player.max_hp * 0.05 * vampire_skill.current_level
             self.player.heal(heal_amount)
+            self.lifesteal_flash = min(1.0, self.lifesteal_flash + 0.4)
         # 嗜血：击杀后获得加速buff
         bloodlust_skill = self.player.skill_tree.get_skill(SkillType.BLOODLUST)
         if bloodlust_skill and bloodlust_skill.current_level > 0:
@@ -4317,7 +5684,9 @@ class Game:
                 sb.value = bl_mults.get(bloodlust_skill.current_level, 1.2)
 
         # 武器掉落
-        if random.random() < 0.008:
+        # 问题3a: 应用难度掉落率倍率
+        drop_mult = getattr(self, '_difficulty_drop_mult', 1.0)
+        if random.random() < 0.008 * drop_mult:
             weapon_types = [WeaponType.RIFLE, WeaponType.SHOTGUN, WeaponType.SNIPER,
                           WeaponType.MACHINE_GUN, WeaponType.ROCKET_LAUNCHER, WeaponType.FLAMETHROWER,
                           WeaponType.CROSSBOW, WeaponType.GRENADE_LAUNCHER, WeaponType.PLASMA_RIFLE,
@@ -4356,6 +5725,9 @@ class Game:
         while self.running:
             dt = self.clock.tick(60) / 1000.0
             dt = min(dt, 0.05)
+            # 开发者模式：游戏速度倍率
+            if hasattr(self, 'dev_time_scale') and self.dev_time_scale and self.dev_time_scale != 1.0:
+                dt *= self.dev_time_scale
 
             try:
                 self.handle_events()

@@ -5,10 +5,7 @@
 import pygame
 import math
 import random
-from config import (EnemyType, WeaponType, SkillType, ItemType,
-                   RED, GREEN, BLUE, YELLOW, ORANGE, PURPLE, GRAY, DARK_GRAY, 
-                   LIGHT_GRAY, CYAN, WHITE, BLACK, DARK_GREEN, DARK_RED, BROWN, CRIMSON,
-                   RUST, POISON_GREEN, BLOOD_RED, LIME, SLATE, CHARCOAL, GOLD, FIRE_ORANGE, FIRE_YELLOW, SMOKE_GRAY)
+from config import *
 from weapons import Weapon, Projectile
 from skills import SkillTree
 from buff import BuffManager, BuffType
@@ -31,7 +28,7 @@ class RiotGear:
         self.bash_cooldown = 0
         self.bash_max_cooldown = 0.5
         self.grapple_cooldown = 0
-        self.grapple_max_cooldown = 4.0
+        self.grapple_max_cooldown = 1.5
         self.melee_reduction = 0.5
         self.ranged_reduction = 0.7
         self.magic_immunity = True
@@ -44,7 +41,7 @@ class RiotGear:
         self.grapple_head_pos = None
         self.grapple_state = "idle"
         self.grapple_speed = 80
-        self.grapple_pull_speed = 5
+        self.grapple_pull_speed = 20
         self.grapple_hit_stun_timer = 0
         self.grapple_hit_stun_duration = 0.4
         self.grapple_max_range = 800
@@ -114,20 +111,8 @@ class RiotGear:
         if self.riot_gear_cd_timer > 0:
             self.riot_gear_cd_timer -= dt
 
-        # 肾上腺素技能加成（仅装备时生效）
-        if self.equipped and self.adrenaline_level > 0:
-            self.max_stamina = self.base_max_stamina + self.adrenaline_level * 25
-            self.stamina_regen = self.base_stamina_regen + self.adrenaline_level * 4
-        else:
-            self.max_stamina = self.base_max_stamina
-            self.stamina_regen = self.base_stamina_regen
-
-        # 体力恢复
-        if self.stamina < self.max_stamina:
-            regen = self.stamina_regen * dt
-            if self.has_debuff:
-                regen *= 0.5
-            self.stamina = min(self.max_stamina, self.stamina + regen)
+        # 体力由Player统一管理（与玩家疾跑共用同一体力池）
+        # self.stamina 和 self.max_stamina 由 Player.update 同步
         if self.bash_cooldown > 0:
             self.bash_cooldown -= dt
         if self.grapple_cooldown > 0:
@@ -178,9 +163,17 @@ class RiotGear:
 
             if new_dist < 5:  # 到达目标位置
                 if self.grapple_target:
-                    # 勾中目标，进入僵直
-                    self.grapple_state = "hit"
-                    self.grapple_hit_stun_timer = self.grapple_hit_stun_duration
+                    # Boss免控：只能命中产生僵直，不能勾取
+                    if getattr(self.grapple_target, 'is_boss', False):
+                        self.grapple_hit_stun_timer = self.grapple_hit_stun_duration * 0.5  # Boss僵直时间减半
+                        if hasattr(self.grapple_target, 'grappled'):
+                            self.grapple_target.grappled = False
+                        self.grapple_target = None  # 不勾取Boss
+                        self.grapple_state = "retracting"
+                    else:
+                        # 勾中普通目标，进入僵直
+                        self.grapple_state = "hit"
+                        self.grapple_hit_stun_timer = self.grapple_hit_stun_duration
                 else:
                     self.grapple_state = "retracting"
             elif total_dist >= self.grapple_max_range:
@@ -200,18 +193,24 @@ class RiotGear:
 
         elif self.grapple_state == "pulling":
             if self.grapple_target and hasattr(self.grapple_target, 'alive') and self.grapple_target.alive:
-                # 慢速同步拉回
+                # 快速拉回敌人到玩家身边
                 dx = player_x - self.grapple_target.x
                 dy = player_y - self.grapple_target.y
                 dist = math.hypot(dx, dy)
 
-                if dist > 60:
+                if dist > 35:
                     pull_speed = self.grapple_pull_speed * dt * 60
+                    # 距离越远拉得越快，确保不会中途断
+                    if dist > 200:
+                        pull_speed *= 1.5
                     self.grapple_target.x += (dx / dist) * pull_speed
                     self.grapple_target.y += (dy / dist) * pull_speed
                     self.grapple_head_pos = [self.grapple_target.x, self.grapple_target.y]
+                    # 确保敌人保持被勾状态，无法自行移动
+                    if hasattr(self.grapple_target, 'grappled'):
+                        self.grapple_target.grappled = True
                 else:
-                    # 到达玩家附近，释放
+                    # 到达玩家近战范围，释放
                     if hasattr(self.grapple_target, 'grappled'):
                         self.grapple_target.grappled = False
                     self._reset_grapple()
@@ -319,7 +318,8 @@ class RiotGear:
         return True
 
     def can_grapple(self):
-        return self.equipped and self.grapple_cooldown <= 0
+        # 钩爪为独立技能，无需装备防爆套装
+        return self.grapple_cooldown <= 0
 
     def use_grapple(self, target_x, target_y, player_x, player_y, target=None):
         """使用钩爪 - 新逻辑：直接发射"""
@@ -376,11 +376,42 @@ class RiotGear:
             self.grapple_target_pos = (enemy.x, enemy.y)
 
     def draw(self, screen, player_x, player_y, camera_x, camera_y, scale=1.0):
-        if not self.equipped:
-            return
-
         px = int((player_x - camera_x) * scale)
         py = int((player_y - camera_y) * scale)
+
+        # 钩爪始终绘制（独立技能，无需防爆套装）
+        if self.grapple_active and self.grapple_head_pos:
+            hx = int((self.grapple_head_pos[0] - camera_x) * scale)
+            hy = int((self.grapple_head_pos[1] - camera_y) * scale)
+            # 绳索
+            pygame.draw.line(screen, (80, 80, 80), (px, py), (hx, hy), max(2, int(3 * scale)))
+            pygame.draw.line(screen, (160, 160, 160), (px, py), (hx, hy), max(1, int(1 * scale)))
+            # 钩爪头
+            head_size = max(4, int(8 * scale))
+            pygame.draw.circle(screen, (60, 60, 60), (hx, hy), head_size)
+            pygame.draw.circle(screen, (180, 180, 180), (hx, hy), head_size - 2)
+            # 钩子三叉
+            hook_len = int(6 * scale)
+            for ha in (-0.5, 0, 0.5):
+                angle = math.atan2(hy - py, hx - px) + ha
+                ex = hx + math.cos(angle) * hook_len
+                ey = hy + math.sin(angle) * hook_len
+                pygame.draw.line(screen, (200, 200, 200), (hx, hy), (ex, ey), max(1, int(2 * scale)))
+            # 命中僵直火花
+            if self.grapple_state == "hit":
+                for _ in range(6):
+                    sx = hx + random.randint(-10, 10)
+                    sy = hy + random.randint(-10, 10)
+                    pygame.draw.circle(screen, YELLOW, (sx, sy), max(1, int(2 * scale)))
+            # 拉回火花
+            if self.grapple_state == "pulling":
+                for _ in range(4):
+                    sx = hx + random.randint(-6, 6)
+                    sy = hy + random.randint(-6, 6)
+                    pygame.draw.circle(screen, ORANGE, (sx, sy), max(1, int(2 * scale)))
+
+        if not self.equipped:
+            return
 
         shield_width = int(self.shield_width * scale)
         shield_height = int(self.shield_height * scale)
@@ -439,37 +470,6 @@ class RiotGear:
         if self.has_debuff:
             if int(pygame.time.get_ticks() / 500) % 2 == 0:
                 pygame.draw.rect(screen, RED, shield_rect, max(2, int(3 * scale)), border_radius=max(1, int(5 * scale)))
-
-        # 绘制钩爪
-        if self.grapple_active and self.grapple_head_pos:
-            hx = int((self.grapple_head_pos[0] - camera_x) * scale)
-            hy = int((self.grapple_head_pos[1] - camera_y) * scale)
-
-            # 绿色轨迹线
-            pygame.draw.line(screen, GREEN, (px, py), (hx, hy), max(2, int(4 * scale)))
-
-            # 钩爪头
-            head_size = max(4, int(10 * scale))
-            pygame.draw.circle(screen, ORANGE, (hx, hy), head_size)
-            pygame.draw.circle(screen, YELLOW, (hx, hy), head_size - 2)
-            pygame.draw.circle(screen, WHITE, (hx, hy), head_size, max(1, int(2 * scale)))
-
-            # 僵直时的火花
-            if self.grapple_state == "hit":
-                for _ in range(8):
-                    spark_x = hx + random.randint(-12, 12)
-                    spark_y = hy + random.randint(-12, 12)
-                    pygame.draw.circle(screen, YELLOW, (spark_x, spark_y), max(1, int(2 * scale)))
-                # 绷紧效果
-                tension = abs(math.sin(pygame.time.get_ticks() / 100))
-                pygame.draw.circle(screen, (*RED[:3], int(150 * tension)), (hx, hy), int(head_size * (1 + tension * 0.5)))
-
-            # 拉回时的火花
-            if self.grapple_state == "pulling":
-                for _ in range(5):
-                    spark_x = hx + random.randint(-8, 8)
-                    spark_y = hy + random.randint(-8, 8)
-                    pygame.draw.circle(screen, YELLOW, (spark_x, spark_y), max(1, int(2 * scale)))
 
         # 绘制预瞄线
         if self.aim_line_active:
@@ -537,12 +537,14 @@ class Player:
 
         self.max_hp = 100
         self.hp = 100
+        self.alive = True
+        self.downed = False
         self.level = 1
         self.exp = 0
         self.exp_to_level = 100
         self.score = 0
 
-        self.weapons = [Weapon(WeaponType.PISTOL)]
+        self.weapons = [Weapon(WeaponType.FISTS)]
         self.current_weapon_idx = 0
 
         self.skill_tree = SkillTree()
@@ -598,6 +600,29 @@ class Player:
         self.muzzle_flash_timer = 0
         self.muzzle_flash_duration = 0.08
 
+        # === 疾跑体力系统 ===
+        self.max_stamina = 100.0
+        self.stamina = 100.0
+        self.stamina_regen_rate = 18.0
+        self.sprint_stamina_cost = 28.0
+        self.sprint_speed_mult = 1.6
+        self.sprinting = False
+        self.stamina_exhausted = False
+
+    def can_act(self):
+        """检查玩家是否可以执行主动操作（射击/技能/切换武器等）
+        死亡、眩晕、冻结状态下不可操作"""
+        if not self.alive:
+            return False
+        # 检查Buff系统的眩晕/冻结状态
+        if hasattr(self, 'buff_manager') and self.buff_manager:
+            if self.buff_manager.is_stunned() or self.buff_manager.is_frozen():
+                return False
+        # 兼容直接属性
+        if getattr(self, 'stunned', False) or getattr(self, 'frozen', False):
+            return False
+        return True
+
     def get_current_weapon(self):
         return self.weapons[self.current_weapon_idx]
 
@@ -614,11 +639,39 @@ class Player:
         return False
 
     def add_weapon(self, weapon_type):
+        """添加武器，已有同类型则升级，避免重复"""
+        # 统一转为枚举值进行比较（兼容int和枚举）
+        from weapons import WeaponType
+        if isinstance(weapon_type, int):
+            try:
+                weapon_type = WeaponType(weapon_type)
+            except:
+                pass
+        wt_val = weapon_type.value if hasattr(weapon_type, 'value') else weapon_type
         for w in self.weapons:
-            if w.weapon_type == weapon_type:
+            w_val = w.weapon_type.value if hasattr(w.weapon_type, 'value') else w.weapon_type
+            if w_val == wt_val:
                 w.upgrade()
                 return
         self.weapons.append(Weapon(weapon_type))
+        # 添加后去重（防止历史遗留的重复武器）
+        self._dedupe_weapons()
+
+    def _dedupe_weapons(self):
+        """合并重复武器，同类型保留等级最高的，其余等级累加"""
+        from weapons import WeaponType
+        seen = {}
+        for w in self.weapons:
+            w_val = w.weapon_type.value if hasattr(w.weapon_type, 'value') else w.weapon_type
+            if w_val in seen:
+                existing = seen[w_val]
+                existing.level += w.level - 1  # 累加等级（减去重复的1级基础）
+                existing._setup_weapon()
+            else:
+                seen[w_val] = w
+        self.weapons = list(seen.values())
+        if self.current_weapon_idx >= len(self.weapons):
+            self.current_weapon_idx = 0
 
     def equip_riot_gear(self):
         riot_skill = self.skill_tree.get_skill(SkillType.RIOT_GEAR)
@@ -633,7 +686,13 @@ class Player:
             return True
         return False
 
-    def update(self, dt, move_x, move_y, mouse_angle, world=None):
+    def update(self, dt, move_x, move_y, mouse_angle, world=None, sprinting=False):
+        # 倒地状态处理（单人模式倒地即死亡）
+        if self.downed:
+            self.hp = 0
+            self.alive = False
+            return
+
         self._update_stats()
         # Buff系统对攻速/换弹/暴击的加成
         self.fire_rate_mult *= self.buff_manager.get_attack_speed_mult()
@@ -657,6 +716,38 @@ class Player:
             speed_mult = 4.0
         else:
             speed_mult = 1.0
+
+        # === 疾跑体力系统 ===
+        is_moving = (abs(move_x) > 0.05 or abs(move_y) > 0.05)
+        gear_equipped = self.riot_gear.equipped
+        sprint_cost_mult = 1.6 if gear_equipped else 1.0
+        regen_mult = 0.65 if gear_equipped else 1.0
+        gear_move_drain = 4.0 if gear_equipped else 0.0
+
+        if sprinting and is_moving and not self.stamina_exhausted and self.stamina > 0:
+            self.sprinting = True
+            cost = self.sprint_stamina_cost * sprint_cost_mult * dt
+            self.stamina = max(0, self.stamina - cost)
+            speed_mult *= self.sprint_speed_mult
+            if self.stamina <= 0:
+                self.stamina_exhausted = True
+        else:
+            self.sprinting = False
+            if gear_equipped and is_moving and not self.stamina_exhausted:
+                self.stamina = max(0, self.stamina - gear_move_drain * dt)
+                if self.stamina <= 0:
+                    self.stamina_exhausted = True
+            if self.stamina < self.max_stamina:
+                regen = self.stamina_regen_rate * regen_mult * dt
+                if self.stamina_exhausted:
+                    regen *= 0.5
+                self.stamina = min(self.max_stamina, self.stamina + regen)
+                if self.stamina_exhausted and self.stamina >= self.max_stamina * 0.25:
+                    self.stamina_exhausted = False
+
+        # 同步体力到防爆套装（共用同一体力池）
+        self.riot_gear.stamina = self.stamina
+        self.riot_gear.max_stamina = self.max_stamina
 
         # 应用Buff速度加成
         speed_mult *= self.buff_manager.get_speed_mult()
@@ -694,7 +785,7 @@ class Player:
             if self.active_skills[skill_type] <= 0:
                 del self.active_skills[skill_type]
 
-        if self.riot_gear.equipped or self.riot_gear.riot_gear_cd_timer > 0:
+        if self.riot_gear.equipped or self.riot_gear.riot_gear_cd_timer > 0 or self.riot_gear.grapple_active or self.riot_gear.grapple_cooldown > 0:
             self.riot_gear.update(dt, self.x, self.y, self.facing_angle, self.speed_mult, cd_reduction_mult=self.cooldown_mult)
 
         if self.riot_gear_cooldown > 0:
@@ -811,8 +902,30 @@ class Player:
         # 触发技能选择
         self.pending_level_up = True
         self.skill_cards = self.skill_tree.get_random_skill_cards(getattr(self, 'skill_slot_count', 3))
+        # 解锁全局技能树（三选一出现过就算）
+        try:
+            from skill_tree_view import skill_tree_unlock_manager
+            for sc in self.skill_cards:
+                stype = getattr(sc, 'skill_type', getattr(sc, 'type', None))
+                if stype:
+                    skill_tree_unlock_manager.unlock_skill(stype)
+        except Exception:
+            pass
 
     def take_damage(self, damage, damage_type="melee", from_front=False, attack_x=None, attack_y=None):
+        # Mod 钩子：玩家受伤 - 允许 mod 修改伤害值
+        try:
+            import mod_loader
+            results = mod_loader.trigger_hook("on_player_damage", damage)
+            if results:
+                # 取最后一个非 None 的返回值作为新伤害
+                for r in reversed(results):
+                    if r is not None and isinstance(r, (int, float)):
+                        damage = r
+                        break
+        except Exception:
+            pass
+        
         if self.invincible_timer > 0:
             return
 
@@ -848,6 +961,7 @@ class Player:
 
         if self.hp <= 0:
             self.hp = 0
+            self.alive = False
 
     def heal(self, amount):
         self.hp = min(self.hp + amount, self.max_hp)
@@ -999,6 +1113,13 @@ class Enemy:
         self.shield_charge_cd = 0.0       # 盾兵冲锋CD
         self.healer_wave_cd = 0.0         # 治疗波CD
 
+        # === 特殊攻击前摇系统 ===
+        self.special_windup_timer = 0.0   # 特殊攻击前摇剩余时间
+        self.special_windup_type = None   # 正在前摇的特殊攻击类型
+        self.special_windup_radius = 0    # 特殊攻击范围（用于预警显示）
+        self.special_windup_target_x = 0  # 特殊攻击目标X
+        self.special_windup_target_y = 0  # 特殊攻击目标Y
+
     def _setup_enemy(self):
         base_configs = {
             EnemyType.ZOMBIE_NORMAL: {
@@ -1127,7 +1248,56 @@ class Enemy:
                 "color": PURPLE, "exp": 30, "score": 30,
                 "is_wraith": True, "phase_through": True,
                 "applies_fear": True, "fear_chance": 0.2,
-            }
+            },
+            # === 新增僵尸类型 ===
+            EnemyType.ZOMBIE_BOMBER: {
+                "hp": 40, "speed": 2.0, "damage": 20, "size": 16,
+                "color": ORANGE, "exp": 28, "score": 28,
+                "can_throw": True, "throw_type": "bomb",
+                "is_bomber": True,
+            },
+            EnemyType.ZOMBIE_FROST: {
+                "hp": 45, "speed": 1.5, "damage": 12, "size": 16,
+                "color": CYAN, "exp": 25, "score": 25,
+                "is_frost": True, "applies_slow": True,
+                "slow_duration": 2.0, "slow_amount": 0.5,
+            },
+            EnemyType.ZOMBIE_VENOM: {
+                "hp": 30, "speed": 2.2, "damage": 8, "size": 14,
+                "color": POISON_GREEN, "exp": 26, "score": 26,
+                "is_venom": True, "applies_poison": True,
+                "poison_damage": 5, "poison_duration": 4.0,
+            },
+            EnemyType.ZOMBIE_BERSERKER: {
+                "hp": 80, "speed": 1.8, "damage": 18, "size": 18,
+                "color": CRIMSON, "exp": 35, "score": 35,
+                "is_berserker": True, "enrage_below_hp": 0.4,
+                "enrage_speed_mult": 2.0, "enrage_damage_mult": 1.5,
+            },
+            EnemyType.ZOMBIE_GHOUL: {
+                "hp": 50, "speed": 2.0, "damage": 10, "size": 15,
+                "color": BLOOD_RED, "exp": 28, "score": 28,
+                "is_ghoul": True, "bleed_chance": 0.4,
+                "bleed_damage": 3, "bleed_duration": 3.0,
+            },
+            EnemyType.ZOMBIE_SHAMAN: {
+                "hp": 35, "speed": 1.2, "damage": 8, "size": 15,
+                "color": MAGENTA, "exp": 32, "score": 32,
+                "is_shaman": True, "buff_radius": 120,
+                "buff_damage_mult": 1.3, "buff_speed_mult": 1.2,
+            },
+            EnemyType.ZOMBIE_HUNTER: {
+                "hp": 35, "speed": 1.8, "damage": 25, "size": 14,
+                "color": DARK_BLUE, "exp": 30, "score": 30,
+                "is_hunter": True, "attack_range": 350,
+                "attack_cooldown": 3.0, "is_ranged": True,
+            },
+            EnemyType.ZOMBIE_JUGGERNAUT: {
+                "hp": 200, "speed": 0.8, "damage": 30, "size": 25,
+                "color": DARK_GRAY, "exp": 50, "score": 50,
+                "is_juggernaut": True, "armor": 0.5,
+                "knockback_resist": 0.8,
+            },
         }
 
         config = base_configs.get(self.enemy_type, base_configs[EnemyType.ZOMBIE_NORMAL])
@@ -1157,9 +1327,12 @@ class Enemy:
         self.anim_frame = 0
         self.anim_timer = 0
 
-    def update(self, dt, player_x, player_y, player):
+    def update(self, dt, player_x, player_y, player, world=None):
         # 更新Buff系统（持续伤害/治疗等）
         _, self.buff_damage_events = self.buff_manager.update(dt, self)
+        # DOT致死安全检查：确保持续伤害能杀死怪物
+        if self.hp <= 0 and self.alive:
+            self.alive = False
         self._buff_speed_mult = self.buff_manager.get_speed_mult()
         # Buff冻结/眩晕优先
         if self.buff_manager.is_stunned() or self.buff_manager.is_frozen():
@@ -1171,15 +1344,12 @@ class Enemy:
             self.frozen_timer -= dt
             return
         if self.grappled:
-            dx = player_x - self.x
-            dy = player_y - self.y
-            dist = math.hypot(dx, dy)
-            if dist > 50:
-                self.x += (dx / dist) * self.speed * 3 * self._buff_speed_mult * dt * 60
-                self.y += (dy / dist) * self.speed * 3 * self._buff_speed_mult * dt * 60
-            else:
-                self.grappled = False
+            # 被钩爪勾中：完全由RiotGear控制位置，敌人不做任何自主行动
             return
+
+        # ========== Boss智能AI增强 ==========
+        if getattr(self, "is_boss", False) and self.alive:
+            self._update_boss_ai(dt, player_x, player_y, player)
 
         # 幻影僵尸隐身逻辑
         if getattr(self, "is_phantom", False):
@@ -1217,6 +1387,18 @@ class Enemy:
         dy = player_y - self.y
         dist = math.hypot(dx, dy)
 
+        # === 特殊攻击前摇处理 ===
+        if self.special_windup_timer > 0:
+            self.special_windup_timer -= dt
+            # 前摇期间缓慢移动或不移动
+            if self.special_windup_timer <= 0:
+                # 前摇结束，执行特殊攻击
+                windup_type = self.special_windup_type
+                self.special_windup_type = None
+                self.special_windup_radius = 0
+                return windup_type
+            return None
+
         if dist > 0:
             if getattr(self, "is_boss", False):
                 self._boss_behavior(dt, player_x, player_y, dist, player)
@@ -1224,22 +1406,56 @@ class Enemy:
                 # === 特种僵尸特色能力 ===
                 special_result = self._special_ability(dt, player_x, player_y, dist)
                 if special_result:
+                    # 检查是否需要前摇
+                    windup_config = self._get_windup_config(special_result)
+                    if windup_config:
+                        # 设置前摇状态
+                        self.special_windup_timer = windup_config["duration"]
+                        self.special_windup_type = special_result
+                        self.special_windup_radius = windup_config.get("radius", 0)
+                        self.special_windup_target_x = player_x
+                        self.special_windup_target_y = player_y
+                        return None
                     return special_result
 
                 if getattr(self, "attack_range", 0) > 0 and dist < self.attack_range:
                     if dist < self.attack_range * 0.5:
-                        self.x -= (dx / dist) * self.speed * self._buff_speed_mult * dt * 60
-                        self.y -= (dy / dist) * self.speed * self._buff_speed_mult * dt * 60
+                        mdx = -(dx / dist) * self.speed * self._buff_speed_mult * dt * 60
+                        mdy = -(dy / dist) * self.speed * self._buff_speed_mult * dt * 60
+                        self._move_with_obstacle_collision(mdx, mdy, world)
                     else:
                         self._ranged_attack(dt, player_x, player_y, dist)
                 else:
-                    self.x += (dx / dist) * self.speed * self._buff_speed_mult * dt * 60
-                    self.y += (dy / dist) * self.speed * self._buff_speed_mult * dt * 60
+                    mdx = (dx / dist) * self.speed * self._buff_speed_mult * dt * 60
+                    mdy = (dy / dist) * self.speed * self._buff_speed_mult * dt * 60
+                    self._move_with_obstacle_collision(mdx, mdy, world)
 
         self.anim_timer += dt
         if self.anim_timer > 0.2:
             self.anim_timer = 0
             self.anim_frame = (self.anim_frame + 1) % 4
+
+    def _move_with_obstacle_collision(self, move_dx, move_dy, world):
+        """带障碍物碰撞的移动：普通怪物被阻挡，特殊怪物可穿越"""
+        can_phase = (getattr(self, "is_crawler", False) or
+                      getattr(self, "is_phantom", False) or
+                      getattr(self, "is_wraith", False) or
+                      getattr(self, "is_leaper", False) or
+                      getattr(self, "is_boss", False))
+        if can_phase or world is None or not hasattr(world, 'obstacles'):
+            self.x += move_dx
+            self.y += move_dy
+            return
+        enemy_rect = pygame.Rect(self.x - self.size, self.y - self.size,
+                                  self.size * 2, self.size * 2)
+        new_rect_x = enemy_rect.copy()
+        new_rect_x.x += move_dx
+        if not any(new_rect_x.colliderect(obs['rect']) for obs in world.obstacles):
+            self.x += move_dx
+        new_rect_y = enemy_rect.copy()
+        new_rect_y.y += move_dy
+        if not any(new_rect_y.colliderect(obs['rect']) for obs in world.obstacles):
+            self.y += move_dy
 
     def _boss_behavior(self, dt, player_x, player_y, dist, player):
         """
@@ -1760,6 +1976,20 @@ class Enemy:
 
         return None
 
+    def _get_windup_config(self, attack_type):
+        """获取特殊攻击的前摇配置，返回None表示不需要前摇"""
+        # 只处理字符串类型的攻击类型，列表等不可哈希类型直接返回None
+        if not isinstance(attack_type, str):
+            return None
+        windup_configs = {
+            "tank_slam": {"duration": 0.8, "radius": 80},
+            "elite_heavy_slam": {"duration": 1.0, "radius": 80},
+            "wraith_fear": {"duration": 0.6, "radius": 120},
+            "healer_wave": {"duration": 1.0, "radius": 100},
+            "leaper_strike": {"duration": 0.5, "radius": 30},
+        }
+        return windup_configs.get(attack_type)
+
     def _ranged_attack(self, dt, player_x, player_y, dist):
         if self.attack_timer > 0:
             self.attack_timer -= dt
@@ -1823,6 +2053,83 @@ class Enemy:
         self.buff_manager.add_buff(buff_type, duration, stacks)
         return True
 
+    def _update_boss_ai(self, dt, player_x, player_y, player):
+        """Boss智能AI：根据血量/距离/玩家状态选择行为"""
+        if not self.alive:
+            return
+        dx = player_x - self.x
+        dy = player_y - self.y
+        dist = math.hypot(dx, dy)
+        hp_ratio = self.hp / self.max_hp if self.max_hp > 0 else 1
+
+        # 初始化Boss AI状态
+        if not hasattr(self, 'boss_ai_state'):
+            self.boss_ai_state = 'chase'  # chase / flank / rage / retreat
+            self.boss_ai_timer = 0
+            self.boss_rage_triggered = False
+
+        self.boss_ai_timer -= dt
+
+        # 低血量狂暴模式
+        if hp_ratio < 0.3 and not self.boss_rage_triggered:
+            self.boss_rage_triggered = True
+            self.boss_ai_state = 'rage'
+            self.speed *= 1.3
+            self.damage *= 1.5
+            if hasattr(self, 'color'):
+                self.original_color = self.color
+                self.color = (200, 30, 30)
+
+        # 状态切换逻辑
+        if self.boss_ai_timer <= 0:
+            if self.boss_ai_state == 'rage':
+                # 狂暴模式：持续追击，偶尔冲撞
+                self.boss_ai_state = 'rage'
+                self.boss_ai_timer = random.uniform(1.5, 3.0)
+                if random.random() < 0.4 and dist > 100:
+                    # 冲撞准备
+                    self.boss_dash_cd = 0.1  # 即将冲撞
+            elif dist < 60:
+                # 近身：后退拉开距离
+                self.boss_ai_state = 'retreat'
+                self.boss_ai_timer = random.uniform(0.5, 1.2)
+            elif dist > 300:
+                # 远距离：快速追击
+                self.boss_ai_state = 'chase'
+                self.boss_ai_timer = random.uniform(2.0, 4.0)
+            else:
+                # 中距离：随机选择侧翼包抄或远程攻击
+                choice = random.random()
+                if choice < 0.4:
+                    self.boss_ai_state = 'flank'
+                    self.boss_ai_timer = random.uniform(1.5, 3.0)
+                    self.flank_direction = random.choice([-1, 1])
+                elif choice < 0.7:
+                    self.boss_ai_state = 'chase'
+                    self.boss_ai_timer = random.uniform(1.5, 3.0)
+                else:
+                    self.boss_ai_state = 'ranged'
+                    self.boss_ai_timer = random.uniform(1.0, 2.0)
+                    self.boss_shoot_cd = 0.1  # 即将远程攻击
+
+        # 执行AI状态
+        if self.boss_ai_state == 'retreat' and dist < 100:
+            # 后退：向玩家反方向移动
+            if dist > 0:
+                self.x -= (dx / dist) * self.speed * 1.2 * dt * 60
+                self.y -= (dy / dist) * self.speed * 1.2 * dt * 60
+        elif self.boss_ai_state == 'flank':
+            # 侧翼包抄：垂直于玩家方向移动
+            if dist > 0:
+                perp_x = -dy / dist
+                perp_y = dx / dist
+                self.x += perp_x * self.flank_direction * self.speed * 0.9 * dt * 60
+                self.y += perp_y * self.flank_direction * self.speed * 0.9 * dt * 60
+                # 同时缓慢接近
+                self.x += (dx / dist) * self.speed * 0.3 * dt * 60
+                self.y += (dy / dist) * self.speed * 0.3 * dt * 60
+        # chase/rage/ranged 状态由正常的Enemy.update移动逻辑处理
+
     def take_damage(self, damage, damage_type="normal"):
         # DOT伤害跳过特殊防御机制
         if damage_type != "dot":
@@ -1856,6 +2163,30 @@ class Enemy:
         px = int((self.x - camera_x) * scale)
         py = int((self.y - camera_y) * scale)
         s = max(2, int(self.size * scale))
+
+        # 特殊僵尸散发幽光
+        special_glow = None
+        if getattr(self, "is_exploder", False):
+            special_glow = (255, 100, 30)  # 爆炸僵尸 - 橙红幽光
+        elif getattr(self, "is_healer", False):
+            special_glow = (80, 255, 120)  # 治疗僵尸 - 绿色幽光
+        elif getattr(self, "is_phantom", False):
+            special_glow = (180, 100, 255)  # 幻影僵尸 - 紫色幽光
+        elif getattr(self, "is_shield", False):
+            special_glow = (150, 150, 170)  # 盾兵 - 灰蓝幽光
+        elif getattr(self, "is_splitter", False):
+            special_glow = (255, 80, 80)  # 分裂者 - 红色幽光
+        elif getattr(self, "is_crawler", False):
+            special_glow = (100, 200, 100)  # 爬行者 - 暗绿幽光
+        elif getattr(self, "is_boss", False):
+            special_glow = (200, 50, 200)  # Boss - 紫红幽光
+        if special_glow:
+            pulse = abs(math.sin(pygame.time.get_ticks() / 400.0)) * 0.4 + 0.6
+            glow_r = s + 12
+            glow_surf = pygame.Surface((glow_r * 2, glow_r * 2), pygame.SRCALPHA)
+            pygame.draw.circle(glow_surf, (*special_glow[:3], int(50 * pulse)), (glow_r, glow_r), glow_r)
+            pygame.draw.circle(glow_surf, (*special_glow[:3], int(25 * pulse)), (glow_r, glow_r), glow_r + 5)
+            screen.blit(glow_surf, (px - glow_r, py - glow_r))
 
         # 幻影僵尸隐身效果
         alpha = 255

@@ -5,7 +5,9 @@ import json
 import os
 import datetime
 from config import GameMode
+from logger import GameLogger
 RECORDS_FILE = "game_records.json"
+logger = GameLogger()
 class GameRecords:
     """全局游戏记录管理器 - 持久化存储所有游戏数据"""
     def __init__(self, base_path="."):
@@ -145,22 +147,22 @@ class GameRecords:
             # === 成就【带分组+隐藏标记】 ===
             "achievements": {
                 # 战斗
-                "first_blood": {"unlocked": False, "desc": "首次击杀", "date": None, "group":"战斗", "hidden":False},
-                "zombie_slayer": {"unlocked": False, "desc": "累计击杀100只僵尸", "date": None, "group":"战斗", "hidden":False},
-                "zombie_hunter": {"unlocked": False, "desc": "累计击杀1000只僵尸", "date": None, "group":"战斗", "hidden":False},
-                "zombie_destroyer": {"unlocked": False, "desc": "累计击杀10000只僵尸", "date": None, "group":"战斗", "hidden":False},
-                "boss_slayer": {"unlocked": False, "desc": "累计击杀10个Boss", "date": None, "group":"战斗", "hidden":False},
-                "dragon_hunter": {"unlocked": False, "desc": "累计击杀龙某5次", "date": None, "group":"战斗", "hidden":False},
-                "xiang_hunter": {"unlocked": False, "desc": "累计击杀向某5次", "date": None, "group":"战斗", "hidden":False},
-                "centurion": {"unlocked": False, "desc": "单局击杀超过100只", "date": None, "group":"战斗", "hidden":False},
-                "crit_master": {"unlocked": False, "desc": "累计打出500次暴击", "date": None, "group":"战斗", "hidden":False},
+                "first_blood": {"unlocked": False, "desc": "首次击杀", "date": None, "group":"战斗", "hidden":False, "coef_threshold": 0},
+                "zombie_slayer": {"unlocked": False, "desc": "累计击杀100只僵尸", "date": None, "group":"战斗", "hidden":False, "coef_threshold": 0},
+                "zombie_hunter": {"unlocked": False, "desc": "累计击杀1000只僵尸", "date": None, "group":"战斗", "hidden":False, "coef_threshold": 0},
+                "zombie_destroyer": {"unlocked": False, "desc": "累计击杀10000只僵尸", "date": None, "group":"战斗", "hidden":False, "coef_threshold": 1.5},
+                "boss_slayer": {"unlocked": False, "desc": "累计击杀10个Boss", "date": None, "group":"战斗", "hidden":False, "coef_threshold": 1.5},
+                "dragon_hunter": {"unlocked": False, "desc": "累计击杀龙某5次", "date": None, "group":"战斗", "hidden":False, "coef_threshold": 0},
+                "xiang_hunter": {"unlocked": False, "desc": "累计击杀向某5次", "date": None, "group":"战斗", "hidden":False, "coef_threshold": 0},
+                "centurion": {"unlocked": False, "desc": "单局击杀超过100只", "date": None, "group":"战斗", "hidden":False, "coef_threshold": 0},
+                "crit_master": {"unlocked": False, "desc": "累计打出500次暴击", "date": None, "group":"战斗", "hidden":False, "coef_threshold": 0},
                 "damage_deal_500k": {"unlocked": False, "desc": "累计造成50万伤害", "date": None, "group":"战斗", "hidden":False},
-                "gunner": {"unlocked": False, "desc": "累计射击10000发子弹", "date": None, "group":"战斗", "hidden":False},
-                "tough_guy": {"unlocked": False, "desc": "累计承受20万伤害", "date": None, "group":"战斗", "hidden":False},
+                "gunner": {"unlocked": False, "desc": "累计射击10000发子弹", "date": None, "group":"战斗", "hidden":False, "coef_threshold": 0},
+                "tough_guy": {"unlocked": False, "desc": "累计承受20万伤害", "date": None, "group":"战斗", "hidden":False, "coef_threshold": 0},
                 # 生存
-                "survivor": {"unlocked": False, "desc": "存活超过5分钟", "date": None, "group":"生存", "hidden":False},
-                "veteran": {"unlocked": False, "desc": "存活超过15分钟", "date": None, "group":"生存", "hidden":False},
-                "legend": {"unlocked": False, "desc": "存活超过30分钟", "date": None, "group":"生存", "hidden":False},
+                "survivor": {"unlocked": False, "desc": "存活超过5分钟", "date": None, "group":"生存", "hidden":False, "coef_threshold": 0},
+                "veteran": {"unlocked": False, "desc": "存活超过15分钟", "date": None, "group":"生存", "hidden":False, "coef_threshold": 0},
+                "legend": {"unlocked": False, "desc": "存活超过30分钟", "date": None, "group":"生存", "hidden":False, "coef_threshold": 1.8},
                 # 新增死亡成就
                 "die_1": {"unlocked": False, "desc": "首次阵亡", "date": None, "group": "生存", "hidden": False},
                 "die_10": {"unlocked": False, "desc": "累计阵亡10次", "date": None, "group": "生存", "hidden": False},
@@ -169,38 +171,38 @@ class GameRecords:
                 "die_10000": {"unlocked": False, "desc": "累计阵亡10000次", "date": None, "group": "生存", "hidden": False},
                 "horde_survivor_5": {"unlocked": False, "desc": "累计挺过5波尸潮", "date": None, "group":"生存", "hidden":False},
                 "horde_survivor_20": {"unlocked": False, "desc": "累计挺过20波尸潮", "date": None, "group":"生存", "hidden":False},
-                "untouchable": {"unlocked": False, "desc": "单局不受伤通关", "date": None, "group":"生存", "hidden":False},
-                "iron_will": {"unlocked": False, "desc": "地狱难度存活8分钟以上", "date": None, "group":"生存", "hidden":False},
-                "speedrunner": {"unlocked": False, "desc": "限时模式10分钟内通关", "date": None, "group":"生存", "hidden":False},
+                "untouchable": {"unlocked": False, "desc": "单局不受伤通关", "date": None, "group":"生存", "hidden":False, "coef_threshold": 0},
+                "iron_will": {"unlocked": False, "desc": "地狱难度存活8分钟以上", "date": None, "group":"生存", "hidden":False, "coef_threshold": 2.5},
+                "speedrunner": {"unlocked": False, "desc": "限时模式10分钟内通关", "date": None, "group":"生存", "hidden":False, "coef_threshold": 0},
                 
                 # 技能武器
-                "skill_master": {"unlocked": False, "desc": "单局升级技能20次", "date": None, "group":"技能武器", "hidden":False},
-                "weapon_collector": {"unlocked": False, "desc": "单局收集所有武器类型", "date": None, "group":"技能武器", "hidden":False},
-                "shield_master": {"unlocked": False, "desc": "累计格挡100次攻击", "date": None, "group":"技能武器", "hidden":False},
-                "grapple_master": {"unlocked": False, "desc": "累计使用钩爪50次", "date": None, "group":"技能武器", "hidden":False},
-                "berserker": {"unlocked": False, "desc": "累计使用狂暴10次", "date": None, "group":"技能武器", "hidden":False},
-                "full_armory": {"unlocked": False, "desc": "解锁全部武器", "date": None, "group":"技能武器", "hidden":False},
-                "no_skill_challenge": {"unlocked": False, "desc": "单局不使用任何主动技能存活10分钟", "date": None, "group":"技能武器", "hidden":False},
+                "skill_master": {"unlocked": False, "desc": "单局升级技能20次", "date": None, "group":"技能武器", "hidden":False, "coef_threshold": 0},
+                "weapon_collector": {"unlocked": False, "desc": "单局收集所有武器类型", "date": None, "group":"技能武器", "hidden":False, "coef_threshold": 0},
+                "shield_master": {"unlocked": False, "desc": "累计格挡100次攻击", "date": None, "group":"技能武器", "hidden":False, "coef_threshold": 0},
+                "grapple_master": {"unlocked": False, "desc": "累计使用钩爪50次", "date": None, "group":"技能武器", "hidden":False, "coef_threshold": 0},
+                "berserker": {"unlocked": False, "desc": "累计使用狂暴10次", "date": None, "group":"技能武器", "hidden":False, "coef_threshold": 0},
+                "full_armory": {"unlocked": False, "desc": "解锁全部武器", "date": None, "group":"技能武器", "hidden":False, "coef_threshold": 0},
+                "no_skill_challenge": {"unlocked": False, "desc": "单局不使用任何主动技能存活10分钟", "date": None, "group":"技能武器", "hidden":False, "coef_threshold": 0},
                 # 结局挑战
-                "millionaire": {"unlocked": False, "desc": "单局得分超过100万", "date": None, "group":"结局挑战", "hidden":False},
-                "perfect_ending": {"unlocked": False, "desc": "达成完美结局", "date": None, "group":"结局挑战", "hidden":False},
-                "all_endings": {"unlocked": False, "desc": "达成所有结局", "date": None, "group":"结局挑战", "hidden":False},
+                "millionaire": {"unlocked": False, "desc": "单局得分超过100万", "date": None, "group":"结局挑战", "hidden":False, "coef_threshold": 2.0},
+                "perfect_ending": {"unlocked": False, "desc": "达成完美结局", "date": None, "group":"结局挑战", "hidden":False, "coef_threshold": 2.0},
+                "all_endings": {"unlocked": False, "desc": "达成所有结局", "date": None, "group":"结局挑战", "hidden":False, "coef_threshold": 2.5},
                 # === Buff/新机制相关成就 ===
-                "turret_master": {"unlocked": False, "desc": "单局部署10个自动炮塔", "date": None, "group":"战斗", "hidden":False},
-                "chest_opener": {"unlocked": False, "desc": "单局开启5个宝箱", "date": None, "group":"技能武器", "hidden":False},
-                "ice_sculptor": {"unlocked": False, "desc": "单局冻结30个敌人", "date": None, "group":"战斗", "hidden":False},
-                "poison_master": {"unlocked": False, "desc": "单局用毒素击杀30个敌人", "date": None, "group":"战斗", "hidden":False},
-                "purifier": {"unlocked": False, "desc": "累计使用净化技能10次", "date": None, "group":"技能武器", "hidden":False},
-                "war_crier": {"unlocked": False, "desc": "战吼状态下累计击杀50个敌人", "date": None, "group":"战斗", "hidden":False},
-                "vaccine_hunter": {"unlocked": False, "desc": "限时模式击败Boss获得疫苗", "date": None, "group":"结局挑战", "hidden":False},
-                "elemental_master": {"unlocked": False, "desc": "同时拥有火焰、冰霜、剧毒三种附魔", "date": None, "group":"技能武器", "hidden":False},
+                "turret_master": {"unlocked": False, "desc": "单局部署10个自动炮塔", "date": None, "group":"战斗", "hidden":False, "coef_threshold": 0},
+                "chest_opener": {"unlocked": False, "desc": "单局开启5个宝箱", "date": None, "group":"技能武器", "hidden":False, "coef_threshold": 0},
+                "ice_sculptor": {"unlocked": False, "desc": "单局冻结30个敌人", "date": None, "group":"战斗", "hidden":False, "coef_threshold": 0},
+                "poison_master": {"unlocked": False, "desc": "单局用毒素击杀30个敌人", "date": None, "group":"战斗", "hidden":False, "coef_threshold": 0},
+                "purifier": {"unlocked": False, "desc": "累计使用净化技能10次", "date": None, "group":"技能武器", "hidden":False, "coef_threshold": 0},
+                "war_crier": {"unlocked": False, "desc": "战吼状态下累计击杀50个敌人", "date": None, "group":"战斗", "hidden":False, "coef_threshold": 0},
+                "vaccine_hunter": {"unlocked": False, "desc": "限时模式击败Boss获得疫苗", "date": None, "group":"结局挑战", "hidden":False, "coef_threshold": 0},
+                "elemental_master": {"unlocked": False, "desc": "同时拥有火焰、冰霜、剧毒三种附魔", "date": None, "group":"技能武器", "hidden":False, "coef_threshold": 0},
                 # 隐藏趣味成就
-                "fire_and_ice": {"unlocked": False, "desc": "冰火双修：同时拥有火焰和冰霜附魔", "date": None, "group":"隐藏", "hidden":True},
-                "debuff_collector": {"unlocked": False, "desc": "debuff收藏家：同时受到5种不同负面效果", "date": None, "group":"隐藏", "hidden":True},
-                "burning_survivor": {"unlocked": False, "desc": "浴火重生：在燃烧状态下存活60秒", "date": None, "group":"隐藏", "hidden":True},
-                "bleeding_warrior": {"unlocked": False, "desc": "浴血奋战：在流血状态下击杀20个敌人", "date": None, "group":"隐藏", "hidden":True},
+                "fire_and_ice": {"unlocked": False, "desc": "冰火双修：同时拥有火焰和冰霜附魔", "date": None, "group":"隐藏", "hidden":True, "coef_threshold": 0},
+                "debuff_collector": {"unlocked": False, "desc": "debuff收藏家：同时受到5种不同负面效果", "date": None, "group":"隐藏", "hidden":True, "coef_threshold": 0},
+                "burning_survivor": {"unlocked": False, "desc": "浴火重生：在燃烧状态下存活60秒", "date": None, "group":"隐藏", "hidden":True, "coef_threshold": 0},
+                "bleeding_warrior": {"unlocked": False, "desc": "浴血奋战：在流血状态下击杀20个敌人", "date": None, "group":"隐藏", "hidden":True, "coef_threshold": 0},
                 # 隐藏成就示例
-                "secret_zombie": {"unlocked": False, "desc": "发现秘密僵尸", "date": None, "group":"隐藏", "hidden":True},
+                "secret_zombie": {"unlocked": False, "desc": "发现秘密僵尸", "date": None, "group":"隐藏", "hidden":True, "coef_threshold": 0},
             },
             # === 杂项统计 ===
             "total_shield_blocks": 0,
@@ -230,16 +232,16 @@ class GameRecords:
                 else:
                     old = self.data["achievements"][ach_key]
                     # 只补缺失字段，保留旧存档unlocked、date、desc
-                    for fill_k in ["group","hidden"]:
+                    for fill_k in ["group","hidden","coef_threshold"]:
                         if fill_k not in old:
-                            old[fill_k] = def_data[fill_k]
+                            old[fill_k] = def_data.get(fill_k, 0)
 
         self._save()
 
     def get_grouped_achievements(self, show_hidden_unlocked_only=True):
         """
         获取分组成就，兼容旧存档缺失group/hidden字段
-        show_hidden_unlocked_only: True → 未解锁的隐藏成就过滤
+        show_hidden_unlocked_only: True -> 未解锁的隐藏成就过滤
         """
         ach = self.data["achievements"]
         groups = {}
@@ -335,6 +337,32 @@ class GameRecords:
         """创建新游戏会话记录器"""
         return GameSession(self)
 
+    def calculate_achievement_coefficient(self, session_data):
+        """计算成就解锁系数
+        - difficulty_weight: 简单0.5, 普通1.0, 困难1.8, 地狱3.0
+        - survival_factor: min(2.0, 存活时间/300秒)，最低0.3
+        - kill_factor: min(2.0, log10(击杀数+1))，最低0.5
+        返回系数值，>=1.0表示普通难度标准局
+        """
+        try:
+            from config import DIFFICULTY_WEIGHT
+            difficulty = session_data.get("difficulty", "普通")
+            diff_weight = DIFFICULTY_WEIGHT.get(difficulty, 1.0)
+        except:
+            diff_weight = 1.0
+
+        # 存活时间因子
+        survival_time = session_data.get("time_survived", 0)
+        survival_factor = max(0.3, min(2.0, survival_time / 300.0))
+
+        # 击杀因子（从 kills_by_type 计算总数）
+        kills = sum(session_data.get("kills_by_type", {}).values())
+        import math
+        kill_factor = max(0.5, min(2.0, math.log10(kills + 10) - 0.5))
+
+        coefficient = diff_weight * survival_factor * kill_factor
+        return round(coefficient, 2)
+
     def on_game_end(self, session_data):
         """游戏结束时调用，更新所有统计"""
         d = session_data
@@ -425,11 +453,22 @@ class GameRecords:
         new_unlocks = []
         now = datetime.datetime.now().isoformat()
         ach = self.data["achievements"]
+        # 计算本局成就系数
+        game_coef = self.calculate_achievement_coefficient(d)
+        total_k = sum(d.get("kills_by_type", {}).values())
+        logger.info("成就系数计算: %.2f (难度=%s, 存活=%ds, 击杀=%d)" % (
+            game_coef, d.get("difficulty", "普通"), d.get("time_survived", 0), total_k))
+
         def unlock(key):
             item = ach.get(key)
             if not item:
                 return
             if not item.get("unlocked", False):
+                # 问题3b: 检查成就系数阈值
+                coef_threshold = item.get("coef_threshold", 0)
+                if coef_threshold > 0 and game_coef < coef_threshold:
+                    logger.debug(f"成就 {key} 未解锁: 系数 {game_coef} < 阈值 {coef_threshold}")
+                    return
                 item["unlocked"] = True
                 item["date"] = now
                 new_unlocks.append(key)
@@ -534,8 +573,6 @@ class GameRecords:
             unlock("burning_survivor")
         if d.get("bleeding_kills", 0) >= 20:
             unlock("bleeding_warrior")
-        return new_unlocks
-
     # ==================== 查询接口 ====================
     def get_summary(self):
         return {
@@ -553,6 +590,18 @@ class GameRecords:
         return self.data["achievements"]
     def get_unlocked_achievements(self):
         return {k: v for k, v in self.data["achievements"].items() if v.get("unlocked",False)}
+    def unlock_achievement(self, key):
+        """即时解锁指定成就，返回是否是新解锁"""
+        ach = self.data["achievements"]
+        item = ach.get(key)
+        if not item:
+            return False
+        if not item.get("unlocked", False):
+            item["unlocked"] = True
+            item["date"] = datetime.datetime.now().isoformat()
+            self._save()
+            return True
+        return False
     def get_collected_story(self):
         """获取已收集的剧情片段ID列表"""
         return self.data.get("collected_story", [])
@@ -625,6 +674,7 @@ class GameSession:
             "has_frost_enchant": False,
             "has_poison_enchant": False,
             "got_vaccine": False,
+
         }
     def set_difficulty(self, diff):
         self.data["difficulty"] = diff
@@ -702,6 +752,12 @@ class GameSession:
             self.data[key] = value
     def set_got_vaccine(self, value=True):
         self.data["got_vaccine"] = value
+    def add_chat_message(self):
+        self.data["chat_messages"] += 1
+    def set_reconnected(self, value=True):
+        self.data["reconnected"] = value
+    def set_last_killed_by(self, player_id):
+        self.data["last_killed_by"] = player_id
     def finalize(self):
         elapsed = (datetime.datetime.now() - self.start_time).total_seconds()
         self.data["play_time"] = elapsed

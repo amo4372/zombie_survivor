@@ -3,14 +3,12 @@
 """渲染系统模块 - 黑暗色调版：技能卡选择、防爆套装动画、半透明范围圈"""
 
 import pygame
+import mod_loader
 import math
 import random
-from config import (GameState, ControlMode, GameMode, MapType, MAP_CONFIGS,
-                   STORY_MAP_ORDER, STORY_FRAGMENTS,
-                   WHITE, BLACK, RED, GREEN, BLUE, YELLOW, ORANGE, FIRE_ORANGE, 
-                   GRAY, DARK_GRAY, CYAN, DARK_RED, PURPLE, LIGHT_GRAY,
-                   GOLD, AMBER, CRIMSON, CHARCOAL, VOID_BLACK, DARK_BLUE)
+from config import *
 from buff import BuffType
+from codex import codex_unlock_manager
 
 class Camera:
     def __init__(self, width, height):
@@ -22,6 +20,13 @@ class Camera:
         self.shake_y = 0
         self.shake_duration = 0
         self.shake_intensity = 0
+        self.shake_enabled = True
+
+    def shake(self, intensity=5, duration=0.3):
+        if not self.shake_enabled:
+            return
+        self.shake_intensity = intensity
+        self.shake_duration = duration
 
     def follow(self, target_x, target_y, dt, smooth=0.1):
         target_cam_x = target_x - self.width // 2
@@ -82,8 +87,20 @@ class Renderer:
             self._draw_achievements()
         elif state == GameState.MODE_SELECT:
             self._draw_mode_select()
+        elif state == GameState.DIFFICULTY_SELECT:
+            self._draw_difficulty_select()
         elif state == GameState.STORY_ARCHIVE:
             self._draw_story_archive()
+        elif state == GameState.CODEX:
+            self._draw_codex()
+        elif state == GameState.SKILL_TREE:
+            self._draw_playing()
+            self._draw_skill_tree()
+        elif state == GameState.TEXT_VIEWER:
+            self._draw_playing()
+            self._draw_text_viewer()
+        elif state == GameState.MOD_MANAGER:
+            self._draw_mod_manager()
 
         pygame.display.flip()
 
@@ -120,7 +137,7 @@ class Renderer:
         mouse_pressed = pygame.mouse.get_pressed()
 
         for i, btn in enumerate(self.game.menu_buttons):
-            btn.base_y = (220 + i * 60)
+            btn.base_y = (180 + i * 55)
             # 继续游戏按钮：无存档时禁用
             if i == 0:
                 btn.enabled = self.game.has_saved_game()
@@ -141,14 +158,27 @@ class Renderer:
                     self.game.story_archive_scroll = 0
                     self.game.story_archive_selected = None
                 elif i == 3:
-                    self.game.state = GameState.RECORDS
+                    # 图鉴
+                    self.game.state = GameState.CODEX
+                    self.game.codex_tab = "monster"
+                    self.game.codex_category = "全部"
+                    self.game.codex_scroll = 0
+                    self.game.codex_selected = None
                 elif i == 4:
-                    self.game.state = GameState.ACHIEVEMENTS
+                    self.game.state = GameState.RECORDS
                 elif i == 5:
-                    self.game.state = GameState.SETTINGS
+                    self.game.state = GameState.ACHIEVEMENTS
                 elif i == 6:
-                    self.game.state = GameState.TUTORIAL
+                    # Mod管理
+                    self.game.state = GameState.MOD_MANAGER
+                    self.game.mod_manager_scroll = 0
+                    self.game.mod_selected = None
+                    self.game.mod_list_cache = mod_loader.get_all_available_mods()
                 elif i == 7:
+                    self.game.state = GameState.SETTINGS
+                elif i == 8:
+                    self.game.state = GameState.TUTORIAL
+                elif i == 9:
                     self.game.running = False
             btn.draw(self.screen, self.game.font_large, scale)
 
@@ -184,13 +214,13 @@ class Renderer:
             if btn.update(mouse_pos, mouse_pressed, self.game.touch_events, scale):
                 if i == 0:
                     self.game.config.game_mode = GameMode.STORY
-                    self.game.start_game()
+                    self.game.state = GameState.DIFFICULTY_SELECT
                 elif i == 1:
                     self.game.config.game_mode = GameMode.ENDLESS
-                    self.game.start_game()
+                    self.game.state = GameState.DIFFICULTY_SELECT
                 elif i == 2:
                     self.game.config.game_mode = GameMode.TIMED
-                    self.game.start_game()
+                    self.game.state = GameState.DIFFICULTY_SELECT
                 elif i == 3:
                     self.game.state = GameState.MENU
             btn.draw(self.screen, self.game.font_large, scale)
@@ -199,6 +229,329 @@ class Renderer:
                 desc_text = self.game.font_small.render(mode_descs[i], True, LIGHT_GRAY)
                 desc_rect = desc_text.get_rect(center=(sw // 2, int((290 + i * 80) * scale)))
                 self.screen.blit(desc_text, desc_rect)
+
+    def _draw_difficulty_select(self):
+        """难度选择界面"""
+        self.screen.fill(VOID_BLACK)
+        scale = self.game.scale
+        sw = self.game.scaled_width
+
+        title = self.game.font_title.render("选择难度", True, WHITE)
+        title_rect = title.get_rect(center=(sw // 2, int(100 * scale)))
+        self.screen.blit(title, title_rect)
+
+        mode_name = {"STORY": "故事模式", "ENDLESS": "无尽模式", "TIMED": "限时模式"}
+        mode_text = self.game.font.render(f"当前模式: {mode_name.get(self.game.config.game_mode.name, '未知')}", True, GOLD)
+        mode_rect = mode_text.get_rect(center=(sw // 2, int(150 * scale)))
+        self.screen.blit(mode_text, mode_rect)
+
+        mouse_pos = pygame.mouse.get_pos()
+        mouse_pressed = pygame.mouse.get_pressed()
+
+        diff_descs = [
+            "僵尸较弱，刷新较慢，适合新手体验剧情",
+            "标准难度，平衡的挑战与体验",
+            "僵尸更强更快，资源稀缺，考验操作",
+            "极限挑战，Boss伤害极高，一命通关",
+        ]
+        diff_colors = [GREEN, GOLD, ORANGE, CRIMSON]
+
+        for i, btn in enumerate(self.game.difficulty_select_buttons):
+            if i < 4:
+                btn.base_y = (200 + i * 75)
+                btn.color = diff_colors[i]
+            else:
+                btn.base_y = 540
+            if btn.update(mouse_pos, mouse_pressed, self.game.touch_events, scale):
+                if i < 4:
+                    difficulties = ["简单", "普通", "困难", "地狱"]
+                    self.game.config.difficulty = difficulties[i]
+                    self.game.config.save()
+                    self.game.start_game()
+                elif i == 4:
+                    self.game.state = GameState.MODE_SELECT
+            btn.draw(self.screen, self.game.font_large, scale)
+            if i < 4:
+                desc_text = self.game.font_small.render(diff_descs[i], True, LIGHT_GRAY)
+                desc_rect = desc_text.get_rect(center=(sw // 2, int((240 + i * 75) * scale)))
+                self.screen.blit(desc_text, desc_rect)
+
+
+    def _draw_text_viewer(self):
+        """渲染可拾取文本查看界面"""
+        from codex import PICKABLE_TEXTS
+        from ui import ScrollablePanel
+        
+        scale = self.game.scale
+        sw = self.game.scaled_width
+        sh = self.game.scaled_height
+        
+        # 半透明遮罩
+        overlay = pygame.Surface((sw, sh), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 180))
+        self.screen.blit(overlay, (0, 0))
+        
+        # 面板
+        panel_w = int(sw * 0.7)
+        panel_h = int(sh * 0.8)
+        panel_x = (sw - panel_w) // 2
+        panel_y = (sh - panel_h) // 2
+        
+        pygame.draw.rect(self.screen, (25, 25, 35), (panel_x, panel_y, panel_w, panel_h), border_radius=8)
+        pygame.draw.rect(self.screen, (180, 160, 100), (panel_x, panel_y, panel_w, panel_h), 3, border_radius=8)
+        
+        # 获取文本数据
+        text_id = self.game.current_viewing_text
+        text_data = PICKABLE_TEXTS.get(text_id, {})
+        title = text_data.get("title", "未知文本")
+        category = text_data.get("category", "")
+        content_text = text_data.get("content", "")
+        
+        # 标题
+        title_surf = self.game.font_large.render(title, True, (255, 230, 150))
+        self.screen.blit(title_surf, (panel_x + 30, panel_y + 25))
+        
+        # 分类标签
+        if category:
+            cat_surf = self.game.font_small.render(f"[{category}]", True, (180, 160, 100))
+            self.screen.blit(cat_surf, (panel_x + 30, panel_y + 65))
+        
+        # 使用 ScrollablePanel 显示内容
+        content_x = panel_x + 30
+        content_y = panel_y + 100
+        content_w = panel_w - 60
+        content_h = panel_h - 160
+        
+        if not hasattr(self.game, '_text_viewer_panel') or self.game._text_viewer_panel is None:
+            self.game._text_viewer_panel = ScrollablePanel(
+                content_x, content_y, content_w, content_h,
+                title="", font=self.game.font_small, title_font=self.game.font_large
+            )
+        
+        panel = self.game._text_viewer_panel
+        panel.x = content_x
+        panel.y = content_y
+        panel.width = content_w
+        panel.height = content_h
+        panel.title = ""
+        panel.set_content(content_text)
+        
+        mouse_pos = pygame.mouse.get_pos()
+        mouse_pressed = pygame.mouse.get_pressed()
+        panel.handle_mouse(mouse_pos, mouse_pressed)
+        if hasattr(self.game, 'touch_events'):
+            panel.handle_touch(self.game.touch_events)
+        panel.draw(self.screen)
+        
+        # 关闭按钮
+        btn_w = int(120 * scale)
+        btn_h = int(40 * scale)
+        btn_x = panel_x + panel_w - btn_w - 30
+        btn_y = panel_y + panel_h - btn_h - 20
+        
+        mouse_pos = pygame.mouse.get_pos()
+        mouse_pressed = pygame.mouse.get_pressed()
+        btn_rect = pygame.Rect(btn_x, btn_y, btn_w, btn_h)
+        
+        btn_color = (80, 60, 30) if btn_rect.collidepoint(mouse_pos) else (60, 45, 20)
+        pygame.draw.rect(self.screen, btn_color, btn_rect, border_radius=4)
+        pygame.draw.rect(self.screen, (180, 160, 100), btn_rect, 2, border_radius=4)
+        
+        btn_text = self.game.font_small.render("关闭 (E)", True, (255, 230, 150))
+        text_rect = btn_text.get_rect(center=btn_rect.center)
+        self.screen.blit(btn_text, text_rect)
+        
+        # 点击关闭
+        was_pressed = getattr(self.game, '_text_close_was_pressed', False)
+        if mouse_pressed[0] and btn_rect.collidepoint(mouse_pos) and not was_pressed:
+            self.game.state = getattr(self.game, 'prev_state', __import__('config').GameState.PLAYING)
+            self.game.current_viewing_text = None
+        self.game._text_close_was_pressed = mouse_pressed[0]
+        
+        # 提示文字
+        hint = "按 E / ESC / 空格 关闭"
+        hint_surf = self.game.font_small.render(hint, True, (150, 150, 150))
+        self.screen.blit(hint_surf, (panel_x + 30, panel_y + panel_h - 35))
+
+
+    def _draw_mod_manager(self):
+        """渲染 Mod 管理界面"""
+        scale = self.game.scale
+        sw = self.game.scaled_width
+        sh = self.game.scaled_height
+        
+        self.screen.fill(VOID_BLACK)
+        
+        # 标题
+        title = self.game.font_title.render("Mod 管理", True, PURPLE)
+        title_rect = title.get_rect(center=(sw // 2, int(60 * scale)))
+        self.screen.blit(title, title_rect)
+        
+        # 提示
+        hint = self.game.font_small.render("单击 Mod 查看详情，点击启用/禁用按钮切换状态（重启游戏生效）", True, GRAY)
+        hint_rect = hint.get_rect(center=(sw // 2, int(100 * scale)))
+        self.screen.blit(hint, hint_rect)
+        
+        mouse_pos = pygame.mouse.get_pos()
+        mouse_pressed = pygame.mouse.get_pressed()
+        
+        # Mod 列表区域
+        list_x = int(40 * scale)
+        list_y = int(130 * scale)
+        list_w = int(sw * 0.45)
+        list_h = int(sh - 200 * scale)
+        
+        pygame.draw.rect(self.screen, (20, 20, 30), (list_x, list_y, list_w, list_h), border_radius=6)
+        pygame.draw.rect(self.screen, (80, 60, 120), (list_x, list_y, list_w, list_h), 2, border_radius=6)
+        
+        # 获取 mod 列表
+        mods = getattr(self.game, 'mod_list_cache', [])
+        if not mods:
+            mods = mod_loader.get_all_available_mods()
+            self.game.mod_list_cache = mods
+        
+        # 绘制 mod 列表
+        item_height = int(60 * scale)
+        scroll = getattr(self.game, 'mod_manager_scroll', 0)
+        
+        # 裁剪区域
+        clip_rect = pygame.Rect(list_x + 5, list_y + 5, list_w - 10, list_h - 10)
+        self.screen.set_clip(clip_rect)
+        
+        was_pressed = getattr(self.game, '_mod_list_was_pressed', False)
+        
+        for i, mod in enumerate(mods):
+            item_y = list_y + 10 + i * (item_height + 5) - scroll
+            if item_y + item_height < list_y or item_y > list_y + list_h:
+                continue
+            
+            item_rect = pygame.Rect(list_x + 10, item_y, list_w - 20, item_height)
+            
+            # 选中高亮
+            is_selected = (self.game.mod_selected == mod.id)
+            bg_color = (50, 40, 70) if is_selected else (35, 35, 45)
+            pygame.draw.rect(self.screen, bg_color, item_rect, border_radius=4)
+            pygame.draw.rect(self.screen, (100, 80, 140), item_rect, 1, border_radius=4)
+            
+            # Mod 名称
+            name_color = (200, 180, 255) if mod.enabled else (120, 120, 120)
+            name_surf = self.game.font_large.render(mod.name, True, name_color)
+            self.screen.blit(name_surf, (item_rect.x + 15, item_rect.y + 8))
+            
+            # 版本和作者
+            info_text = f"v{mod.version} by {mod.author}"
+            info_surf = self.game.font_small.render(info_text, True, (150, 150, 150))
+            self.screen.blit(info_surf, (item_rect.x + 15, item_rect.y + 32))
+            
+            # 启用状态标签
+            status_text = "已启用" if mod.enabled else "已禁用"
+            status_color = GREEN if mod.enabled else RED
+            status_surf = self.game.font_small.render(status_text, True, status_color)
+            status_rect = status_surf.get_rect(right=item_rect.right - 15, centery=item_rect.centery)
+            self.screen.blit(status_surf, status_rect)
+            
+            # 点击选中
+            if mouse_pressed[0] and item_rect.collidepoint(mouse_pos) and not was_pressed:
+                self.game.mod_selected = mod.id
+        
+        self.game._mod_list_was_pressed = mouse_pressed[0]
+        self.screen.set_clip(None)
+        
+        # 滚动条
+        total_height = len(mods) * (item_height + 5)
+        if total_height > list_h - 10:
+            scrollbar_h = max(30, int((list_h - 10) * (list_h - 10) / total_height))
+            scrollbar_y = list_y + 5 + int(scroll / total_height * (list_h - 10 - scrollbar_h))
+            pygame.draw.rect(self.screen, (100, 80, 140), (list_x + list_w - 8, scrollbar_y, 6, scrollbar_h), border_radius=3)
+        
+        # 详情面板
+        detail_x = list_x + list_w + int(20 * scale)
+        detail_y = list_y
+        detail_w = sw - detail_x - int(40 * scale)
+        detail_h = list_h
+        
+        pygame.draw.rect(self.screen, (20, 20, 30), (detail_x, detail_y, detail_w, detail_h), border_radius=6)
+        pygame.draw.rect(self.screen, (80, 60, 120), (detail_x, detail_y, detail_w, detail_h), 2, border_radius=6)
+        
+        if self.game.mod_selected:
+            selected_mod = None
+            for mod in mods:
+                if mod.id == self.game.mod_selected:
+                    selected_mod = mod
+                    break
+            
+            if selected_mod:
+                # 名称
+                name_surf = self.game.font_large.render(selected_mod.name, True, (220, 200, 255))
+                self.screen.blit(name_surf, (detail_x + 20, detail_y + 20))
+                
+                # 版本
+                ver_surf = self.game.font_small.render(f"版本: {selected_mod.version}", True, (180, 180, 180))
+                self.screen.blit(ver_surf, (detail_x + 20, detail_y + 55))
+                
+                # 作者
+                auth_surf = self.game.font_small.render(f"作者: {selected_mod.author}", True, (180, 180, 180))
+                self.screen.blit(auth_surf, (detail_x + 20, detail_y + 80))
+                
+                # 描述（自动换行）
+                desc = selected_mod.description or "（无描述）"
+                desc_lines = self._wrap_text(desc, detail_w - 40, self.game.font_small)
+                for j, line_text in enumerate(desc_lines[:15]):
+                    desc_surf = self.game.font_small.render(line_text, True, (200, 200, 200))
+                    self.screen.blit(desc_surf, (detail_x + 20, detail_y + 115 + j * 22))
+                
+                # 启用/禁用按钮
+                btn_w = int(150 * scale)
+                btn_h = int(45 * scale)
+                btn_x = detail_x + detail_w - btn_w - 20
+                btn_y = detail_y + detail_h - btn_h - 20
+                
+                btn_rect = pygame.Rect(btn_x, btn_y, btn_w, btn_h)
+                btn_color = (60, 100, 60) if selected_mod.enabled else (100, 60, 60)
+                pygame.draw.rect(self.screen, btn_color, btn_rect, border_radius=4)
+                pygame.draw.rect(self.screen, (150, 150, 150), btn_rect, 2, border_radius=4)
+                
+                btn_text = "禁用" if selected_mod.enabled else "启用"
+                btn_surf = self.game.font_large.render(btn_text, True, WHITE)
+                btn_text_rect = btn_surf.get_rect(center=btn_rect.center)
+                self.screen.blit(btn_surf, btn_text_rect)
+                
+                # 点击切换
+                btn_was_pressed = getattr(self.game, '_mod_toggle_was_pressed', False)
+                if mouse_pressed[0] and btn_rect.collidepoint(mouse_pos) and not btn_was_pressed:
+                    new_enabled = not selected_mod.enabled
+                    mod_loader.toggle_mod(selected_mod.id, new_enabled)
+                    selected_mod.enabled = new_enabled
+                    self.game.logger.info(f"Mod '{selected_mod.name}' 已{'启用' if new_enabled else '禁用'}（重启生效）")
+                self.game._mod_toggle_was_pressed = mouse_pressed[0]
+        else:
+            # 未选中提示
+            hint_text = "← 从左侧选择一个 Mod 查看详情"
+            hint_surf = self.game.font_large.render(hint_text, True, (120, 120, 120))
+            hint_rect = hint_surf.get_rect(center=(detail_x + detail_w // 2, detail_y + detail_h // 2))
+            self.screen.blit(hint_surf, hint_rect)
+        
+        # 返回按钮
+        back_btn_w = int(150 * scale)
+        back_btn_h = int(45 * scale)
+        back_btn_x = sw // 2 - back_btn_w // 2
+        back_btn_y = sh - back_btn_h - int(20 * scale)
+        
+        back_btn_rect = pygame.Rect(back_btn_x, back_btn_y, back_btn_w, back_btn_h)
+        back_color = (80, 40, 40) if back_btn_rect.collidepoint(mouse_pos) else (60, 30, 30)
+        pygame.draw.rect(self.screen, back_color, back_btn_rect, border_radius=4)
+        pygame.draw.rect(self.screen, DARK_RED, back_btn_rect, 2, border_radius=4)
+        
+        back_text = self.game.font_large.render("返回菜单", True, WHITE)
+        back_text_rect = back_text.get_rect(center=back_btn_rect.center)
+        self.screen.blit(back_text, back_text_rect)
+        
+        back_was_pressed = getattr(self.game, '_mod_back_was_pressed', False)
+        if mouse_pressed[0] and back_btn_rect.collidepoint(mouse_pos) and not back_was_pressed:
+            self.game.state = GameState.MENU
+            self.game.mod_manager_scroll = 0
+            self.game.mod_selected = None
+        self.game._mod_back_was_pressed = mouse_pressed[0]
 
     def _draw_story_archive(self):
         """剧情资料库界面"""
@@ -296,6 +649,464 @@ class Renderer:
                 self.screen.blit(line_surf, (detail_x + 15, content_y))
                 content_y += 22 * scale
 
+        # 返回按钮
+        back_btn = self.game.story_back_btn
+        mouse_pos = pygame.mouse.get_pos()
+        mouse_pressed = pygame.mouse.get_pressed()
+        if back_btn.update(mouse_pos, mouse_pressed, self.game.touch_events, scale):
+            self.game.logger.info("剧情资料库返回菜单")
+            self.game.state = GameState.MENU
+            self.game.story_archive_scroll = 0
+            self.game.story_archive_selected = None
+        back_btn.draw(self.screen, self.game.font_large, scale)
+
+    def _draw_codex(self):
+        """图鉴界面"""
+        from ui import Button
+        from codex import MONSTER_CODEX, WEAPON_CODEX, MONSTER_CATEGORIES, WEAPON_CATEGORIES, RARITY_COLORS, THREAT_COLORS, get_monster_by_category, get_weapon_by_category
+
+        self.screen.fill(VOID_BLACK)
+        scale = self.game.scale
+        sw = self.game.scaled_width
+        sh = self.game.scaled_height
+
+        # 标题
+        title = self.game.font_title.render("图鉴", True, GOLD)
+        title_rect = title.get_rect(center=(sw // 2, int(40 * scale)))
+        self.screen.blit(title, title_rect)
+
+        # 标签页按钮
+        mouse_pos = pygame.mouse.get_pos()
+        mouse_pressed = pygame.mouse.get_pressed()
+
+        for i, btn in enumerate(self.game.codex_tab_buttons):
+            if self.game.codex_tab == "monster" and i == 0:
+                btn.color = CRIMSON
+            elif self.game.codex_tab == "weapon" and i == 1:
+                btn.color = CYAN
+            elif self.game.codex_tab == "world" and i == 2:
+                btn.color = PURPLE
+            else:
+                btn.color = DARK_GRAY
+            if btn.update(mouse_pos, mouse_pressed, self.game.touch_events, scale):
+                if i == 0:
+                    self.game.codex_tab = "monster"
+                    self.game.codex_category = "全部"
+                    self.game.codex_scroll = 0
+                    self.game.codex_selected = None
+                elif i == 1:
+                    self.game.codex_tab = "weapon"
+                    self.game.codex_category = "全部"
+                    self.game.codex_scroll = 0
+                    self.game.codex_selected = None
+                else:
+                    self.game.codex_tab = "world"
+                    self.game.codex_world_selected = "origin"
+                    self.game.codex_scroll = 0
+            btn.draw(self.screen, self.game.font_large, scale)
+        
+        # 世界观标签页
+        if self.game.codex_tab == "world":
+            self._draw_world_lore(mouse_pos, mouse_pressed)
+            return
+
+        # 分类按钮
+        categories = MONSTER_CATEGORIES if self.game.codex_tab == "monster" else WEAPON_CATEGORIES
+        cat_y = int(140 * scale)
+        cat_x_start = int(20 * scale)
+        cat_btn_width = int(80 * scale)
+        cat_btn_height = int(35 * scale)
+        cat_spacing = int(10 * scale)
+
+        # 检测鼠标点击（使用简单的矩形碰撞检测）
+        mouse_clicked = False
+        if hasattr(self.game, '_codex_mouse_was_pressed') and self.game._codex_mouse_was_pressed and not mouse_pressed[0]:
+            mouse_clicked = True
+        self.game._codex_mouse_was_pressed = mouse_pressed[0]
+
+        for i, cat in enumerate(categories):
+            cat_x = cat_x_start + i * (cat_btn_width + cat_spacing)
+            if cat_x + cat_btn_width > sw - 20:
+                break
+            cat_color = CYAN if self.game.codex_category == cat else DARK_GRAY
+            cat_rect = pygame.Rect(cat_x, cat_y, cat_btn_width, cat_btn_height)
+            
+            # 绘制按钮背景
+            pygame.draw.rect(self.screen, cat_color, cat_rect)
+            pygame.draw.rect(self.screen, WHITE, cat_rect, 2)
+            
+            # 绘制按钮文字
+            cat_text = self.game.font_small.render(cat, True, WHITE)
+            cat_text_rect = cat_text.get_rect(center=cat_rect.center)
+            self.screen.blit(cat_text, cat_text_rect)
+            
+            # 检测点击
+            if mouse_clicked and cat_rect.collidepoint(mouse_pos):
+                self.game.codex_category = cat
+                self.game.codex_scroll = 0
+                self.game.codex_selected = None
+                self.game.logger.info(f"图鉴切换分类: {cat}")
+
+        # 获取当前分类的条目
+        if self.game.codex_tab == "monster":
+            entries = get_monster_by_category(self.game.codex_category)
+            codex_data = MONSTER_CODEX
+        else:
+            entries = get_weapon_by_category(self.game.codex_category)
+            codex_data = WEAPON_CODEX
+
+        # 左侧条目列表
+        list_x = int(20 * scale)
+        list_y = int(190 * scale)
+        list_width = int(280 * scale)
+        list_height = int(sh - 280 * scale)
+        item_height = int(50 * scale)
+
+        # 绘制列表背景
+        pygame.draw.rect(self.screen, CHARCOAL, (list_x, list_y, list_width, list_height))
+        pygame.draw.rect(self.screen, DARK_GRAY, (list_x, list_y, list_width, list_height), 2)
+
+        # 拖拽滚动（支持鼠标和触摸）
+        list_rect = pygame.Rect(list_x, list_y, list_width, list_height)
+        is_dragging = getattr(self.game, '_codex_dragging', False)
+        drag_start_y = getattr(self.game, '_codex_drag_start_y', 0)
+        drag_start_scroll = getattr(self.game, '_codex_drag_start_scroll', 0)
+        max_scroll = max(0, len(entries) * item_height - list_height)
+        
+        # 检测触摸事件（touch_events 是 dict 列表）
+        touch_in_list = False
+        for te in self.game.touch_events:
+            te_type = te.get("type", "")
+            te_pos = te.get("pos", (0, 0))
+            if te_type == "down" and list_rect.collidepoint(te_pos[0], te_pos[1]):
+                touch_in_list = True
+                self.game._codex_dragging = True
+                self.game._codex_drag_start_y = te_pos[1]
+                self.game._codex_drag_start_scroll = self.game.codex_scroll
+            elif te_type == "move" and is_dragging:
+                current_y = te_pos[1]
+                delta = drag_start_y - current_y
+                self.game.codex_scroll = max(0, min(max_scroll, drag_start_scroll + delta))
+            elif te_type == "up":
+                self.game._codex_dragging = False
+        
+        # 鼠标拖拽
+        if list_rect.collidepoint(mouse_pos):
+            if mouse_pressed[0] and not is_dragging and not getattr(self.game, '_codex_mouse_was_pressed', False):
+                self.game._codex_dragging = True
+                self.game._codex_drag_start_y = mouse_pos[1]
+                self.game._codex_drag_start_scroll = self.game.codex_scroll
+            elif mouse_pressed[0] and is_dragging:
+                delta = drag_start_y - mouse_pos[1]
+                self.game.codex_scroll = max(0, min(max_scroll, drag_start_scroll + delta))
+            elif not mouse_pressed[0]:
+                self.game._codex_dragging = False
+        
+        # 滚动边界限制
+        self.game.codex_scroll = min(self.game.codex_scroll, max_scroll)
+
+        # 绘制条目
+        for i, entry_key in enumerate(entries):
+            item_y = list_y + i * item_height - self.game.codex_scroll
+            if item_y < list_y or item_y + item_height > list_y + list_height:
+                continue
+
+            entry = codex_data.get(entry_key, {})
+            name = entry.get("name", entry_key)
+            
+            # 检查解锁状态
+            if self.game.codex_tab == "monster":
+                is_unlocked = codex_unlock_manager.is_monster_unlocked(entry_key)
+            else:
+                is_unlocked = codex_unlock_manager.is_weapon_unlocked(entry_key)
+
+            # 选中高亮
+            if self.game.codex_selected == entry_key:
+                pygame.draw.rect(self.screen, DARK_BLUE, (list_x + 2, item_y, list_width - 4, item_height - 2))
+            else:
+                pygame.draw.rect(self.screen, (40, 40, 40), (list_x + 2, item_y, list_width - 4, item_height - 2))
+
+            # 名称（未解锁显示???）
+            display_name = name if is_unlocked else "???"
+            name_color = WHITE if is_unlocked else GRAY
+            name_text = self.game.font_small.render(display_name, True, name_color)
+            self.screen.blit(name_text, (list_x + 15, item_y + 10))
+            
+            # 锁定图标
+            if not is_unlocked:
+                lock_text = self.game.font_small.render("🔒", True, GRAY)
+                self.screen.blit(lock_text, (list_x + list_width - 30, item_y + 12))
+
+            # 分类/稀有度（未解锁显示未知）
+            if is_unlocked:
+                if self.game.codex_tab == "monster":
+                    threat = entry.get("threat", "未知")
+                    threat_color = THREAT_COLORS.get(threat, GRAY)
+                    cat_text = self.game.font_small.render(f"威胁: {threat}", True, threat_color)
+                else:
+                    rarity = entry.get("rarity", "普通")
+                    rarity_color = RARITY_COLORS.get(rarity, GRAY)
+                    cat_text = self.game.font_small.render(f"稀有度: {rarity}", True, rarity_color)
+            else:
+                cat_text = self.game.font_small.render("未解锁", True, GRAY)
+            self.screen.blit(cat_text, (list_x + 15, item_y + 28))
+
+            # 点击选择
+            item_rect = pygame.Rect(list_x, item_y, list_width, item_height)
+            if item_rect.collidepoint(mouse_pos) and mouse_pressed[0]:
+                self.game.codex_selected = entry_key
+
+        # 滚动条
+        if max_scroll > 0:
+            scrollbar_height = int(list_height * (list_height / (len(entries) * item_height)))
+            scrollbar_y = list_y + int(self.game.codex_scroll / max_scroll * (list_height - scrollbar_height))
+            pygame.draw.rect(self.screen, GRAY, (list_x + list_width - 8, scrollbar_y, 6, scrollbar_height))
+
+        # 右侧详情面板
+        detail_x = list_x + list_width + int(20 * scale)
+        detail_y = list_y
+        detail_width = sw - detail_x - int(20 * scale)
+        detail_height = list_height
+
+        pygame.draw.rect(self.screen, CHARCOAL, (detail_x, detail_y, detail_width, detail_height))
+        pygame.draw.rect(self.screen, DARK_GRAY, (detail_x, detail_y, detail_width, detail_height), 2)
+
+        if self.game.codex_selected:
+            entry = codex_data.get(self.game.codex_selected, {})
+            # 检查解锁状态
+            if self.game.codex_tab == "monster":
+                is_unlocked = codex_unlock_manager.is_monster_unlocked(self.game.codex_selected)
+            else:
+                is_unlocked = codex_unlock_manager.is_weapon_unlocked(self.game.codex_selected)
+            
+            if is_unlocked:
+                name = entry.get("name", "未知")
+                description = entry.get("description", "")
+                stats = entry.get("stats", {})
+                lore = entry.get("lore", "")
+            else:
+                name = "???"
+                description = "尚未解锁。在游戏中遇到此怪物或获得此武器后即可解锁图鉴详情。"
+                stats = {}
+                lore = ""
+
+            # 名称
+            name_text = self.game.font_large.render(name, True, GOLD)
+            self.screen.blit(name_text, (detail_x + 20, detail_y + 20))
+
+            # 描述
+            desc_y = detail_y + 70
+            desc_lines = self._wrap_text(description, detail_width - 40, self.game.font_small)
+            for line in desc_lines[:4]:
+                desc_text = self.game.font_small.render(line, True, LIGHT_GRAY)
+                self.screen.blit(desc_text, (detail_x + 20, desc_y))
+                desc_y += 25
+
+            # 属性
+            stats_y = desc_y + 20
+            stats_title = self.game.font_small.render("属性", True, CYAN)
+            self.screen.blit(stats_title, (detail_x + 20, stats_y))
+            stats_y += 30
+
+            for stat_name, stat_value in stats.items():
+                stat_text = self.game.font_small.render(f"  {stat_name}: {stat_value}", True, WHITE)
+                self.screen.blit(stat_text, (detail_x + 20, stats_y))
+                stats_y += 25
+
+            # 弱点/稀有度
+            if self.game.codex_tab == "monster":
+                weakness = entry.get("weakness", "未知")
+                weakness_text = self.game.font_small.render(f"弱点: {weakness}", True, YELLOW)
+                self.screen.blit(weakness_text, (detail_x + 20, stats_y + 10))
+            else:
+                rarity = entry.get("rarity", "普通")
+                rarity_color = RARITY_COLORS.get(rarity, GRAY)
+                rarity_text = self.game.font_small.render(f"稀有度: {rarity}", True, rarity_color)
+                self.screen.blit(rarity_text, (detail_x + 20, stats_y + 10))
+
+            # 背景故事
+            lore_y = detail_y + detail_height - 150
+            lore_title = self.game.font_small.render("背景故事", True, AMBER)
+            self.screen.blit(lore_title, (detail_x + 20, lore_y))
+            lore_y += 30
+
+            lore_lines = self._wrap_text(lore, detail_width - 40, self.game.font_small)
+            for line in lore_lines[:5]:
+                lore_text = self.game.font_small.render(line, True, LIGHT_GRAY)
+                self.screen.blit(lore_text, (detail_x + 20, lore_y))
+                lore_y += 25
+        else:
+            # 未选择时的提示
+            hint = self.game.font_large.render("选择左侧条目查看详情", True, DARK_GRAY)
+            hint_rect = hint.get_rect(center=(detail_x + detail_width // 2, detail_y + detail_height // 2))
+            self.screen.blit(hint, hint_rect)
+
+        # 返回按钮
+        back_btn = self.game.codex_back_btn
+        if back_btn.update(mouse_pos, mouse_pressed, self.game.touch_events, scale):
+            self.game.logger.info("图鉴返回菜单")
+            self.game.state = GameState.MENU
+            self.game.codex_scroll = 0
+            self.game.codex_selected = None
+        back_btn.draw(self.screen, self.game.font_large, scale)
+
+    def _draw_world_lore(self, mouse_pos, mouse_pressed):
+        """渲染世界观图鉴"""
+        from codex import WORLD_LORE
+        from ui import ScrollablePanel
+        
+        scale = self.game.scale
+        sw = self.game.scaled_width
+        sh = self.game.scaled_height
+        
+        # 左侧条目列表
+        list_x = int(20 * scale)
+        list_y = int(140 * scale)
+        list_w = int(200 * scale)
+        list_h = int(sh - 200 * scale)
+        
+        # 列表背景
+        pygame.draw.rect(self.screen, (30, 30, 45), (list_x, list_y, list_w, list_h))
+        pygame.draw.rect(self.screen, (100, 100, 140), (list_x, list_y, list_w, list_h), 2)
+        
+        # 世界观条目（支持滚动）
+        lore_items = list(WORLD_LORE.items())
+        item_height = int(40 * scale)
+        total_list_height = len(lore_items) * (item_height + 5) + 10
+        max_scroll = max(0, total_list_height - list_h + 10)
+        
+        # 初始化滚动位置
+        if not hasattr(self.game, 'codex_world_list_scroll'):
+            self.game.codex_world_list_scroll = 0
+        
+        # 列表区域的鼠标滚轮处理（通过全局滚轮事件间接处理，这里用拖动）
+        list_rect = pygame.Rect(list_x, list_y, list_w, list_h)
+        
+        # 触控/鼠标拖动列表滚动
+        if not hasattr(self.game, '_world_list_dragging'):
+            self.game._world_list_dragging = False
+            self.game._world_list_drag_start_y = 0
+            self.game._world_list_drag_start_scroll = 0
+        
+        if list_rect.collidepoint(mouse_pos):
+            if mouse_pressed[0]:
+                if not getattr(self.game, '_world_list_pressed', False):
+                    # 刚按下，记录起始位置，暂不判定为拖动
+                    self.game._world_list_pressed = True
+                    self.game._world_list_drag_start_y = mouse_pos[1]
+                    self.game._world_list_drag_start_scroll = self.game.codex_world_list_scroll
+                    self.game._world_list_dragging = False
+                else:
+                    dy = mouse_pos[1] - self.game._world_list_drag_start_y
+                    if abs(dy) > 5:  # 移动超过5像素才判定为拖动
+                        self.game._world_list_dragging = True
+                    if self.game._world_list_dragging:
+                        self.game.codex_world_list_scroll = max(0, min(max_scroll, self.game._world_list_drag_start_scroll - dy))
+            else:
+                self.game._world_list_pressed = False
+                self.game._world_list_dragging = False
+        else:
+            if not mouse_pressed[0]:
+                self.game._world_list_pressed = False
+                self.game._world_list_dragging = False
+        
+        # 绘制条目（使用裁剪区域）
+        clip_rect = pygame.Rect(list_x + 5, list_y + 5, list_w - 10, list_h - 10)
+        self.screen.set_clip(clip_rect)
+        
+        was_pressed = getattr(self.game, '_world_btn_was_pressed', False)
+        for i, (key, data) in enumerate(lore_items):
+            item_y = list_y + 10 + i * (item_height + 5) - self.game.codex_world_list_scroll
+            if item_y + item_height < list_y or item_y > list_y + list_h:
+                continue
+            is_selected = self.game.codex_world_selected == key
+            bg_color = PURPLE if is_selected else (50, 50, 70)
+            pygame.draw.rect(self.screen, bg_color, (list_x + 10, item_y, list_w - 20, item_height))
+            pygame.draw.rect(self.screen, WHITE, (list_x + 10, item_y, list_w - 20, item_height), 1)
+            
+            title_text = self.game.font_small.render(data["title"], True, WHITE)
+            self.screen.blit(title_text, (list_x + 20, item_y + 10))
+            
+            # 点击检测（按下沿触发，且不是拖动）
+            item_rect = pygame.Rect(list_x + 10, item_y, list_w - 20, item_height)
+            if mouse_pressed[0] and item_rect.collidepoint(mouse_pos) and not was_pressed and not self.game._world_list_dragging:
+                self.game.codex_world_selected = key
+                self.game.codex_scroll = 0
+                if hasattr(self.game, '_world_scroll_panel') and self.game._world_scroll_panel:
+                    self.game._world_scroll_panel.scroll_y = 0
+        self.game._world_btn_was_pressed = mouse_pressed[0]
+        
+        self.screen.set_clip(None)
+        
+        # 滚动条
+        if max_scroll > 0:
+            scrollbar_h = max(20, int(list_h * (list_h / total_list_height)))
+            scrollbar_y = list_y + int((self.game.codex_world_list_scroll / max_scroll) * (list_h - scrollbar_h))
+            pygame.draw.rect(self.screen, (150, 150, 180), (list_x + list_w - 8, scrollbar_y, 6, scrollbar_h), border_radius=3)
+        
+        # 右侧详情面板（使用 ScrollablePanel）
+        detail_x = list_x + list_w + int(20 * scale)
+        detail_y = list_y
+        detail_w = sw - detail_x - int(20 * scale)
+        detail_h = list_h
+        
+        selected_data = WORLD_LORE.get(self.game.codex_world_selected, {})
+        title = selected_data.get("title", "")
+        content_text = selected_data.get("content", "")
+        
+        # 创建或更新 ScrollablePanel
+        if not hasattr(self.game, '_world_scroll_panel') or self.game._world_scroll_panel is None:
+            self.game._world_scroll_panel = ScrollablePanel(
+                detail_x, detail_y, detail_w, detail_h,
+                title=title, font=self.game.font_small, title_font=self.game.font_large
+            )
+        
+        panel = self.game._world_scroll_panel
+        panel.x = detail_x
+        panel.y = detail_y
+        panel.width = detail_w
+        panel.height = detail_h
+        panel.title = title
+        panel.set_content(content_text)
+        
+        # 处理输入
+        panel.handle_mouse(mouse_pos, mouse_pressed)
+        if hasattr(self.game, 'touch_events'):
+            panel.handle_touch(self.game.touch_events)
+        
+        # 绘制
+        panel.draw(self.screen)
+        
+        # 返回按钮
+        back_btn = self.game.codex_back_btn
+        if back_btn.update(mouse_pos, mouse_pressed, self.game.touch_events, scale):
+            self.game.logger.info("图鉴返回菜单")
+            self.game.state = GameState.MENU
+            self.game.codex_scroll = 0
+            self.game.codex_selected = None
+        back_btn.draw(self.screen, self.game.font_large, scale)
+
+
+    def _wrap_text(self, text, max_width, font):
+        """简单的文本换行（按字符分割，支持中文）"""
+        lines = []
+        current_line = ""
+        for char in text:
+            if char == '\n':
+                lines.append(current_line)
+                current_line = ""
+                continue
+            test_line = current_line + char
+            if font.size(test_line)[0] <= max_width:
+                current_line = test_line
+            else:
+                if current_line:
+                    lines.append(current_line)
+                current_line = char
+        if current_line:
+            lines.append(current_line)
+        return lines
+
     def _draw_settings(self):
         self.screen.fill(VOID_BLACK)
         scale = self.game.scale
@@ -309,27 +1120,67 @@ class Renderer:
         mouse_pressed = pygame.mouse.get_pressed()
 
         for i, btn in enumerate(self.game.settings_buttons):
-            btn.base_y = (180 + i * 65)
+            btn.base_y = (140 + i * 55)
             if i == 0:
-                btn.text = f"控制: {'触控' if self.game.config.control_mode == ControlMode.TOUCH else '键控'}"
+                btn.text = f"音效音量: {int(self.game.config.sound_volume * 100)}%"
             elif i == 1:
-                btn.text = f"模式: {'无尽' if self.game.config.game_mode == GameMode.ENDLESS else '限时'}"
+                btn.text = f"音乐音量: {int(self.game.config.music_volume * 100)}%"
             elif i == 2:
-                btn.text = f"难度: {self.game.config.difficulty}"
+                qn = {"performance": "性能", "balanced": "均衡", "quality": "质量"}
+                btn.text = f"画质: {qn.get(self.game.config.graphics_quality, '均衡')}"
+            elif i == 3:
+                btn.text = f"外部图片: {'开' if self.game.config.use_external_assets else '关'}"
+            elif i == 4:
+                btn.text = f"Buff特效: {'开' if self.game.config.render_buff_effects else '关'}"
+            elif i == 5:
+                btn.text = f"伤害数字: {'开' if self.game.config.show_damage_numbers else '关'}"
+            elif i == 6:
+                btn.text = f"屏幕震动: {'开' if self.game.config.screen_shake else '关'}"
+            elif i == 7:
+                btn.text = f"控制: {'触控' if self.game.config.control_mode == ControlMode.TOUCH else '键控'}"
 
             if btn.update(mouse_pos, mouse_pressed, self.game.touch_events, scale):
                 self.game.logger.info(f"设置按钮 '{btn.text}' 被点击")
                 if i == 0:
-                    self.game.config.control_mode = ControlMode.TOUCH if self.game.config.control_mode == ControlMode.KEYBOARD else ControlMode.KEYBOARD
+                    vols = [0.0, 0.25, 0.5, 0.75, 1.0]
+                    cur = self.game.config.sound_volume
+                    idx = min(range(len(vols)), key=lambda x: abs(vols[x] - cur))
+                    self.game.config.sound_volume = vols[(idx + 1) % len(vols)]
+                    self.game.assets.set_sound_volume(self.game.config.sound_volume)
                 elif i == 1:
-                    self.game.config.game_mode = GameMode.ENDLESS if self.game.config.game_mode == GameMode.TIMED else GameMode.TIMED
+                    vols = [0.0, 0.25, 0.5, 0.75, 1.0]
+                    cur = self.game.config.music_volume
+                    idx = min(range(len(vols)), key=lambda x: abs(vols[x] - cur))
+                    self.game.config.music_volume = vols[(idx + 1) % len(vols)]
+                    self.game.assets.set_music_volume(self.game.config.music_volume)
                 elif i == 2:
-                    difficulties = ["简单", "普通", "困难", "地狱"]
-                    idx = difficulties.index(self.game.config.difficulty) if self.game.config.difficulty in difficulties else 1
-                    self.game.config.difficulty = difficulties[(idx + 1) % len(difficulties)]
+                    qs = ["performance", "balanced", "quality"]
+                    cur = self.game.config.graphics_quality
+                    idx = qs.index(cur) if cur in qs else 1
+                    self.game.config.graphics_quality = qs[(idx + 1) % len(qs)]
+                    # 画质变化时清除缓存
+                    for attr in ['_trauma_cache_key', '_blood_template_cache', '_buff_edge_cache',
+                                 '_heat_cache', '_frost_cache', '_hb_cache']:
+                        if hasattr(self, attr):
+                            delattr(self, attr)
                 elif i == 3:
+                    self.game.config.use_external_assets = not self.game.config.use_external_assets
+                elif i == 4:
+                    self.game.config.render_buff_effects = not self.game.config.render_buff_effects
+                elif i == 5:
+                    self.game.config.show_damage_numbers = not self.game.config.show_damage_numbers
+                elif i == 6:
+                    self.game.config.screen_shake = not self.game.config.screen_shake
+                    self.game.camera.shake_enabled = self.game.config.screen_shake
+                elif i == 7:
+                    self.game.config.control_mode = ControlMode.TOUCH if self.game.config.control_mode == ControlMode.KEYBOARD else ControlMode.KEYBOARD
+                elif i == 8:
                     self.game.config.save()
-                    self.game.state = GameState.MENU
+                    if getattr(self.game, 'settings_from_pause', False):
+                        self.game.settings_from_pause = False
+                        self.game.state = GameState.PAUSED
+                    else:
+                        self.game.state = GameState.MENU
 
             btn.draw(self.screen, self.game.font_large, scale)
 
@@ -401,6 +1252,10 @@ class Renderer:
         # 绘制世界
         self.game.world.draw(self.screen, cam_x, cam_y, scale, self.game.assets)
 
+        # 绘制可拾取文本资料
+        for text_item in self.game.text_items:
+            text_item.draw(self.screen, cam_x, cam_y, scale, self.game.assets)
+
         # 绘制剧情收集物（故事模式）
         if self.game.config.game_mode == GameMode.STORY:
             for item in self.game.story_fragment_items:
@@ -430,12 +1285,40 @@ class Renderer:
         for orb in self.game.exp_orbs:
             orb.draw(self.screen, cam_x, cam_y, scale)
 
+        # 绘制敌人特殊攻击前摇预警（在敌人下方）
+        for enemy in self.game.enemies:
+            if getattr(enemy, "special_windup_timer", 0) > 0 and getattr(enemy, "special_windup_radius", 0) > 0:
+                ex = int((enemy.x - cam_x) * scale)
+                ey = int((enemy.y - cam_y) * scale)
+                r = int(enemy.special_windup_radius * scale)
+                # 前摇进度（0到1，越接近1越危险）
+                windup_config = getattr(enemy, "_get_windup_config", lambda x: None)(enemy.special_windup_type)
+                total_duration = windup_config["duration"] if windup_config else 1.0
+                progress = 1.0 - (enemy.special_windup_timer / total_duration)
+                # 绘制半透明红色预警圆圈
+                warning_surface = pygame.Surface((r * 2, r * 2), pygame.SRCALPHA)
+                alpha = int(80 + 100 * progress)  # 透明度随进度增加
+                pygame.draw.circle(warning_surface, (255, 50, 50, alpha), (r, r), r)
+                pygame.draw.circle(warning_surface, (255, 100, 100, 200), (r, r), r, max(2, int(3 * scale)))
+                self.screen.blit(warning_surface, (ex - r, ey - r))
+                # 绘制前摇进度条
+                bar_width = int(40 * scale)
+                bar_height = int(4 * scale)
+                bar_x = ex - bar_width // 2
+                bar_y = ey - r - int(15 * scale)
+                pygame.draw.rect(self.screen, (50, 50, 50), (bar_x, bar_y, bar_width, bar_height))
+                pygame.draw.rect(self.screen, (255, 100, 100), (bar_x, bar_y, int(bar_width * progress), bar_height))
+
         # 绘制敌人
         for enemy in self.game.enemies:
             enemy.draw(self.screen, cam_x, cam_y, self.game.font, scale, self.game.assets)
 
         # 绘制玩家
         player.draw(self.screen, cam_x, cam_y, self.game.font, scale)
+
+        # 近战挥砍动画
+        if hasattr(self.game, 'melee_attack_active') and self.game.melee_attack_active:
+            self._draw_melee_attack(cam_x, cam_y, scale)
 
         # 绘制投射物
         for proj in self.game.projectiles:
@@ -534,11 +1417,26 @@ class Renderer:
         # 绘制创伤效果（屏幕边缘血溅）
         self._draw_trauma_effect()
 
+        # 绘制吸血屏幕效果
+        self._draw_lifesteal_effect()
+
+        # 绘制Buff屏幕效果（回血发绿、狂暴动态模糊等）
+        self._draw_buff_screen_effect()
+
         # 绘制枪口闪光
         self._draw_muzzle_flash()
 
         # 绘制HUD
         self._draw_hud()
+
+        # 动态光照层（在世界/实体/HUD之后，触控控件之前）
+        if hasattr(self.game, 'lighting') and self.game.state == GameState.PLAYING:
+            self.game.lighting.render(
+                self.screen, self.game.camera.x, self.game.camera.y, self.game.scale,
+                player=self.game.player,
+                enemies=self.game.enemies,
+                projectiles=getattr(self.game, 'projectiles', []),
+            )
 
         # 绘制触控控件
         if self.game.config.control_mode == ControlMode.TOUCH or self.game.is_android:
@@ -651,10 +1549,18 @@ class Renderer:
             self.screen.blit(surf, (bg_rect.x + int(10*scale), bg_rect.y + int(5*scale)))
             toast_y += int(h+14*scale)
 
+        # Mod 钩子：自定义HUD渲染
+        try:
+            import mod_loader
+            mod_loader.trigger_hook("on_render_hud", self.screen, self.game)
+        except Exception:
+            pass
+
     def _draw_hud(self):
         scale = self.game.scale
         sw = self.game.scaled_width
         player = self.game.player
+
 
         # === Buff状态栏（右上角）===
         self._draw_buff_bar()
@@ -754,86 +1660,121 @@ class Renderer:
                     countdown_text = self.game.font_small.render(f"尸潮: {time_to_horde}s", True, (*RED[:3], 150))
                     self.screen.blit(countdown_text, (bar_x + bar_w + 5, bar_y - 2))
 
-        # HP条 - 左上方
-        hp_ratio = player.hp / player.max_hp
-        bar_w = int(180 * scale)
-        bar_h = max(3, int(16 * scale))
-        pygame.draw.rect(self.screen, DARK_RED, (15, 15, bar_w, bar_h))
-        pygame.draw.rect(self.screen, RED if hp_ratio > 0.3 else CRIMSON, (15, 15, int(bar_w * hp_ratio), bar_h))
-        pygame.draw.rect(self.screen, WHITE, (15, 15, bar_w, bar_h), max(1, int(scale)))
-        hp_text = self.game.font.render(f"{int(player.hp)}/{int(player.max_hp)}", True, WHITE)
-        self.screen.blit(hp_text, (20, 16))
+        # ========== 底部中央状态栏（大尺寸、明显） ==========
+        screen_w = self.screen.get_width()
+        screen_h = self.screen.get_height()
+        bar_w = int(460 * scale)
+        bar_x = (screen_w - bar_w) // 2
+        bar_bottom = screen_h - int(20 * scale)
 
-        # 经验条
+        # 经验条（最底部）
         exp_ratio = player.exp / player.exp_to_level
-        exp_h = max(2, int(10 * scale))
-        pygame.draw.rect(self.screen, DARK_GRAY, (15, 15 + bar_h + 5, bar_w, exp_h))
-        pygame.draw.rect(self.screen, CYAN, (15, 15 + bar_h + 5, int(bar_w * exp_ratio), exp_h))
-        pygame.draw.rect(self.screen, WHITE, (15, 15 + bar_h + 5, bar_w, exp_h), max(1, int(scale)))
+        exp_h = max(4, int(12 * scale))
+        exp_y = bar_bottom - exp_h
+        pygame.draw.rect(self.screen, (15, 25, 35), (bar_x, exp_y, bar_w, exp_h), border_radius=3)
+        pygame.draw.rect(self.screen, (60, 200, 230), (bar_x, exp_y, int(bar_w * exp_ratio), exp_h), border_radius=3)
+        pygame.draw.rect(self.screen, (*WHITE[:3], 160), (bar_x, exp_y, bar_w, exp_h), max(1, int(scale * 0.7)), border_radius=3)
+        exp_label = self.game.font_small.render(f"EXP {int(player.exp)}/{int(player.exp_to_level)}", True, (120, 220, 240))
+        # 经验条文字放在经验条右侧，避免与左侧标签重叠
+        self.screen.blit(exp_label, (bar_x + bar_w + int(10*scale), exp_y - 1))
 
-        # 等级和分数
-        level_text = self.game.font.render(f"Lv.{player.level}  分:{player.score}", True, GOLD)
-        self.screen.blit(level_text, (15, 15 + bar_h + exp_h + 10))
+        # 体力条（中间）
+        stamina_ratio = player.stamina / player.max_stamina if player.max_stamina > 0 else 0
+        stamina_h = max(4, int(14 * scale))
+        stamina_y = exp_y - stamina_h - int(6 * scale)
+        stamina_color = (70, 170, 255)
+        if player.stamina_exhausted:
+            stamina_color = (220, 70, 70)
+        elif player.sprinting:
+            stamina_color = (255, 200, 70)
+        pygame.draw.rect(self.screen, (20, 25, 40), (bar_x, stamina_y, bar_w, stamina_h), border_radius=4)
+        pygame.draw.rect(self.screen, stamina_color, (bar_x, stamina_y, int(bar_w * stamina_ratio), stamina_h), border_radius=4)
+        pygame.draw.rect(self.screen, (*WHITE[:3], 180), (bar_x, stamina_y, bar_w, stamina_h), max(1, int(scale * 0.8)), border_radius=4)
+        sta_label = self.game.font_small.render(
+            f"体力 {int(player.stamina)}/{int(player.max_stamina)}", True, (*stamina_color[:3], 220))
+        # 体力标签+数字放在体力条右侧
+        self.screen.blit(sta_label, (bar_x + bar_w + int(10*scale), stamina_y + 1))
 
-        # 武器显示
+        # HP条（顶部，最粗最明显）
+        hp_ratio = player.hp / player.max_hp
+        hp_h = max(6, int(24 * scale))
+        hp_y = stamina_y - hp_h - int(6 * scale)
+        pygame.draw.rect(self.screen, (35, 8, 8), (bar_x, hp_y, bar_w, hp_h), border_radius=6)
+        if hp_ratio > 0.5:
+            hp_color = (50, 210, 90)
+        elif hp_ratio > 0.25:
+            hp_color = (235, 180, 40)
+        else:
+            hp_color = (225, 50, 50)
+        pygame.draw.rect(self.screen, hp_color, (bar_x, hp_y, int(bar_w * hp_ratio), hp_h), border_radius=6)
+        # HP条高光
+        if hp_ratio > 0.05:
+            highlight_h = max(1, int(hp_h * 0.35))
+            pygame.draw.rect(self.screen, (*WHITE[:3], 60), (bar_x + 2, hp_y + 2, int(bar_w * hp_ratio) - 4, highlight_h), border_radius=3)
+        pygame.draw.rect(self.screen, (*WHITE[:3], 200), (bar_x, hp_y, bar_w, hp_h), max(1, int(scale)), border_radius=6)
+        hp_text = self.game.font.render(f"{int(player.hp)}/{int(player.max_hp)}", True, WHITE)
+        # HP文字放在HP条右侧
+        self.screen.blit(hp_text, (bar_x + bar_w + int(10*scale), hp_y + 3))
+        hp_label = self.game.font_small.render("生命", True, (*hp_color[:3], 220))
+        # 生命标签放在HP条右侧
+        self.screen.blit(hp_label, (bar_x + bar_w + int(10*scale), hp_y + 4))
+
+        # 等级和分数（状态栏左侧，不与右侧文字冲突）
+        level_text = self.game.font.render(f"Lv.{player.level}", True, GOLD)
+        self.screen.blit(level_text, (bar_x - level_text.get_width() - int(15*scale), hp_y + 3))
+        score_text = self.game.font_small.render(f"分:{player.score}", True, (*GOLD[:3], 180))
+        self.screen.blit(score_text, (bar_x - score_text.get_width() - int(15*scale), hp_y + int(26*scale)))
+
+        # ========== 左上角信息区（武器/技能/投掷物） ==========
         weapon = player.get_current_weapon()
-        weapon_text = self.game.font.render(f"{weapon.name} Lv.{weapon.level}", True, WHITE)
-        self.screen.blit(weapon_text, (15, 15 + bar_h + exp_h + 35))
-
-        # 弹药显示
+        info_y = int(12 * scale)
+        weapon_text = self.game.font_small.render(f"{weapon.name} Lv.{weapon.level}", True, WHITE)
+        self.screen.blit(weapon_text, (int(12*scale), info_y))
+        info_y += int(20 * scale)
         if hasattr(weapon, 'get_ammo_text'):
-            ammo_text = self.game.font_small.render(weapon.get_ammo_text(), True, GRAY)
-            self.screen.blit(ammo_text, (15, 15 + bar_h + exp_h + 58))
-
-        # 武器切换提示
+            ammo_text = self.game.font_small.render(weapon.get_ammo_text(), True, (180, 180, 180))
+            self.screen.blit(ammo_text, (int(12*scale), info_y))
+            info_y += int(18 * scale)
         if len(player.weapons) > 1:
-            switch_text = self.game.font_small.render(f"按R切换 ({len(player.weapons)}种)", True, GRAY)
-            self.screen.blit(switch_text, (15, 15 + bar_h + exp_h + 75))
-
-        # 当前技能显示
+            switch_text = self.game.font_small.render(f"R切换({len(player.weapons)})", True, (120, 120, 120))
+            self.screen.blit(switch_text, (int(12*scale), info_y))
+            info_y += int(18 * scale)
         skill = player.skill_tree.get_skill(self.game.selected_skill)
         if skill:
-            skill_text = self.game.font.render(f"技能: {skill.name} (G)", True, GOLD)
-            self.screen.blit(skill_text, (15, 15 + bar_h + exp_h + 95))
-
-        # 当前投掷物显示
+            skill_text = self.game.font_small.render(f"技能:{skill.name}(G)", True, GOLD)
+            self.screen.blit(skill_text, (int(12*scale), info_y))
+            info_y += int(18 * scale)
         t_type = self.game.selected_throwable
         t_name = self.game.throwable_names.get(t_type, "?")
         t_color = self.game.throwable_colors.get(t_type, ORANGE)
         t_count = getattr(player, 'throwables', {}).get(t_type, 0)
         total_throwables = sum(getattr(player, 'throwables', {}).values())
         if total_throwables > 0:
-            throw_text = self.game.font.render(f"投掷: {t_name} x{t_count} (Q投/E切)", True, t_color)
+            throw_text = self.game.font_small.render(f"投掷:{t_name}x{t_count}(Q/E)", True, t_color)
         else:
-            throw_text = self.game.font.render("投掷: 无 (拾取获得)", True, GRAY)
-        self.screen.blit(throw_text, (15, 15 + bar_h + exp_h + 118))
+            throw_text = self.game.font_small.render("投掷:无", True, (100, 100, 100))
+        self.screen.blit(throw_text, (int(12*scale), info_y))
 
-        # ==========【仅键控模式】显示：下一个技能 / 下一把武器 ==========
+        # ========== 键控模式：下一个技能/武器提示 ==========
         if self.game.config.control_mode == ControlMode.KEYBOARD:
-            # 下一个技能
+            hint_y = screen_h - int(120 * scale)
             unlocked_skills = self.game._get_unlocked_skills()
             if len(unlocked_skills) > 0:
                 curr_idx = unlocked_skills.index(self.game.selected_skill) if self.game.selected_skill in unlocked_skills else -1
-                next_skill_idx = (curr_idx + 1) % len(unlocked_skills)
-                next_skill_type = unlocked_skills[next_skill_idx]
+                next_skill_type = unlocked_skills[(curr_idx + 1) % len(unlocked_skills)]
                 next_skill = player.skill_tree.get_skill(next_skill_type)
                 next_skill_name = next_skill.name if next_skill else "?"
-                next_skill_text = self.game.font_small.render(f"下技能(Tab): {next_skill_name}", True, AMBER)
-                self.screen.blit(next_skill_text, (15, 15 + bar_h + exp_h + 140))
-
-            # 下一把武器
+                ns_text = self.game.font_small.render(f"Tab切换: {next_skill_name}", True, AMBER)
+                self.screen.blit(ns_text, (int(12*scale), hint_y))
+                hint_y += int(18 * scale)
             if len(player.weapons) > 1:
-                curr_w_idx = player.current_weapon_idx
-                next_w_idx = (curr_w_idx + 1) % len(player.weapons)
-                next_weapon = player.weapons[next_w_idx]
-                next_weapon_text = self.game.font_small.render(f"下武器(R): {next_weapon.name}", True, PURPLE)
-                self.screen.blit(next_weapon_text, (15, 15 + bar_h + exp_h + 162))
-                
+                next_weapon = player.weapons[(player.current_weapon_idx + 1) % len(player.weapons)]
+                nw_text = self.game.font_small.render(f"R切换: {next_weapon.name}", True, PURPLE)
+                self.screen.blit(nw_text, (int(12*scale), hint_y))
+
+        # ========== 状态行（防爆套装/冷却等，左上角信息区下方） ==========
         status_lines = []
         riot = player.riot_gear
-        weapon = player.get_current_weapon()
-
-        # 防爆套装相关状态
         if self.game.riot_anim_state == "equipping":
             progress = 1 - (self.game.riot_anim_timer / self.game.riot_anim_duration)
             status_lines.append(f"防爆装备中... {int(progress*100)}%")
@@ -853,27 +1794,22 @@ class Renderer:
         elif riot.riot_gear_cd_timer > 0:
             status_lines.append(f"防爆套装冷却: {riot.riot_gear_cd_timer:.1f}s")
 
-        # --------【仅键控模式：追加武器、主动技能冷却信息】 --------
         if self.game.config.control_mode == ControlMode.KEYBOARD:
-            # 武器射击冷却、换弹CD
-            if hasattr(weapon,"shoot_cd_timer") and weapon.shoot_cd_timer > 0:
+            if hasattr(weapon, "shoot_cd_timer") and weapon.shoot_cd_timer > 0:
                 status_lines.append(f"射击冷却: {weapon.shoot_cd_timer:.2f}s")
-            if hasattr(weapon,"reload_timer") and weapon.reload_timer > 0:
+            if hasattr(weapon, "reload_timer") and weapon.reload_timer > 0:
                 status_lines.append(f"换弹: {weapon.reload_timer:.1f}s")
-
-            # 玩家active_skills字典：存放正在冷却的主动技能
             for sk_type, cd_left in player.active_skills.items():
                 sk_obj = player.skill_tree.get_skill(sk_type)
                 sk_name = sk_obj.name if sk_obj else str(sk_type)
                 status_lines.append(f"[{sk_name}] CD: {cd_left:.1f}s")
 
-        # 循环绘制全部状态行，自动向下偏移，杜绝重叠
-        stat_start_y = int(15 + bar_h + exp_h + 120)
-        stat_line_h = int(24 * scale)
+        stat_start_y = info_y + int(24 * scale)
+        stat_line_h = int(20 * scale)
         draw_y = stat_start_y
         for line_txt in status_lines:
             surf = self.game.font_small.render(line_txt, True, WHITE)
-            self.screen.blit(surf, (int(15*scale), draw_y))
+            self.screen.blit(surf, (int(12*scale), draw_y))
             draw_y += stat_line_h
 
     def _draw_dialogue(self):
@@ -902,9 +1838,18 @@ class Renderer:
         for i, btn in enumerate(self.game.pause_buttons):
             if btn.update(mouse_pos, mouse_pressed, self.game.touch_events, self.game.scale):
                 self.game.logger.info(f"暂停按钮 '{btn.text}' 被点击")
-                if i == 0:
+                if btn.text == "继续":
                     self.game.state = GameState.PLAYING
-                elif i == 1:
+                elif btn.text == "技能树":
+                    self.game.prev_state = GameState.PAUSED
+                    self.game.state = GameState.SKILL_TREE
+                    if hasattr(self.game, 'skill_tree_renderer'):
+                        self.game.skill_tree_renderer.show()
+                elif btn.text == "设置":
+                    # 进入设置，标记从暂停进入
+                    self.game.settings_from_pause = True
+                    self.game.state = GameState.SETTINGS
+                elif btn.text == "返回菜单":
                     self.game.state = GameState.MENU
             btn.draw(self.screen, self.game.font_large, self.game.scale)
 
@@ -1004,9 +1949,10 @@ class Renderer:
             pygame.draw.rect(bg_surf, (*border_color[:3], 220), (0, 0, icon_size, icon_size), 2, border_radius=6)
             self.screen.blit(bg_surf, (x, y))
 
-            # 图标文字（用emoji或首字）
-            icon_text = buff.icon[:1] if buff.icon else buff.name[0]
-            icon_surf = self.game.font.render(icon_text, True, WHITE)
+            # 图标文字：去掉[]括号，取前3个有效字符
+            raw_icon = buff.icon.strip("[](){}") if buff.icon else buff.name
+            icon_text = raw_icon[:3] if raw_icon else "?"
+            icon_surf = self.game.font_small.render(icon_text, True, WHITE)
             icon_rect = icon_surf.get_rect(center=(x + icon_size // 2, y + icon_size // 2 - int(3 * scale)))
             self.screen.blit(icon_surf, icon_rect)
 
@@ -1084,7 +2030,7 @@ class Renderer:
             cy += surf.get_height() + 2
 
     def _draw_trauma_effect(self):
-        """绘制创伤效果 - 优化版：持久化血渍+血液流淌+缓存渐变+流血debuff联动"""
+        """绘制创伤效果 - 高性能版：预渲染缓存+血渍池+简化流淌"""
         player = self.game.player
         if not player:
             return
@@ -1110,90 +2056,96 @@ class Renderer:
         cache_key = (int(effective_trauma * 10), sw, sh)
         if not hasattr(self, '_trauma_cache_key') or self._trauma_cache_key != cache_key:
             self._trauma_cache_key = cache_key
-            edge_width = max(1, int(120 * scale * effective_trauma))
-            alpha = int(220 * effective_trauma)
-            # 上边缘
-            top_surf = pygame.Surface((sw, edge_width), pygame.SRCALPHA)
-            for y in range(edge_width):
-                a = int(alpha * (1 - y / edge_width) ** 0.7)
-                pygame.draw.line(top_surf, (200, 10, 10, a), (0, y), (sw, y))
-            # 下边缘
-            bottom_surf = pygame.Surface((sw, edge_width), pygame.SRCALPHA)
-            for y in range(edge_width):
-                a = int(alpha * (1 - y / edge_width) ** 0.7)
-                pygame.draw.line(bottom_surf, (200, 10, 10, a), (0, edge_width - y - 1), (sw, edge_width - y - 1))
-            # 左边缘
-            left_surf = pygame.Surface((edge_width, sh), pygame.SRCALPHA)
-            for x in range(edge_width):
-                a = int(alpha * (1 - x / edge_width) ** 0.7)
-                pygame.draw.line(left_surf, (200, 10, 10, a), (x, 0), (x, sh))
-            # 右边缘
-            right_surf = pygame.Surface((edge_width, sh), pygame.SRCALPHA)
-            for x in range(edge_width):
-                a = int(alpha * (1 - x / edge_width) ** 0.7)
-                pygame.draw.line(right_surf, (200, 10, 10, a), (edge_width - x - 1, 0), (edge_width - x - 1, sh))
-            self._trauma_edge_surfs = (top_surf, bottom_surf, left_surf, right_surf, edge_width)
+            edge_width = max(1, int(100 * scale * effective_trauma))
+            alpha = int(200 * effective_trauma)
+            # 一次性创建四边渐变
+            trauma_surf = pygame.Surface((sw, sh), pygame.SRCALPHA)
+            # 用渐变矩形代替逐行绘制
+            for i in range(edge_width):
+                a = int(alpha * (1 - i / edge_width) ** 0.6)
+                c = (180, 10, 10, a)
+                pygame.draw.rect(trauma_surf, c, (0, i, sw, 1))
+                pygame.draw.rect(trauma_surf, c, (0, sh - 1 - i, sw, 1))
+                pygame.draw.rect(trauma_surf, c, (i, 0, 1, sh))
+                pygame.draw.rect(trauma_surf, c, (sw - 1 - i, 0, 1, sh))
+            self._trauma_edge_surf = trauma_surf
 
         if effective_trauma > 0.01:
-            top_surf, bottom_surf, left_surf, right_surf, edge_width = self._trauma_edge_surfs
-            self.game.screen.blit(top_surf, (0, 0))
-            self.game.screen.blit(bottom_surf, (0, sh - edge_width))
-            self.game.screen.blit(left_surf, (0, 0))
-            self.game.screen.blit(right_surf, (sw - edge_width, 0))
+            self.game.screen.blit(self._trauma_edge_surf, (0, 0))
 
-        # === 2. 持久化血渍系统 ===
-        # 受伤时添加新血渍（通过trauma突增检测）
+        # === 2. 预渲染血渍模板缓存（按半径分级，避免每帧创建Surface）===
+        if not hasattr(self, '_blood_template_cache'):
+            self._blood_template_cache = {}
+        # 血渍最大数量根据画质调整
+        q = self.game.config.graphics_quality
+        MAX_BLOOD = 12 if q == "performance" else 25 if q == "balanced" else 40
+        drip_enabled = q != "performance"
+
+        # 受伤时添加新血渍
         if not hasattr(self, '_last_trauma'):
             self._last_trauma = 0
         trauma_delta = trauma - self._last_trauma
         self._last_trauma = trauma
         if trauma_delta > 0.05:
-            num_new = int(trauma_delta * 20) + 1
-            for _ in range(num_new):
+            num_new = min(int(trauma_delta * 15) + 1, MAX_BLOOD - len(self.game.screen_blood))
+            for _ in range(max(0, num_new)):
                 sx = random.randint(0, sw)
-                sy = random.randint(0, int(sh * 0.6))  # 偏上半部分
-                sr = random.randint(6, max(8, int(30 * scale * effective_trauma)))
-                drip = random.uniform(10, 40) * scale
-                self.game.screen_blood.append([sx, sy, sr, 200, drip, 0])
+                sy = random.randint(0, int(sh * 0.55))
+                sr = random.randint(5, max(7, int(25 * scale * effective_trauma)))
+                drip = random.uniform(8, 30) * scale
+                self.game.screen_blood.append([sx, sy, sr, 180, drip, 0])
 
-        # 更新和绘制血渍（流淌+淡出）
-        dt = 1 / 60  # 近似
+        # 更新和绘制血渍（使用预渲染模板）
+        dt = 1 / 60
         alive_blood = []
         for bx, by, br, ba, drip, boff in self.game.screen_blood:
-            # 血液向下流淌
             boff += drip * dt
             new_y = by + boff
-            # 淡出
-            ba -= 15 * dt
+            ba -= 12 * dt
             if ba <= 0 or new_y > sh + br:
                 continue
-            # 血渍主体
-            blood_surf = pygame.Surface((br * 2, br * 2), pygame.SRCALPHA)
-            pygame.draw.circle(blood_surf, (160, 10, 10, int(ba)), (br, br), br)
-            self.game.screen.blit(blood_surf, (bx - br, int(new_y) - br))
-            # 流淌血柱
-            if boff > 5:
-                drip_h = int(min(boff * 0.7, 80 * scale))
-                drip_w = max(2, int(br * 0.3))
-                drip_surf = pygame.Surface((drip_w * 2, drip_h), pygame.SRCALPHA)
-                for dy in range(drip_h):
-                    a = int(ba * (1 - dy / drip_h) * 0.8)
-                    w = drip_w * (1 - dy / drip_h * 0.5)
-                    pygame.draw.line(drip_surf, (160, 10, 10, a),
-                                     (drip_w - w // 2, dy), (drip_w + w // 2, dy))
-                self.game.screen.blit(drip_surf, (bx - drip_w, int(new_y)))
+            # 使用缓存的血渍模板
+            template_key = (br, int(ba))
+            if template_key not in self._blood_template_cache:
+                # 限制缓存大小
+                if len(self._blood_template_cache) > 200:
+                    self._blood_template_cache.clear()
+                blood_surf = pygame.Surface((br * 2, br * 2), pygame.SRCALPHA)
+                pygame.draw.circle(blood_surf, (150, 8, 8, int(ba)), (br, br), br)
+                self._blood_template_cache[template_key] = blood_surf
+            self.game.screen.blit(self._blood_template_cache[template_key], (bx - br, int(new_y) - br))
+            # 流淌血柱 - 性能模式关闭
+            if drip_enabled and boff > 5:
+                drip_h = int(min(boff * 0.6, 60 * scale))
+                drip_w = max(2, int(br * 0.25))
+                drip_key = (drip_w, drip_h, int(ba))
+                if drip_key not in self._blood_template_cache:
+                    if len(self._blood_template_cache) > 200:
+                        self._blood_template_cache.clear()
+                    drip_surf = pygame.Surface((drip_w * 2, drip_h), pygame.SRCALPHA)
+                    for dy in range(0, drip_h, 2):  # 步长2，减少绘制次数
+                        a = int(ba * (1 - dy / drip_h) * 0.7)
+                        w = int(drip_w * (1 - dy / drip_h * 0.4))
+                        pygame.draw.line(drip_surf, (150, 8, 8, a),
+                                         (drip_w - w, dy), (drip_w + w, dy))
+                    self._blood_template_cache[drip_key] = drip_surf
+                self.game.screen.blit(self._blood_template_cache[drip_key], (bx - drip_w, int(new_y)))
             alive_blood.append([bx, by, br, ba, drip, boff])
         self.game.screen_blood = alive_blood
 
         # === 3. 心跳效果（低血量）===
         hp_ratio = player.hp / player.max_hp if player.max_hp > 0 else 0
         if hp_ratio < 0.3:
-            heartbeat = abs(math.sin(pygame.time.get_ticks() / 180)) * effective_trauma * 0.5
-            overlay = pygame.Surface((sw, sh), pygame.SRCALPHA)
-            overlay.fill((200, 10, 10, int(50 * heartbeat)))
-            self.game.screen.blit(overlay, (0, 0))
-            if heartbeat > 0.7:
-                self.game.camera.shake_intensity = max(self.game.camera.shake_intensity, 3)
+            heartbeat = abs(math.sin(pygame.time.get_ticks() / 180)) * effective_trauma * 0.4
+            if heartbeat > 0.05:
+                hb_key = int(heartbeat * 20)
+                if not hasattr(self, '_hb_cache') or self._hb_cache[0] != (hb_key, sw, sh):
+                    hb_surf = pygame.Surface((sw, sh), pygame.SRCALPHA)
+                    hb_surf.fill((180, 8, 8, int(40 * heartbeat)))
+                    self._hb_cache = ((hb_key, sw, sh), hb_surf)
+                self.game.screen.blit(self._hb_cache[1], (0, 0))
+                if heartbeat > 0.7:
+                    self.game.camera.shake_intensity = max(self.game.camera.shake_intensity, 2)
 
         # === 4. 屏幕暗角 ===
         if effective_trauma > 0.5:
@@ -1202,6 +2154,206 @@ class Renderer:
                 a = int((effective_trauma - 0.5) * 2 * 30 * (1 - r / (min(sw, sh) // 2)))
                 pygame.draw.rect(vignette, (0, 0, 0, a), (0, 0, sw, sh), border_radius=r)
             self.game.screen.blit(vignette, (0, 0))
+
+    def _draw_lifesteal_effect(self):
+        """吸血屏幕效果：暗红色边缘向内收缩脉动"""
+        if not hasattr(self.game, 'lifesteal_flash') or self.game.lifesteal_flash <= 0:
+            return
+        if not self.game.config.render_buff_effects:
+            return
+        intensity = self.game.lifesteal_flash
+        # 呼吸脉动
+        pulse = 0.7 + 0.3 * math.sin(pygame.time.get_ticks() * 0.012)
+        intensity *= pulse
+        sw, sh = self.screen.get_size()
+        scale = self.game.scale
+        edge_w = int(120 * scale * intensity)
+        if edge_w < 2:
+            return
+        cache_key = (int(intensity * 20), sw, sh)
+        if not hasattr(self, '_lifesteal_cache'):
+            self._lifesteal_cache = {}
+        if cache_key not in self._lifesteal_cache:
+            if len(self._lifesteal_cache) > 30:
+                self._lifesteal_cache.clear()
+            surf = pygame.Surface((sw, sh), pygame.SRCALPHA)
+            # 暗红色径向边缘
+            for i in range(edge_w, 0, -2):
+                a = int(180 * intensity * (1 - i / edge_w) ** 1.5)
+                if a <= 0:
+                    continue
+                pygame.draw.rect(surf, (160, 15, 15, a),
+                                 (i, i, sw - i * 2, sh - i * 2), 2)
+            self._lifesteal_cache[cache_key] = surf
+        self.screen.blit(self._lifesteal_cache[cache_key], (0, 0))
+
+    def _draw_buff_screen_effect(self):
+        """绘制Buff屏幕效果：回血发绿、狂暴动态模糊、燃烧热浪等"""
+        player = self.game.player
+        if not player or not hasattr(player, 'buff_manager'):
+            return
+        if not self.game.config.render_buff_effects:
+            return
+
+        scale = self.game.scale
+        sw = self.game.scaled_width
+        sh = self.game.scaled_height
+        bm = player.buff_manager
+
+        # (颜色, 基础强度, 是否呼吸, 特效类型)
+        buff_effects = {
+            BuffType.REGEN: (LIME, 0.4, True, "glow"),
+            BuffType.BERSERK: (CRIMSON, 0.6, True, "berserk"),
+            BuffType.BLOOD_FRENZY: ((180, 30, 30), 0.5, True, "berserk"),
+            BuffType.BURN: (FIRE_ORANGE, 0.45, False, "heat"),
+            BuffType.FREEZE: ((100, 180, 255), 0.5, False, "frost"),
+            BuffType.POISON: (POISON_GREEN, 0.4, True, "glow"),
+            BuffType.SPEED_BOOST: (CYAN, 0.3, False, "motion"),
+            BuffType.HASTE: (CYAN, 0.35, False, "motion"),
+            BuffType.SHIELD: ((100, 150, 255), 0.35, True, "glow"),
+            BuffType.IRON_SKIN: ((150, 150, 160), 0.3, False, "glow"),
+            BuffType.INVINCIBLE: (GOLD, 0.5, True, "glow"),
+            BuffType.EMPOWER: (AMBER, 0.35, True, "glow"),
+            BuffType.GHOST: ((180, 200, 255), 0.25, True, "glow"),
+            BuffType.STUN: ((200, 200, 100), 0.3, False, "stun"),
+            BuffType.FEAR: ((120, 50, 180), 0.4, True, "glow"),
+            BuffType.CURSE: ((80, 20, 100), 0.35, True, "glow"),
+        }
+
+        active_effects = []
+        for buff_type, (color, base_intensity, breathe, fx_type) in buff_effects.items():
+            if bm.has_buff(buff_type):
+                intensity = base_intensity
+                if breathe:
+                    intensity *= 0.5 + 0.5 * abs(math.sin(pygame.time.get_ticks() / 400))
+                active_effects.append((color, intensity, fx_type))
+
+        if not active_effects:
+            return
+
+        # 绘制边缘光晕（根据画质调整宽度）
+        q = self.game.config.graphics_quality
+        if q == "performance":
+            edge_width = int(40 * scale)
+            # 性能模式只取最强的一个buff效果
+            if active_effects:
+                active_effects = [max(active_effects, key=lambda e: e[1])]
+        elif q == "balanced":
+            edge_width = int(60 * scale)
+        else:
+            edge_width = int(90 * scale)
+        for color, intensity, fx_type in active_effects:
+            if intensity < 0.05:
+                continue
+            cache_key = (color[0], color[1], color[2], int(intensity * 20), sw, sh)
+            if not hasattr(self, '_buff_edge_cache'):
+                self._buff_edge_cache = {}
+            if cache_key not in self._buff_edge_cache:
+                if len(self._buff_edge_cache) > 50:
+                    self._buff_edge_cache.clear()
+                edge_surf = pygame.Surface((sw, sh), pygame.SRCALPHA)
+                alpha = int(160 * intensity)
+                for i in range(edge_width):
+                    a = int(alpha * (1 - i / edge_width) ** 0.5)
+                    c = (color[0], color[1], color[2], a)
+                    pygame.draw.rect(edge_surf, c, (0, i, sw, 1))
+                    pygame.draw.rect(edge_surf, c, (0, sh - 1 - i, sw, 1))
+                    pygame.draw.rect(edge_surf, c, (i, 0, 1, sh))
+                    pygame.draw.rect(edge_surf, c, (sw - 1 - i, 0, 1, sh))
+                self._buff_edge_cache[cache_key] = edge_surf
+            self.game.screen.blit(self._buff_edge_cache[cache_key], (0, 0))
+
+        # 狂暴 - 屏幕震动增强
+        berserk_intensity = sum(i for c, i, t in active_effects if t == "berserk")
+        if berserk_intensity > 0.1:
+            self.game.camera.shake_intensity = max(self.game.camera.shake_intensity, 1.5 * berserk_intensity)
+
+        # 燃烧 - 底部热浪
+        heat_intensity = sum(i for c, i, t in active_effects if t == "heat")
+        if heat_intensity > 0.1:
+            heat_offset = int(2 * heat_intensity * math.sin(pygame.time.get_ticks() / 80))
+            heat_key = (int(heat_intensity * 20), sw, sh)
+            if not hasattr(self, '_heat_cache') or self._heat_cache[0] != heat_key:
+                heat_surf = pygame.Surface((sw, int(60 * scale)), pygame.SRCALPHA)
+                for y in range(int(60 * scale)):
+                    a = int(80 * heat_intensity * (1 - y / (60 * scale)))
+                    pygame.draw.line(heat_surf, (255, 120, 30, a), (0, y), (sw, y))
+                self._heat_cache = (heat_key, heat_surf)
+            self.game.screen.blit(self._heat_cache[1], (0, sh - int(60 * scale) + heat_offset))
+
+        # 冻结 - 冷色调覆盖
+        frost_intensity = sum(i for c, i, t in active_effects if t == "frost")
+        if frost_intensity > 0.1:
+            frost_key = (int(frost_intensity * 20), sw, sh)
+            if not hasattr(self, '_frost_cache') or self._frost_cache[0] != frost_key:
+                frost_surf = pygame.Surface((sw, sh), pygame.SRCALPHA)
+                frost_surf.fill((100, 160, 255, int(25 * frost_intensity)))
+                self._frost_cache = (frost_key, frost_surf)
+            self.game.screen.blit(self._frost_cache[1], (0, 0))
+
+        # 眩晕 - 顶部星星
+        stun_intensity = sum(i for c, i, t in active_effects if t == "stun")
+        if stun_intensity > 0.1:
+            star_y = int(60 * scale)
+            for s in range(3):
+                angle = pygame.time.get_ticks() / 200 + s * 2.1
+                sx = sw // 2 + int(80 * scale * math.cos(angle))
+                sy = star_y + int(20 * scale * math.sin(angle))
+                star_text = self.game.font.render("*", True, (255, 255, 100))
+                self.game.screen.blit(star_text, (sx, sy))
+
+    def _draw_melee_attack(self, cam_x, cam_y, scale):
+        """绘制近战挥砍动画"""
+        import math as _math
+        g = self.game
+        px = int((g.player.x - cam_x) * scale)
+        py = int((g.player.y - cam_y) * scale)
+        attack_range = int(g.melee_attack_range * scale)
+        progress = 1 - (g.melee_attack_timer / max(0.01, g.melee_attack_duration))
+        
+        # 挥砍扇形角度范围
+        arc_width = _math.pi * 0.8
+        start_angle = g.melee_attack_angle - arc_width / 2
+        # 挥砍进度对应的当前角度
+        current_angle = start_angle + arc_width * progress
+        
+        # 武器颜色
+        weapon_color = (200, 200, 200)
+        if g.melee_attack_weapon:
+            weapon_color = getattr(g.melee_attack_weapon, 'color', (200, 200, 200))
+        
+        # 绘制挥砍轨迹（半透明扇形）
+        if attack_range > 0:
+            # 挥砍残影
+            for i in range(3):
+                trail_angle = current_angle - i * 0.15
+                if trail_angle < start_angle:
+                    continue
+                alpha = int(120 * (1 - i * 0.3) * (1 - progress * 0.5))
+                trail_surf = pygame.Surface((attack_range * 2, attack_range * 2), pygame.SRCALPHA)
+                # 绘制扇形
+                rect = pygame.Rect(0, 0, attack_range * 2, attack_range * 2)
+                pygame.draw.arc(trail_surf, (*weapon_color, alpha), rect, 
+                               start_angle, trail_angle, max(2, int(8 * scale)))
+                self.screen.blit(trail_surf, (px - attack_range, py - attack_range))
+            
+            # 当前挥砍位置的武器线条
+            end_x = px + _math.cos(current_angle) * attack_range
+            end_y = py + _math.sin(current_angle) * attack_range
+            pygame.draw.line(self.screen, weapon_color, (px, py), (end_x, end_y), 
+                           max(2, int(4 * scale)))
+            # 武器端点高光
+            pygame.draw.circle(self.screen, (255, 255, 255), 
+                             (int(end_x), int(end_y)), max(2, int(4 * scale)))
+            
+            # 电锯特殊效果：持续旋转锯齿
+            if g.melee_attack_weapon and g.melee_attack_weapon.weapon_type.name == 'CHAINSAW':
+                for i in range(8):
+                    saw_angle = current_angle + i * _math.pi / 4 + pygame.time.get_ticks() / 50
+                    saw_x = px + _math.cos(saw_angle) * attack_range * 0.7
+                    saw_y = py + _math.sin(saw_angle) * attack_range * 0.7
+                    pygame.draw.circle(self.screen, (255, 100, 100), 
+                                     (int(saw_x), int(saw_y)), max(1, int(3 * scale)))
 
     def _draw_fire_zones(self, cam_x, cam_y, scale):
         """绘制燃烧区域"""
@@ -1673,11 +2825,39 @@ class Renderer:
         view_bottom = int(sh - 120 * scale)
         clip_rect = pygame.Rect(0, view_top, sw, view_bottom - view_top)
 
+        # 鼠标拖动滚动（PC端点击拖拽）
+        mouse_pos = pygame.mouse.get_pos()
+        mouse_pressed = pygame.mouse.get_pressed()
+        if not hasattr(self.game, '_ach_drag_state'):
+            self.game._ach_drag_state = {"dragging": False, "start_y": 0, "start_scroll": 0, "moved": False}
+        ds = self.game._ach_drag_state
+        if clip_rect.collidepoint(mouse_pos):
+            if mouse_pressed[0]:
+                if not ds["dragging"]:
+                    ds["dragging"] = True
+                    ds["start_y"] = mouse_pos[1]
+                    ds["start_scroll"] = self.game.ach_scroll_offset
+                    ds["moved"] = False
+                else:
+                    dy = mouse_pos[1] - ds["start_y"]
+                    if abs(dy) > 3:
+                        ds["moved"] = True
+                    self.game.ach_scroll_offset = max(0, ds["start_scroll"] - dy)
+            else:
+                ds["dragging"] = False
+        else:
+            if not mouse_pressed[0]:
+                ds["dragging"] = False
+
         old_clip = self.screen.get_clip()
         self.screen.set_clip(clip_rect)
         y = view_top - self.game.ach_scroll_offset
 
-        group_order = ["战斗","生存","技能武器","结局挑战","隐藏","其他"]
+        # 动态遍历所有分组，使用自定义排序顺序
+        custom_order = ["战斗", "生存", "技能武器", "结局挑战", "隐藏", "其他"]
+        all_groups = list(grouped.keys())
+        # 按自定义顺序排序，未在列表中的分组排在最后
+        group_order = sorted(all_groups, key=lambda g: custom_order.index(g) if g in custom_order else len(custom_order))
         for gname in group_order:
             item_list = grouped.get(gname, [])
             if not item_list:
@@ -1731,9 +2911,13 @@ class Renderer:
 
         self.screen.set_clip(old_clip)
 
-        #简易滚动条
-        total_content_height = y - (view_top - self.game.ach_scroll_offset)
+        # 限制滚动范围
+        total_content_height = max(1, y - (view_top - self.game.ach_scroll_offset))
         view_height = view_bottom - view_top
+        max_scroll = max(0, total_content_height - view_height)
+        self.game.ach_scroll_offset = min(self.game.ach_scroll_offset, max_scroll)
+
+        #简易滚动条
         if total_content_height > view_height:
             scroll_ratio = self.game.ach_scroll_offset / (total_content_height - view_height)
             bar_h = max(30, int(view_height * view_height / total_content_height))
@@ -1750,3 +2934,19 @@ class Renderer:
             self.game.state = GameState.MENU
             self.game.ach_scroll_offset = 0
         btn.draw(self.screen, self.game.font_large, scale)
+
+
+    def _draw_skill_tree(self):
+        """绘制技能树界面"""
+        if hasattr(self.game, 'skill_tree_renderer') and self.game.skill_tree_renderer:
+            # 处理鼠标和触控输入（拖动视图）
+            mouse_pos = pygame.mouse.get_pos()
+            mouse_pressed = pygame.mouse.get_pressed()
+            self.game.skill_tree_renderer.handle_input(
+                mouse_pos, mouse_pressed, self.game.touch_events, self.game.scale
+            )
+            player_skill_tree = self.game.player.skill_tree if self.game.player else None
+            self.game.skill_tree_renderer.draw(
+                self.screen, self.game.font, self.game.font_large, self.game.font_title,
+                self.game.scale, player_skill_tree
+            )
