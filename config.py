@@ -177,6 +177,7 @@ class GameState(Enum):
     MAP_TRANSITION = auto()  # 新增：地图切换过场
     TEXT_VIEWER = auto()  # 新增：可拾取文本查看界面
     MOD_MANAGER = auto()  # 新增：Mod管理页面
+    UPDATE = auto()  # 新增：自动更新页面
 
 
 class ControlMode(Enum):

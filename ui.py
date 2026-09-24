@@ -151,14 +151,41 @@ class VirtualJoystick:
     def get_scaled_pos(self, scale=1.0):
         return (self.base_x * scale, self.base_y * scale, self.base_radius * scale)
 
+    def reset(self):
+        """强制重置摇杆状态（用于游戏状态切换后防卡死）"""
+        self.active = False
+        self.touch_id = None
+        self.knob_x = self.base_x
+        self.knob_y = self.base_y
+        self.value_x = 0
+        self.value_y = 0
+
     def handle_touch(self, touch_events, scale=1.0):
         bx, by, r = self.get_scaled_pos(scale)
+        # 收集当前帧所有活跃的touch_id（down或move事件中的id）
+        active_ids = set()
+        for event in touch_events:
+            if event["type"] in ("down", "move"):
+                active_ids.add(event.get("id", 0))
+
+        # 防卡死：如果摇杆active但绑定的touch_id不在当前活跃手指中，强制重置
+        # （常见于游戏状态切换时up事件丢失，或多指操作时手指被其他界面消费）
+        if self.active and self.touch_id is not None and self.touch_id not in active_ids:
+            # 检查是否有up事件对应这个id
+            has_up = any(e["type"] == "up" and e.get("id", 0) == self.touch_id for e in touch_events)
+            if not has_up:
+                self.reset()
+
         for event in touch_events:
             pos = event["pos"]
             dist = math.hypot(pos[0] - bx, pos[1] - by)
             if event["type"] == "down":
                 if dist < r * 1.5 and not self.active:
                     self.active = True
+                    self.touch_id = event.get("id", 0)
+                    self._update_knob(pos[0], pos[1], scale)
+                elif dist < r * 1.5 and self.active and self.touch_id != event.get("id", 0):
+                    # 新手指按下且在摇杆范围内，接管摇杆（防止旧手指卡死时无法操作）
                     self.touch_id = event.get("id", 0)
                     self._update_knob(pos[0], pos[1], scale)
             elif event["type"] == "move" and self.active:

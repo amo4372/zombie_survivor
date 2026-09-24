@@ -425,17 +425,49 @@ class AssetManager:
 
     # ==================== 音乐播放 ====================
 
+    # 逻辑名称 -> 经典版名称的映射（经典版没有的回退到通用gameplay_classic）
+    CLASSIC_NAME_MAP = {
+        "menu": "menu_classic",
+        "victory": "victory_classic",
+        "gameover": "gameover_classic",
+        "ending": "ending_classic",
+        "school": "gameplay_classic",
+        "street": "gameplay_classic",
+        "downtown": "gameplay_classic",
+        "suburb": "gameplay_classic",
+        "nuclear": "gameplay_classic",
+        "boss": "boss_classic",
+        "horde": "horde_classic",
+        "tension": "gameplay_classic",
+        "gameplay": "gameplay_classic",
+    }
+
+    def _resolve_music_name(self, name):
+        """随机选择新版或经典版音乐（新旧均允许使用）"""
+        import random
+        candidates = []
+        if name in self.music:
+            candidates.append(name)
+        classic = self.CLASSIC_NAME_MAP.get(name)
+        if classic and classic in self.music:
+            candidates.append(classic)
+        if not candidates:
+            return name
+        # 同一首逻辑音乐播放期间不切换（通过_current_music判断）
+        return random.choice(candidates)
+
     def play_music(self, name, loops=-1, fade_ms=1000):
-        """播放背景音乐，缺失或禁用时静默跳过"""
+        """播放背景音乐，随机选择新版或经典版，缺失或禁用时静默跳过"""
         if not self._music_enabled:
             return
-        if name in self.music:
+        actual_name = self._resolve_music_name(name)
+        if actual_name in self.music:
             try:
-                if self._current_music != name:
-                    pygame.mixer.music.load(self.music[name])
+                if self._current_music != actual_name:
+                    pygame.mixer.music.load(self.music[actual_name])
                     pygame.mixer.music.set_volume(self._volume_music)
                     pygame.mixer.music.play(loops, fade_ms=fade_ms)
-                    self._current_music = name
+                    self._current_music = actual_name
             except Exception:
                 pass
 

@@ -28,7 +28,7 @@ class RiotGear:
         self.bash_cooldown = 0
         self.bash_max_cooldown = 0.5
         self.grapple_cooldown = 0
-        self.grapple_max_cooldown = 1.5
+        self.grapple_max_cooldown = 0.8
         self.melee_reduction = 0.5
         self.ranged_reduction = 0.7
         self.magic_immunity = True
@@ -40,10 +40,10 @@ class RiotGear:
         self.grapple_target_pos = None
         self.grapple_head_pos = None
         self.grapple_state = "idle"
-        self.grapple_speed = 80
-        self.grapple_pull_speed = 20
+        self.grapple_speed = 150
+        self.grapple_pull_speed = 70
         self.grapple_hit_stun_timer = 0
-        self.grapple_hit_stun_duration = 0.4
+        self.grapple_hit_stun_duration = 0.6
         self.grapple_max_range = 800
         self.grapple_stamina_cost = 0
         self.bash_auto = False
@@ -136,11 +136,15 @@ class RiotGear:
         return 1.0
 
     def _update_grapple(self, dt, player_x, player_y):
-        """更新钩爪状态 - 新逻辑"""
+        """更新钩爪状态 - 修复秒断勾：追踪目标、稳定拉回、最小拉回时间"""
         if not self.grapple_active:
             return
 
         if self.grapple_state == "shooting":
+            # 如果有目标，追踪目标当前位置（而非固定的发射位置）
+            if self.grapple_target and hasattr(self.grapple_target, 'alive') and self.grapple_target.alive:
+                self.grapple_target_pos = (self.grapple_target.x, self.grapple_target.y)
+
             # 钩爪头飞向目标
             dx = self.grapple_target_pos[0] - self.grapple_head_pos[0]
             dy = self.grapple_target_pos[1] - self.grapple_head_pos[1]
@@ -161,19 +165,23 @@ class RiotGear:
                 self.grapple_head_pos[1] - player_y
             )
 
-            if new_dist < 5:  # 到达目标位置
+            if new_dist < 10:  # 到达目标位置（放宽阈值，避免速度快时越过）
                 if self.grapple_target:
                     # Boss免控：只能命中产生僵直，不能勾取
                     if getattr(self.grapple_target, 'is_boss', False):
-                        self.grapple_hit_stun_timer = self.grapple_hit_stun_duration * 0.5  # Boss僵直时间减半
+                        self.grapple_hit_stun_timer = self.grapple_hit_stun_duration * 0.5
                         if hasattr(self.grapple_target, 'grappled'):
                             self.grapple_target.grappled = False
-                        self.grapple_target = None  # 不勾取Boss
+                        self.grapple_target = None
                         self.grapple_state = "retracting"
                     else:
-                        # 勾中普通目标，进入僵直
+                        # 勾中普通目标，立即设置grappled=True防止敌人移动
+                        if hasattr(self.grapple_target, 'grappled'):
+                            self.grapple_target.grappled = True
+                        self.grapple_head_pos = [self.grapple_target.x, self.grapple_target.y]
                         self.grapple_state = "hit"
                         self.grapple_hit_stun_timer = self.grapple_hit_stun_duration
+                        self._pulling_timer = 0.0  # 初始化拉回计时器
                 else:
                     self.grapple_state = "retracting"
             elif total_dist >= self.grapple_max_range:
@@ -184,35 +192,51 @@ class RiotGear:
             self.grapple_hit_stun_timer -= dt
             if self.grapple_hit_stun_timer <= 0:
                 self.grapple_state = "pulling"
+                self._pulling_timer = 0.0
             # 同步更新目标位置到钩爪头
             if self.grapple_target and hasattr(self.grapple_target, 'alive') and self.grapple_target.alive:
                 self.grapple_head_pos = [self.grapple_target.x, self.grapple_target.y]
-                # 给目标添加被勾状态
+                # 确保目标保持被勾状态
                 if hasattr(self.grapple_target, 'grappled'):
                     self.grapple_target.grappled = True
+            else:
+                # 目标死亡，收回钩爪
+                self.grapple_state = "retracting"
 
         elif self.grapple_state == "pulling":
+            if not hasattr(self, '_pulling_timer'):
+                self._pulling_timer = 0.0
+            self._pulling_timer += dt
+
             if self.grapple_target and hasattr(self.grapple_target, 'alive') and self.grapple_target.alive:
-                # 快速拉回敌人到玩家身边
                 dx = player_x - self.grapple_target.x
                 dy = player_y - self.grapple_target.y
                 dist = math.hypot(dx, dy)
 
-                if dist > 35:
+                # 最小拉回时间0.2秒，确保不会秒断
+                min_pull_time = 0.2
+                if dist > 90 or self._pulling_timer < min_pull_time:
                     pull_speed = self.grapple_pull_speed * dt * 60
-                    # 距离越远拉得越快，确保不会中途断
+                    # 距离越远拉得越快（倍率1.5而非2.0，更稳定）
                     if dist > 200:
                         pull_speed *= 1.5
-                    self.grapple_target.x += (dx / dist) * pull_speed
-                    self.grapple_target.y += (dy / dist) * pull_speed
+                    if dist > 0:
+                        self.grapple_target.x += (dx / dist) * pull_speed
+                        self.grapple_target.y += (dy / dist) * pull_speed
                     self.grapple_head_pos = [self.grapple_target.x, self.grapple_target.y]
-                    # 确保敌人保持被勾状态，无法自行移动
+                    # 确保敌人保持被勾状态
                     if hasattr(self.grapple_target, 'grappled'):
                         self.grapple_target.grappled = True
                 else:
-                    # 到达玩家近战范围，释放
+                    # 到达玩家90像素外且超过最小拉回时间，释放
                     if hasattr(self.grapple_target, 'grappled'):
                         self.grapple_target.grappled = False
+                    # 释放时给敌人一个短暂的击退，让它停在玩家面前
+                    if hasattr(self.grapple_target, 'knockback_x'):
+                        kb_dir_x = (self.grapple_target.x - player_x) / max(1, dist)
+                        kb_dir_y = (self.grapple_target.y - player_y) / max(1, dist)
+                        self.grapple_target.knockback_x = kb_dir_x * 50
+                        self.grapple_target.knockback_y = kb_dir_y * 50
                     self._reset_grapple()
             else:
                 self.grapple_state = "retracting"
@@ -226,8 +250,9 @@ class RiotGear:
                 self._reset_grapple()
             else:
                 move_dist = self.grapple_speed * 1.5 * dt * 60
-                self.grapple_head_pos[0] += (dx / dist) * move_dist
-                self.grapple_head_pos[1] += (dy / dist) * move_dist
+                if dist > 0:
+                    self.grapple_head_pos[0] += (dx / dist) * move_dist
+                    self.grapple_head_pos[1] += (dy / dist) * move_dist
 
     def _reset_grapple(self):
         """重置钩爪状态"""

@@ -175,14 +175,19 @@ class Renderer:
                     self.game.mod_selected = None
                     self.game.mod_list_cache = mod_loader.get_all_available_mods()
                 elif i == 7:
-                    self.game.state = GameState.SETTINGS
+                    # 检查更新
+                    self.game.state = GameState.UPDATE
+                    self.game.update_status_text = '点击"检查更新"按钮查看最新版本'
+                    self.game.update_progress = 0.0
                 elif i == 8:
-                    self.game.state = GameState.TUTORIAL
+                    self.game.state = GameState.SETTINGS
                 elif i == 9:
+                    self.game.state = GameState.TUTORIAL
+                elif i == 10:
                     self.game.running = False
             btn.draw(self.screen, self.game.font_large, scale)
 
-        version = self.game.font_small.render("v4.0 - 黑暗尸潮", True, GRAY)
+        version = self.game.font_small.render(f"v{getattr(self.game, 'current_version_str', '1.0.0')} - 黑暗尸潮", True, GRAY)
         self.screen.blit(version, (10, self.game.scaled_height - 30))
 
     def _draw_mode_select(self):
@@ -372,6 +377,153 @@ class Renderer:
         hint = "按 E / ESC / 空格 关闭"
         hint_surf = self.game.font_small.render(hint, True, (150, 150, 150))
         self.screen.blit(hint_surf, (panel_x + 30, panel_y + panel_h - 35))
+
+
+    def _draw_update(self):
+        """渲染自动更新界面"""
+        import updater
+        scale = self.game.scale
+        sw = self.game.scaled_width
+        sh = self.game.scaled_height
+
+        self.screen.fill(VOID_BLACK)
+
+        # 标题
+        title = self.game.font_title.render("自动更新", True, GREEN)
+        title_rect = title.get_rect(center=(sw // 2, int(80 * scale)))
+        self.screen.blit(title, title_rect)
+
+        # 当前版本
+        current_ver = getattr(self.game, 'current_version_str', '1.0.0')
+        ver_text = self.game.font.render(f"当前版本: v{current_ver}", True, GRAY)
+        ver_rect = ver_text.get_rect(center=(sw // 2, int(130 * scale)))
+        self.screen.blit(ver_text, ver_rect)
+
+        # 获取更新状态
+        status = updater.get_update_status()
+        latest_ver = status.get("latest_version")
+        is_checking = status.get("checking", False)
+        is_downloading = status.get("downloading", False)
+        is_extracting = status.get("extracting", False)
+        progress = status.get("download_progress", 0.0)
+        error = status.get("error")
+        changelog = status.get("changelog", "")
+        update_available = status.get("update_available", False)
+        downloaded = status.get("downloaded_bytes", 0)
+        total = status.get("total_bytes", 0)
+        speed = status.get("download_speed", 0)
+
+        mouse_pos = pygame.mouse.get_pos()
+        mouse_pressed = pygame.mouse.get_pressed()
+
+        # 状态文本
+        status_y = int(170 * scale)
+        if error:
+            status_text = self.game.font.render(f"错误: {error}", True, RED)
+        elif is_checking:
+            status_text = self.game.font.render("正在检查更新...", True, YELLOW)
+        elif is_downloading:
+            pct = int(progress * 100)
+            status_text = self.game.font.render(
+                f"下载中... {pct}% ({updater.format_size(downloaded)}/{updater.format_size(total)})",
+                True, CYAN
+            )
+        elif is_extracting:
+            status_text = self.game.font.render("正在应用更新...", True, YELLOW)
+        elif update_available and latest_ver:
+            status_text = self.game.font.render(f"发现新版本: v{latest_ver}", True, GREEN)
+        elif latest_ver and not update_available:
+            status_text = self.game.font.render("已是最新版本", True, GREEN)
+        else:
+            status_text = self.game.font.render(getattr(self.game, 'update_status_text', ''), True, GRAY)
+
+        status_rect = status_text.get_rect(center=(sw // 2, status_y))
+        self.screen.blit(status_text, status_rect)
+
+        # 下载速度
+        if is_downloading and speed > 0:
+            speed_text = self.game.font_small.render(f"速度: {updater.format_speed(speed)}", True, LIGHT_GRAY)
+            speed_rect = speed_text.get_rect(center=(sw // 2, status_y + 30))
+            self.screen.blit(speed_text, speed_rect)
+
+        # 进度条
+        if is_downloading or (progress > 0 and progress < 1):
+            bar_width = int(400 * scale)
+            bar_height = int(25 * scale)
+            bar_x = (sw - bar_width) // 2
+            bar_y = int(220 * scale)
+
+            pygame.draw.rect(self.screen, DARK_GRAY, (bar_x, bar_y, bar_width, bar_height), border_radius=5)
+            fill_width = int(bar_width * progress)
+            if fill_width > 0:
+                pygame.draw.rect(self.screen, CYAN, (bar_x, bar_y, fill_width, bar_height), border_radius=5)
+            pygame.draw.rect(self.screen, WHITE, (bar_x, bar_y, bar_width, bar_height), 2, border_radius=5)
+            pct_text = self.game.font_small.render(f"{int(progress * 100)}%", True, WHITE)
+            pct_rect = pct_text.get_rect(center=(sw // 2, bar_y + bar_height // 2))
+            self.screen.blit(pct_text, pct_rect)
+
+        # 更新日志
+        if changelog and update_available:
+            log_y = int(270 * scale)
+            log_title = self.game.font.render("更新日志:", True, GOLD)
+            self.screen.blit(log_title, (int(100 * scale), log_y))
+
+            log_lines = []
+            for line in changelog.split('\n'):
+                if len(line) > 60:
+                    log_lines.append(line[:60])
+                    log_lines.append(line[60:])
+                else:
+                    log_lines.append(line)
+
+            for i, line in enumerate(log_lines[:10]):
+                line_surf = self.game.font_small.render(line, True, LIGHT_GRAY)
+                self.screen.blit(line_surf, (int(100 * scale), log_y + 30 + i * 22))
+
+        # 按钮
+        btn_y = int(450 * scale)
+        if not is_downloading and not is_extracting:
+            check_btn = getattr(self.game, 'update_check_btn', None)
+            if check_btn:
+                check_btn.base_y = btn_y
+                if check_btn.update(mouse_pos, mouse_pressed, self.game.touch_events, scale):
+                    self.game.update_status_text = "正在检查更新..."
+                    import threading
+                    def _check():
+                        result = updater.check_for_updates()
+                        if result:
+                            latest, url, log = result
+                            current = updater.get_current_version()
+                            if updater.is_newer_version(latest, current):
+                                updater.UPDATE_STATE["update_available"] = True
+                                self.game.update_status_text = f"发现新版本 v{latest}"
+                            else:
+                                self.game.update_status_text = "已是最新版本"
+                        else:
+                            self.game.update_status_text = updater.UPDATE_STATE.get("error", "检查失败")
+                    threading.Thread(target=_check, daemon=True).start()
+                check_btn.draw(self.screen, self.game.font_large, scale)
+
+            if update_available and not is_checking:
+                dl_btn = getattr(self.game, 'update_download_btn', None)
+                if dl_btn:
+                    dl_btn.base_y = btn_y + 70
+                    if dl_btn.update(mouse_pos, mouse_pressed, self.game.touch_events, scale):
+                        self.game.update_status_text = "开始下载更新..."
+                        updater.perform_full_update()
+                    dl_btn.draw(self.screen, self.game.font_large, scale)
+
+        # 返回按钮
+        back_btn = getattr(self.game, 'update_back_btn', None)
+        if back_btn:
+            back_btn.base_y = int(620 * scale)
+            if back_btn.update(mouse_pos, mouse_pressed, self.game.touch_events, scale):
+                self.game.state = GameState.MENU
+            back_btn.draw(self.screen, self.game.font_large, scale)
+
+        esc_hint = self.game.font_small.render("按 ESC 返回菜单", True, DARK_GRAY)
+        esc_rect = esc_hint.get_rect(center=(sw // 2, sh - 30))
+        self.screen.blit(esc_hint, esc_rect)
 
 
     def _draw_mod_manager(self):

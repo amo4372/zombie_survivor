@@ -54,9 +54,9 @@ class LightingSystem:
     # 画质预设
     QUALITY_PRESETS = {
         "performance": {
-            "ambient_darkness": 140,
-            "player_light_radius": 180,
-            "player_light_intensity": 1.0,
+            "ambient_darkness": 80,
+            "player_light_radius": 250,
+            "player_light_intensity": 1.2,
             "enemy_lights": False,
             "projectile_lights": False,
             "boss_lights": True,
@@ -65,9 +65,9 @@ class LightingSystem:
             "vignette": False,
         },
         "balanced": {
-            "ambient_darkness": 210,
-            "player_light_radius": 300,
-            "player_light_intensity": 1.4,
+            "ambient_darkness": 120,
+            "player_light_radius": 400,
+            "player_light_intensity": 1.6,
             "enemy_lights": True,
             "projectile_lights": True,
             "boss_lights": True,
@@ -77,9 +77,9 @@ class LightingSystem:
             "flashlight": True,
         },
         "quality": {
-            "ambient_darkness": 235,
-            "player_light_radius": 380,
-            "player_light_intensity": 1.8,
+            "ambient_darkness": 150,
+            "player_light_radius": 500,
+            "player_light_intensity": 2.0,
             "enemy_lights": True,
             "projectile_lights": True,
             "boss_lights": True,

@@ -19,6 +19,50 @@ from codex import MONSTER_CODEX, WEAPON_CODEX, MONSTER_CATEGORIES, WEAPON_CATEGO
 from skill_tree_view import SkillTreeRenderer, skill_tree_unlock_manager
 from mod_loader import (load_all_mods, trigger_hook, HOOK_GAME_START, HOOK_GAME_TICK, HOOK_ENEMY_SPAWN, HOOK_ENEMY_DEATH, HOOK_PLAYER_DAMAGE, HOOK_KEYDOWN, HOOK_RENDER_HUD, HOOK_GAME_OVER, HOOK_WAVE_COMPLETE)
 from logger import GameLogger
+
+# ============ 存档加密工具（内联，避免加密打包后外部依赖） ============
+_SAVE_CRYPT_KEY = b"Z0mb13_Surv1v0r_Save_Crypt_2024!@#$%"
+_SAVE_CRYPT_SALT = b"ZombieSaveSalt_2024"
+
+def _save_derive_key(password: bytes, salt: bytes = _SAVE_CRYPT_SALT, iterations: int = 5000) -> bytes:
+    """从密码派生密钥"""
+    import hashlib
+    return hashlib.pbkdf2_hmac('sha256', password, salt, iterations, dklen=32)
+
+def _save_xor_crypt(data: bytes, key: bytes) -> bytes:
+    """XOR 加密/解密"""
+    key_len = len(key)
+    return bytes(b ^ key[i % key_len] for i, b in enumerate(data))
+
+def _save_encrypt(data: bytes, key: bytes = _SAVE_CRYPT_KEY) -> bytes:
+    """多层加密存档：XOR + 字节反转 + base64 + XOR"""
+    import base64
+    import hashlib
+    # 第一层：XOR
+    layer1 = _save_xor_crypt(data, key)
+    # 第二层：字节反转
+    layer2 = layer1[::-1]
+    # 第三层：base64
+    layer3 = base64.b64encode(layer2)
+    # 第四层：再次XOR（派生密钥）
+    key2 = hashlib.sha256(key + b"save_layer2").digest()
+    layer4 = _save_xor_crypt(layer3, key2)
+    return layer4
+
+def _save_decrypt(data: bytes, key: bytes = _SAVE_CRYPT_KEY) -> bytes:
+    """多层解密存档"""
+    import base64
+    import hashlib
+    # 第四层反向：XOR
+    key2 = hashlib.sha256(key + b"save_layer2").digest()
+    layer4 = _save_xor_crypt(data, key2)
+    # 第三层反向：base64解码
+    layer3 = base64.b64decode(layer4)
+    # 第二层反向：字节反转
+    layer2 = layer3[::-1]
+    # 第一层反向：XOR
+    layer1 = _save_xor_crypt(layer2, key)
+    return layer1
 from ui import (FontManager, Button, VirtualJoystick, TouchButton, DamageNumber, 
                 FloatingText, ParticleSystem, AimButton, SkillSelector, SkillCaster, 
                 SkillCardSelector, WeaponSwitchButton, draw_dashed_line)
@@ -350,9 +394,10 @@ class Game:
             Button(cx, 455, 200, 45, "记录", color=GOLD),
             Button(cx, 510, 200, 45, "成就", color=AMBER),
             Button(cx, 565, 200, 45, "Mod管理", color=PURPLE),
-            Button(cx, 620, 200, 45, "设置", color=GRAY),
-            Button(cx, 675, 200, 45, "教程", color=BLUE),
-            Button(cx, 730, 200, 45, "退出", color=RED),
+            Button(cx, 620, 200, 45, "检查更新", color=GREEN),
+            Button(cx, 675, 200, 45, "设置", color=GRAY),
+            Button(cx, 730, 200, 45, "教程", color=BLUE),
+            Button(cx, 785, 200, 45, "退出", color=RED),
         ]
         # 模式选择按钮
         self.mode_select_buttons = [
@@ -411,6 +456,13 @@ class Game:
             Button(cx, 410, 200, 50, "返回菜单", color=RED),
         ]
         self.settings_from_pause = False  # 标记设置是否从暂停菜单进入
+        # 更新界面相关
+        self.update_status_text = ""
+        self.update_progress = 0.0
+        self.update_back_btn = Button(640 - 100, 720 - 60, 200, 45, "返回菜单", color=DARK_RED)
+        self.update_check_btn = Button(640 - 100, 300, 200, 50, "检查更新", color=GREEN)
+        self.update_download_btn = Button(640 - 100, 370, 200, 50, "下载并更新", color=CYAN)
+        self.current_version_str = get_current_version()
         logger.info("菜单按钮初始化完成")
 
     def save_game_state(self):
@@ -465,9 +517,19 @@ class Game:
                 "enemies": self._serialize_enemies(),
                 "save_time": __import__('datetime').datetime.now().isoformat(),
             }
-            with open("savegame.json", "w", encoding="utf-8") as f:
-                json.dump(save_data, f, ensure_ascii=False, indent=2)
-            logger.info("对局状态已保存")
+            # 加密保存（多层加密）
+            json_bytes = json.dumps(save_data, ensure_ascii=False, indent=2).encode('utf-8')
+            encrypted = _save_encrypt(json_bytes)
+            with open("savegame.zss", "wb") as f:
+                f.write(encrypted)
+            # 删除旧的明文存档（如果存在）
+            import os
+            if os.path.exists("savegame.json"):
+                try:
+                    os.remove("savegame.json")
+                except:
+                    pass
+            logger.info(f"对局状态已加密保存 ({len(json_bytes)}B -> {len(encrypted)}B)")
             return True
         except Exception as e:
             logger.log_exception(e)
@@ -544,9 +606,9 @@ class Game:
             return []
 
     def has_saved_game(self):
-        """检查是否存在存档"""
+        """检查是否存在存档（优先加密存档，兼容明文旧存档）"""
         import os
-        return os.path.exists("savegame.json")
+        return os.path.exists("savegame.zss") or os.path.exists("savegame.json")
 
     def load_game_state(self):
         """加载存档并开始游戏（从存档恢复）"""
@@ -554,8 +616,28 @@ class Game:
         try:
             if not self.has_saved_game():
                 return False
-            with open("savegame.json", "r", encoding="utf-8") as f:
-                save_data = json.load(f)
+            import os
+            # 优先加载加密存档，兼容明文旧存档
+            if os.path.exists("savegame.zss"):
+                with open("savegame.zss", "rb") as f:
+                    encrypted = f.read()
+                try:
+                    decrypted = _save_decrypt(encrypted)
+                    save_data = json.loads(decrypted.decode('utf-8'))
+                    logger.info("加密存档解密成功")
+                except Exception as e:
+                    logger.log_exception(e)
+                    logger.error("加密存档解密失败，尝试明文存档")
+                    if os.path.exists("savegame.json"):
+                        with open("savegame.json", "r", encoding="utf-8") as f:
+                            save_data = json.load(f)
+                    else:
+                        return False
+            else:
+                # 明文旧存档
+                with open("savegame.json", "r", encoding="utf-8") as f:
+                    save_data = json.load(f)
+                logger.info("加载明文旧存档")
             
             # 恢复模式和难度
             mode_name = save_data.get("game_mode", "ENDLESS")
@@ -728,13 +810,14 @@ class Game:
             return False
 
     def delete_saved_game(self):
-        """删除存档（游戏结束时调用）"""
+        """删除存档（游戏结束时调用）- 同时删除加密和明文存档"""
         import os
-        try:
-            if os.path.exists("savegame.json"):
-                os.remove("savegame.json")
-        except:
-            pass
+        for save_file in ["savegame.zss", "savegame.json"]:
+            try:
+                if os.path.exists(save_file):
+                    os.remove(save_file)
+            except:
+                pass
 
     def _unlock_achievement(self, key):
         """即时解锁成就并显示提示"""
@@ -2354,7 +2437,7 @@ class Game:
             return mouse_pos, mouse_pressed
 
         # 菜单/设置/教程/剧情资料库/难度选择的滚轮和触摸滚动
-        if self.state in (GameState.MENU, GameState.SETTINGS, GameState.TUTORIAL, GameState.RECORDS, GameState.STORY_ARCHIVE, GameState.CODEX, GameState.MODE_SELECT, GameState.DIFFICULTY_SELECT, GameState.MOD_MANAGER, GameState.ACHIEVEMENTS):
+        if self.state in (GameState.MENU, GameState.SETTINGS, GameState.TUTORIAL, GameState.RECORDS, GameState.STORY_ARCHIVE, GameState.CODEX, GameState.MODE_SELECT, GameState.DIFFICULTY_SELECT, GameState.MOD_MANAGER, GameState.ACHIEVEMENTS, GameState.UPDATE):
             for event in all_events:
                 if event.type == pygame.QUIT:
                     logger.info("收到退出事件")
@@ -2664,6 +2747,9 @@ class Game:
                 self.state = GameState.MENU
                 self.mod_manager_scroll = 0
                 self.mod_selected = None
+        elif self.state == GameState.UPDATE:
+            if key == pygame.K_ESCAPE:
+                self.state = GameState.MENU
 
     def _handle_keyup(self, key):
         import time
@@ -4166,7 +4252,46 @@ class Game:
         self.skill_card_selector.hide()
         self.state = GameState.PLAYING
 
+    def _reset_touch_state(self):
+        """重置所有触控状态，防止游戏状态切换后摇杆/按钮卡死"""
+        # 重置虚拟摇杆
+        if hasattr(self, 'joystick') and self.joystick:
+            if hasattr(self.joystick, 'reset'):
+                self.joystick.reset()
+            else:
+                self.joystick.active = False
+                self.joystick.touch_id = None
+                self.joystick.knob_x = self.joystick.base_x
+                self.joystick.knob_y = self.joystick.base_y
+                self.joystick.value_x = 0
+                self.joystick.value_y = 0
+        # 重置所有触控按钮的pressed状态
+        if hasattr(self, 'touch_buttons'):
+            for btn in self.touch_buttons.values():
+                if hasattr(btn, 'pressed'):
+                    btn.pressed = False
+                if hasattr(btn, 'was_pressed'):
+                    btn.was_pressed = False
+        # 重置技能/投掷物施法器的瞄准状态
+        for attr in ['skill_caster', 'throwable_caster', 'aim_button']:
+            obj = getattr(self, attr, None)
+            if obj:
+                if hasattr(obj, 'is_aiming'):
+                    obj.is_aiming = False
+                if hasattr(obj, 'pressed'):
+                    obj.pressed = False
+        # 清空触控事件缓存
+        if hasattr(self, 'touch_events'):
+            self.touch_events.clear()
+
     def update(self, dt):
+        # 状态变化检测：从非PLAYING切换回PLAYING时，重置所有触控状态（防摇杆卡死）
+        if not hasattr(self, '_last_state'):
+            self._last_state = self.state
+        if self.state == GameState.PLAYING and self._last_state != GameState.PLAYING:
+            self._reset_touch_state()
+        self._last_state = self.state
+
         # 时间减缓效果
         if hasattr(self, 'time_slow_active') and self.time_slow_active:
             self.time_slow_timer -= dt
