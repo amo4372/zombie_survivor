@@ -101,6 +101,8 @@ class Renderer:
             self._draw_text_viewer()
         elif state == GameState.MOD_MANAGER:
             self._draw_mod_manager()
+        elif state == GameState.UPDATE:
+            self._draw_update()
 
         pygame.display.flip()
 

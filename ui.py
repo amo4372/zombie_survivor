@@ -160,17 +160,21 @@ class VirtualJoystick:
         self.value_x = 0
         self.value_y = 0
 
-    def handle_touch(self, touch_events, scale=1.0):
+    def handle_touch(self, touch_events, scale=1.0, active_ids=None):
         bx, by, r = self.get_scaled_pos(scale)
         # 收集当前帧所有活跃的touch_id（down或move事件中的id）
-        active_ids = set()
+        frame_active = set()
         for event in touch_events:
             if event["type"] in ("down", "move"):
-                active_ids.add(event.get("id", 0))
+                frame_active.add(event.get("id", 0))
 
-        # 防卡死：如果摇杆active但绑定的touch_id不在当前活跃手指中，强制重置
-        # （常见于游戏状态切换时up事件丢失，或多指操作时手指被其他界面消费）
-        if self.active and self.touch_id is not None and self.touch_id not in active_ids:
+        # 持久手指集合优先（来自 game 层，跨帧、跨状态准确）；未传入时退回当帧判断
+        held = active_ids if active_ids is not None else frame_active
+
+        # 防卡死：摇杆active但绑定的手指已不在按住集合中，且当帧也没有该手指 → 强制重置
+        # 用持久集合后，静止不动的摇杆手指不会被其他手指的点击误判为"消失"
+        if self.active and self.touch_id is not None \
+                and self.touch_id not in held and self.touch_id not in frame_active:
             # 检查是否有up事件对应这个id
             has_up = any(e["type"] == "up" and e.get("id", 0) == self.touch_id for e in touch_events)
             if not has_up:

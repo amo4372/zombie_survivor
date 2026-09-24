@@ -19,6 +19,7 @@ from codex import MONSTER_CODEX, WEAPON_CODEX, MONSTER_CATEGORIES, WEAPON_CATEGO
 from skill_tree_view import SkillTreeRenderer, skill_tree_unlock_manager
 from mod_loader import (load_all_mods, trigger_hook, HOOK_GAME_START, HOOK_GAME_TICK, HOOK_ENEMY_SPAWN, HOOK_ENEMY_DEATH, HOOK_PLAYER_DAMAGE, HOOK_KEYDOWN, HOOK_RENDER_HUD, HOOK_GAME_OVER, HOOK_WAVE_COMPLETE)
 from logger import GameLogger
+import updater
 
 # ============ 存档加密工具（内联，避免加密打包后外部依赖） ============
 _SAVE_CRYPT_KEY = b"Z0mb13_Surv1v0r_Save_Crypt_2024!@#$%"
@@ -280,6 +281,11 @@ class Game:
         self.grapple_press_time = 0
 
         self.touch_events = []
+        # 跨状态、跨帧持久的手指按下跟踪（防止界面切换后控件被留在按下态）
+        self._active_touch_ids = set()   # 当前仍按住的手指 id（鼠标统一用 -1 表示）
+        self._active_touch_pos = {}      # 每根手指最后一次已知位置，用于切换时合成 up
+        self._active_touch_last = {}     # 每根手指最后一次出现任何事件的时间（用于空闲超时恢复）
+        self.touch_stuck_timeout = 4.0   # 手指静默多少秒后强制释放（防事件彻底丢失卡死，可调）
         self._setup_touch_controls()
 
         #键鼠相关【新版：Tab/R只有短按；G支持短按快放 / 长按瞄准】
@@ -462,7 +468,7 @@ class Game:
         self.update_back_btn = Button(640 - 100, 720 - 60, 200, 45, "返回菜单", color=DARK_RED)
         self.update_check_btn = Button(640 - 100, 300, 200, 50, "检查更新", color=GREEN)
         self.update_download_btn = Button(640 - 100, 370, 200, 50, "下载并更新", color=CYAN)
-        self.current_version_str = get_current_version()
+        self.current_version_str = updater.get_current_version()
         logger.info("菜单按钮初始化完成")
 
     def save_game_state(self):
@@ -2307,24 +2313,60 @@ class Game:
         all_events = pygame.event.get()
         self.touch_events = []
         # 预处理：将所有 FINGER 事件和鼠标事件统一转换为 touch_events（dict 格式）
+        # Windows 触控一体机（班班通等）的触摸会被 SDL 同时合成 FINGER 与鼠标事件，
+        # 先收集本帧 FINGER 事件位置用于去重，避免同一根手指被当成两个事件源反复抢绑控件。
+        _finger_down_pos = set()
+        _finger_up_pos = set()
+        _has_finger_move = False
+        for event in all_events:
+            if event.type == pygame.FINGERDOWN:
+                _finger_down_pos.add((event.x * self.scaled_width, event.y * self.scaled_height))
+            elif event.type == pygame.FINGERUP:
+                _finger_up_pos.add((event.x * self.scaled_width, event.y * self.scaled_height))
+            elif event.type == pygame.FINGERMOTION:
+                _has_finger_move = True
+        _near_finger = lambda p, s: any(math.hypot(p[0] - q[0], p[1] - q[1]) <= 24 for q in s)
         for event in all_events:
             if event.type == pygame.FINGERDOWN:
                 x = event.x * self.scaled_width
                 y = event.y * self.scaled_height
+                self._active_touch_ids.add(event.finger_id)
+                self._active_touch_pos[event.finger_id] = (x, y)
+                self._active_touch_last[event.finger_id] = time.time()
                 self.touch_events.append({"type": "down", "pos": (x, y), "id": event.finger_id})
             elif event.type == pygame.FINGERUP:
                 x = event.x * self.scaled_width
                 y = event.y * self.scaled_height
+                self._active_touch_ids.discard(event.finger_id)
+                self._active_touch_pos.pop(event.finger_id, None)
+                self._active_touch_last.pop(event.finger_id, None)
                 self.touch_events.append({"type": "up", "pos": (x, y), "id": event.finger_id})
             elif event.type == pygame.FINGERMOTION:
                 x = event.x * self.scaled_width
                 y = event.y * self.scaled_height
+                if event.finger_id in self._active_touch_ids:
+                    self._active_touch_pos[event.finger_id] = (x, y)
+                    self._active_touch_last[event.finger_id] = time.time()
                 self.touch_events.append({"type": "move", "pos": (x, y), "id": event.finger_id})
             elif event.type == pygame.MOUSEBUTTONDOWN:
+                if _near_finger(event.pos, _finger_down_pos):
+                    continue  # 同一手指的鼠标合成事件，去重
+                self._active_touch_ids.add(-1)
+                self._active_touch_pos[-1] = event.pos
+                self._active_touch_last[-1] = time.time()
                 self.touch_events.append({"type": "down", "pos": event.pos, "id": -1})
             elif event.type == pygame.MOUSEBUTTONUP:
+                if _near_finger(event.pos, _finger_up_pos):
+                    continue  # 同一手指的鼠标合成事件，去重
+                self._active_touch_ids.discard(-1)
+                self._active_touch_pos.pop(-1, None)
+                self._active_touch_last.pop(-1, None)
                 self.touch_events.append({"type": "up", "pos": event.pos, "id": -1})
             elif event.type == pygame.MOUSEMOTION:
+                if _has_finger_move:
+                    continue  # 手指移动时跳过鼠标合成移动
+                if -1 in self._active_touch_ids:
+                    self._active_touch_last[-1] = time.time()
                 self.touch_events.append({"type": "move", "pos": event.pos, "id": -1})
 
         mouse_pos = pygame.mouse.get_pos()
@@ -2600,20 +2642,9 @@ class Game:
 
             elif event.type == pygame.MOUSEBUTTONDOWN:
                 if event.button == 1:
-                    # 所有状态都记录鼠标按下，用于按钮点击
-                    self.touch_events.append({"type": "down", "pos": event.pos, "id": 0})
+                    # 触摸事件已在预处理统一收集到 touch_events，这里只保留日志
                     if self.config.control_mode == ControlMode.TOUCH:
                         logger.debug(f"鼠标触控按下: {event.pos}")
-
-            elif event.type == pygame.MOUSEBUTTONUP:
-                if event.button == 1:
-                    self.touch_events.append({"type": "up", "pos": event.pos, "id": 0})
-                if self.config.control_mode == ControlMode.TOUCH:
-                    self.touch_events.append({"type": "up", "pos": mouse_pos, "id": 0})
-
-            elif event.type == pygame.MOUSEMOTION:
-                if self.config.control_mode == ControlMode.TOUCH:
-                    self.touch_events.append({"type": "move", "pos": mouse_pos, "id": 0})
 
             elif event.type == pygame.MOUSEWHEEL:
                 # 剧情资料库滚动
@@ -2625,19 +2656,12 @@ class Game:
                 x = event.x * self.scaled_width
                 y = event.y * self.scaled_height
                 self.last_touch_pos = (x, y)
-                self.touch_events.append({"type": "down", "pos": (x, y), "id": event.finger_id})
                 logger.debug(f"手指按下: ({x:.0f}, {y:.0f}), id={event.finger_id}")
 
             elif event.type == pygame.FINGERUP:
                 x = event.x * self.scaled_width
                 y = event.y * self.scaled_height
-                self.touch_events.append({"type": "up", "pos": (x, y), "id": event.finger_id})
                 logger.debug(f"手指抬起: ({x:.0f}, {y:.0f}), id={event.finger_id}")
-
-            elif event.type == pygame.FINGERMOTION:
-                x = event.x * self.scaled_width
-                y = event.y * self.scaled_height
-                self.touch_events.append({"type": "move", "pos": (x, y), "id": event.finger_id})
 
         return mouse_pos, mouse_pressed
 
@@ -4252,6 +4276,15 @@ class Game:
         self.skill_card_selector.hide()
         self.state = GameState.PLAYING
 
+    def _synthesize_touch_ups(self):
+        """状态切换时，为仍按住的触摸手指合成 up 事件，防止控件被留在按下态。"""
+        for fid in list(self._active_touch_ids):
+            pos = self._active_touch_pos.get(fid, (0, 0))
+            self.touch_events.append({"type": "up", "pos": pos, "id": fid})
+        self._active_touch_ids.clear()
+        self._active_touch_pos.clear()
+        self._active_touch_last.clear()
+
     def _reset_touch_state(self):
         """重置所有触控状态，防止游戏状态切换后摇杆/按钮卡死"""
         # 重置虚拟摇杆
@@ -4280,16 +4313,17 @@ class Game:
                     obj.is_aiming = False
                 if hasattr(obj, 'pressed'):
                     obj.pressed = False
-        # 清空触控事件缓存
-        if hasattr(self, 'touch_events'):
-            self.touch_events.clear()
+        # 注意：这里不清空 touch_events，状态切换时合成的 up 需存活到 _update_playing 消费
 
     def update(self, dt):
-        # 状态变化检测：从非PLAYING切换回PLAYING时，重置所有触控状态（防摇杆卡死）
+        # 状态变化检测：切换状态时先合成 up（释放仍按住的控件），回到 PLAYING 再全量重置
         if not hasattr(self, '_last_state'):
             self._last_state = self.state
-        if self.state == GameState.PLAYING and self._last_state != GameState.PLAYING:
-            self._reset_touch_state()
+        state_changed = (self.state != self._last_state)
+        if state_changed:
+            self._synthesize_touch_ups()
+            if self.state == GameState.PLAYING:
+                self._reset_touch_state()
         self._last_state = self.state
 
         # 时间减缓效果
@@ -4418,8 +4452,37 @@ class Game:
                 self.q_aim_started = False
         else:
             # 触控模式
+            # 防全卡死兜底：逐根手指按"无任何事件的时间"超时强制释放（事件彻底丢失时也能恢复）
+            _now_t = time.time()
+            for _fid in list(self._active_touch_ids):
+                if _now_t - self._active_touch_last.get(_fid, 0) > self.touch_stuck_timeout:
+                    self.touch_events.append({
+                        "type": "up", "pos": self._active_touch_pos.get(_fid, (0, 0)), "id": _fid})
+                    self._active_touch_ids.discard(_fid)
+                    self._active_touch_pos.pop(_fid, None)
+                    self._active_touch_last.pop(_fid, None)
+                    logger.debug(f"触控超时强制释放: 手指id={_fid}")
             _tev = self.touch_events
-            self.joystick.handle_touch(_tev, self.scale)
+            self.joystick.handle_touch(_tev, self.scale, self._active_touch_ids)
+            # Windows 触控一体机（班班通等）的触摸以鼠标事件合成为主，up 可能被系统手势/驱动吞掉：
+            # 用 mouse.get_pressed 兜底释放"鼠标手指(id=-1)"，防止摇杆/攻击按钮卡在按下态
+            mouse_btn = pygame.mouse.get_pressed()
+            if not (mouse_btn and mouse_btn[0]):
+                if self.joystick.active and self.joystick.touch_id == -1:
+                    self.joystick.reset()
+                if self.aim_button.active and self.aim_button.touch_id == -1:
+                    self.aim_button.active = False
+                    self.aim_button.touch_id = None
+                    self.aim_button.is_shooting = False
+                    self.aim_button.is_aiming = False
+                    self.aim_button.knob_offset_x = 0
+                    self.aim_button.knob_offset_y = 0
+                if self.skill_selector.pressed and self.skill_selector.touch_id == -1:
+                    self.skill_selector.pressed = False
+                    self.skill_selector.touch_id = None
+                    self.skill_selector.wheel_active = False
+                    self.skill_selector.is_long_press = False
+                    self.skill_selector.should_open_wheel = False
             move_x, move_y = self.joystick.get_direction()
 
             # 攻击/瞄准摇杆
