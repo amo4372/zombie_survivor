@@ -259,13 +259,18 @@ def extract_and_apply_update(zip_path, game_dir=None):
             shutil.rmtree(backup_path, ignore_errors=True)
         os.makedirs(backup_path, exist_ok=True)
 
-        # 备份所有.py文件和version.txt
+        # 备份所有.py文件、version.txt 与资源目录(assets)
         backup_files = []
         for f in os.listdir(game_dir):
             fpath = os.path.join(game_dir, f)
             if os.path.isfile(fpath) and (f.endswith('.py') or f == 'version.txt'):
                 shutil.copy2(fpath, os.path.join(backup_path, f))
                 backup_files.append(f)
+        # 备份资源目录（供回滚），存在才备份
+        src_assets = os.path.join(game_dir, "assets")
+        if os.path.isdir(src_assets):
+            dst_assets = os.path.join(backup_path, "assets")
+            shutil.copytree(src_assets, dst_assets, dirs_exist_ok=True)
 
         # 2. 解压更新包到临时目录
         temp_dir = tempfile.mkdtemp(prefix="zombie_update_")
@@ -287,10 +292,25 @@ def extract_and_apply_update(zip_path, game_dir=None):
             src = os.path.join(update_files_dir, f)
             dst = os.path.join(game_dir, f)
             if os.path.isfile(src):
-                # 只覆盖.py、.txt、.json等文本文件，避免覆盖用户存档
+                # 只覆盖.py、version.txt、.md 等文本文件，避免覆盖用户存档
                 if f.endswith('.py') or f == 'version.txt' or f.endswith('.md'):
                     shutil.copy2(src, dst)
                     applied_count += 1
+
+        # 4.1 覆盖资源目录（图片/音乐/音效/字体）：仅当更新包内含 assets 时
+        up_assets = os.path.join(update_files_dir, "assets")
+        if os.path.isdir(up_assets):
+            game_assets = os.path.join(game_dir, "assets")
+            os.makedirs(game_assets, exist_ok=True)
+            for item in os.listdir(up_assets):
+                s = os.path.join(up_assets, item)
+                d = os.path.join(game_assets, item)
+                if os.path.isdir(s):
+                    shutil.copytree(s, d, dirs_exist_ok=True)
+                elif os.path.isfile(s):
+                    os.makedirs(os.path.dirname(d), exist_ok=True)
+                    shutil.copy2(s, d)
+                applied_count += 1
 
         # 5. 验证新版本号
         new_version = get_current_version()
@@ -310,7 +330,7 @@ def extract_and_apply_update(zip_path, game_dir=None):
         UPDATE_STATE["error"] = f"应用更新失败: {str(e)}"
         UPDATE_STATE["extracting"] = False
 
-        # 回滚：从备份恢复
+        # 回滚：从备份恢复（文件 + 资源目录）
         try:
             backup_path = os.path.join(game_dir, BACKUP_DIR)
             if os.path.exists(backup_path):
@@ -319,6 +339,11 @@ def extract_and_apply_update(zip_path, game_dir=None):
                     dst = os.path.join(game_dir, f)
                     if os.path.isfile(src):
                         shutil.copy2(src, dst)
+                # 恢复资源目录
+                b_assets = os.path.join(backup_path, "assets")
+                if os.path.isdir(b_assets):
+                    g_assets = os.path.join(game_dir, "assets")
+                    shutil.copytree(b_assets, g_assets, dirs_exist_ok=True)
         except:
             pass
 
@@ -447,6 +472,40 @@ def format_size(bytes_val):
 def format_speed(bytes_per_sec):
     """格式化下载速度"""
     return format_size(bytes_per_sec) + "/s"
+
+
+def fetch_release_notes(timeout=10):
+    """获取 GitHub 最新 release 的发布说明（版本号 + 正文），失败返回 (None, None)。
+
+    仅公开只读接口（经 gh-proxy，无需令牌），供游戏内“更新说明”界面展示。
+    结果缓存到模块级变量，避免重复请求。
+    """
+    global _RELEASE_NOTES_CACHE
+    if _RELEASE_NOTES_CACHE is not None:
+        return _RELEASE_NOTES_CACHE
+    try:
+        api_url = _gh_proxy_url(f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/releases/latest")
+        req = urllib.request.Request(api_url, headers={
+            "User-Agent": "ZombieSurvivor-Updater/1.0",
+            "Accept": "application/vnd.github.v3+json",
+        })
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+        ver = (data.get("tag_name") or "").lstrip("v") or get_current_version()
+        body = data.get("body", "") or ""
+        _RELEASE_NOTES_CACHE = (ver, body)
+        return _RELEASE_NOTES_CACHE
+    except Exception:
+        return (None, None)
+
+
+def clear_release_notes_cache():
+    """清空发布说明缓存（检查更新后调用，以便拿到最新说明）"""
+    global _RELEASE_NOTES_CACHE
+    _RELEASE_NOTES_CACHE = None
+
+
+_RELEASE_NOTES_CACHE = None
 
 
 # 启动时清理

@@ -950,6 +950,15 @@ class Player:
                         break
         except Exception:
             pass
+        # Mod 钩子：伤害结算（受害者=玩家）
+        try:
+            import mod_loader
+            for _v in reversed(mod_loader.trigger_hook("on_damage_dealt", self, damage, damage_type, None)):
+                if isinstance(_v, (int, float)):
+                    damage = _v
+                    break
+        except Exception:
+            pass
         
         if self.invincible_timer > 0:
             return
@@ -1033,11 +1042,24 @@ class Player:
         if self.invincible_timer > 0 and int(self.invincible_timer * 10) % 2 == 0:
             pass
         else:
-            pygame.draw.circle(screen, BLUE, (px, py), s)
-            angle_rad = math.radians(self.facing_angle)
-            end_x = px + math.cos(angle_rad) * int(25 * scale)
-            end_y = py + math.sin(angle_rad) * int(25 * scale)
-            pygame.draw.line(screen, WHITE, (px, py), (end_x, end_y), max(1, int(3 * scale)))
+            # 优先使用玩家贴图（防爆套装在身用护盾贴图）；缺失时退回几何绘制
+            use_img = assets is not None and assets.has_image("player")
+            shield_img = assets is not None and getattr(self.riot_gear, 'equipped', False) and assets.has_image("player_shield")
+            if use_img or shield_img:
+                key = "player_shield" if shield_img else "player"
+                pimg = assets.get_image(key, s * 2, s * 2)
+                screen.blit(pimg, (px - s, py - s))
+                # 朝向指示线
+                angle_rad = math.radians(self.facing_angle)
+                end_x = px + math.cos(angle_rad) * int(25 * scale)
+                end_y = py + math.sin(angle_rad) * int(25 * scale)
+                pygame.draw.line(screen, WHITE, (px, py), (end_x, end_y), max(1, int(2 * scale)))
+            else:
+                pygame.draw.circle(screen, BLUE, (px, py), s)
+                angle_rad = math.radians(self.facing_angle)
+                end_x = px + math.cos(angle_rad) * int(25 * scale)
+                end_y = py + math.sin(angle_rad) * int(25 * scale)
+                pygame.draw.line(screen, WHITE, (px, py), (end_x, end_y), max(1, int(3 * scale)))
 
         self.riot_gear.draw(screen, self.x, self.y, camera_x, camera_y, scale)
 
@@ -2171,6 +2193,15 @@ class Enemy:
 
         # Buff系统受伤倍率（燃烧加深伤害等）
         damage *= self.buff_manager.get_damage_taken_mult()
+        # Mod 钩子：伤害结算，可修改最终伤害
+        try:
+            import mod_loader
+            for _v in reversed(mod_loader.trigger_hook("on_damage_dealt", self, damage, damage_type, None)):
+                if isinstance(_v, (int, float)):
+                    damage = _v
+                    break
+        except Exception:
+            pass
         self.hp -= damage
         if self.hp <= 0:
             self.alive = False

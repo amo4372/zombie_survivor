@@ -280,6 +280,7 @@ class AssetManager:
         self._volume_sound = 0.7
         self._volume_music = 0.5
         self._current_music = None
+        self._music_choice_cache = {}  # 逻辑曲名 -> 实际选择（确定性，避免每帧新旧随机切换）
         self._missing_assets = []  # 记录缺失的资源
         self._loaded_assets = []   # 记录成功加载的资源
 
@@ -443,18 +444,22 @@ class AssetManager:
     }
 
     def _resolve_music_name(self, name):
-        """随机选择新版或经典版音乐（新旧均允许使用）"""
-        import random
-        candidates = []
-        if name in self.music:
-            candidates.append(name)
-        classic = self.CLASSIC_NAME_MAP.get(name)
-        if classic and classic in self.music:
-            candidates.append(classic)
-        if not candidates:
-            return name
-        # 同一首逻辑音乐播放期间不切换（通过_current_music判断）
-        return random.choice(candidates)
+        """确定性地选择音乐文件：优先新版，缺失回退经典版，并缓存一次选择。
+
+        修复：原实现每次调用都用 random.choice 随机选择新版/经典版，而 _draw_menu 每帧
+        都会调用 play_music("menu")，导致菜单（及地图/事件音乐）每帧在新旧两个文件之间
+        反复切换，造成开头音乐异常/重叠。改为确定性选择并缓存后，同一首逻辑音乐始终
+        使用同一文件，不再抖动。
+        """
+        if name in self._music_choice_cache:
+            return self._music_choice_cache[name]
+        chosen = name
+        if name not in self.music:
+            classic = self.CLASSIC_NAME_MAP.get(name)
+            if classic and classic in self.music:
+                chosen = classic
+        self._music_choice_cache[name] = chosen
+        return chosen
 
     def play_music(self, name, loops=-1, fade_ms=1000):
         """播放背景音乐，随机选择新版或经典版，缺失或禁用时静默跳过"""

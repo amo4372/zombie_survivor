@@ -103,6 +103,8 @@ class Renderer:
             self._draw_mod_manager()
         elif state == GameState.UPDATE:
             self._draw_update()
+        elif state == GameState.UPDATE_NOTES:
+            self._draw_update_notes()
 
         pygame.display.flip()
 
@@ -193,6 +195,10 @@ class Renderer:
                     self.game.state = GameState.TUTORIAL
                 elif i == 10:
                     self.game.running = False
+                elif i == 11:
+                    # 更新说明
+                    self.game.state = GameState.UPDATE_NOTES
+                    self.game._open_update_notes()
             btn.draw(self.screen, self.game.font_large, scale)
 
         version = self.game.font_small.render(f"v{getattr(self.game, 'current_version_str', '1.0.0')} - 黑暗尸潮", True, GRAY)
@@ -533,6 +539,84 @@ class Renderer:
         esc_rect = esc_hint.get_rect(center=(sw // 2, sh - 30))
         self.screen.blit(esc_hint, esc_rect)
 
+
+    def _draw_update_notes(self):
+        """渲染“更新说明”界面：版本 + 可滚动正文 + 返回"""
+        scale = self.game.scale
+        sw = self.game.scaled_width
+        sh = self.game.scaled_height
+        self.screen.fill(VOID_BLACK)
+
+        title = self.game.font_title.render("更新说明", True, GOLD)
+        title_rect = title.get_rect(center=(sw // 2, int(70 * scale)))
+        self.screen.blit(title, title_rect)
+
+        ver = getattr(self.game, 'update_notes_version', None)
+        ver_txt = f"最新版本 v{ver}" if ver else f"当前版本 v{self.game.current_version_str}"
+        ver_surf = self.game.font.render(ver_txt, True, CYAN)
+        ver_rect = ver_surf.get_rect(center=(sw // 2, int(120 * scale)))
+        self.screen.blit(ver_surf, ver_rect)
+
+        mouse_pos = pygame.mouse.get_pos()
+        mouse_pressed = pygame.mouse.get_pressed()
+
+        # 正文滚动
+        body = getattr(self.game, 'update_notes_text', '')
+        text = self.game.font_small
+        line_h = int(24 * scale)
+        area_x = int(70 * scale)
+        area_y = int(155 * scale)
+        area_w = sw - area_x * 2
+        area_h = sh - area_y - int(90 * scale)
+        self.game.update_notes_scroll = max(0, getattr(self.game, 'update_notes_scroll', 0))
+
+        # 滚轮滚动
+        for ev in pygame.event.get(pygame.MOUSEWHEEL):
+            self.game.update_notes_scroll = max(0, self.game.update_notes_scroll - ev.y * line_h * 2)
+        # 触摸拖动（简单：FINGERMOTION 增量）
+        tev = getattr(self.game, 'touch_events', [])
+        for e in tev:
+            if e["type"] == "move":
+                self.game.update_notes_scroll = max(0, self.game.update_notes_scroll + 8)
+
+        # 裁剪绘制
+        clip = self.screen.get_clip()
+        self.screen.set_clip(pygame.Rect(area_x, area_y, area_w, area_h))
+        lines = body.split('\n')
+        y = area_y - self.game.update_notes_scroll
+        for ln in lines:
+            if ln.strip() == '':
+                y += line_h * 0.6
+                continue
+            # 长行自动换行
+            rendered = ln
+            while len(rendered) > 0:
+                if text.size(rendered)[0] <= area_w - 20:
+                    sub = rendered; rendered = ''
+                else:
+                    w = 0; cut = 0
+                    for i, ch in enumerate(rendered):
+                        w += text.size(ch)[0]
+                        if w > area_w - 20:
+                            cut = i; break
+                    if cut <= 0:
+                        cut = max(1, len(rendered) - 1)
+                    sub = rendered[:cut]; rendered = rendered[cut:]
+                if y >= area_y - line_h and y <= area_y + area_h:
+                    color = GOLD if sub.startswith('#') else (LIGHT_GRAY if sub.startswith('-') or sub.startswith('*') else WHITE)
+                    self.screen.blit(text.render(sub.strip(), True, color), (area_x + 6, y))
+                y += line_h
+        self.screen.set_clip(clip)
+
+        # 返回按钮
+        back = getattr(self.game, 'update_back_btn', None)
+        if back:
+            back.base_y = sh - int(60 * scale)
+            if back.update(mouse_pos, mouse_pressed, tev, scale):
+                self.game.state = GameState.MENU
+            back.draw(self.screen, self.game.font_large, scale)
+        hint = self.game.font_small.render("滚轮/滑动滚动 · ESC 返回菜单", True, DARK_GRAY)
+        self.screen.blit(hint, (int(70 * scale), sh - int(28 * scale)))
 
     def _draw_mod_manager(self):
         """渲染 Mod 管理界面"""
@@ -1298,6 +1382,8 @@ class Renderer:
                 btn.text = f"屏幕震动: {'开' if self.game.config.screen_shake else '关'}"
             elif i == 7:
                 btn.text = f"控制: {'触控' if self.game.config.control_mode == ControlMode.TOUCH else '键控'}"
+            elif i == 8:
+                btn.text = f"日志记录: {'开' if self.game.config.enable_logging else '关'}"
 
             if btn.update(mouse_pos, mouse_pressed, self.game.touch_events, scale):
                 self.game.logger.info(f"设置按钮 '{btn.text}' 被点击")
@@ -1335,6 +1421,11 @@ class Renderer:
                 elif i == 7:
                     self.game.config.control_mode = ControlMode.TOUCH if self.game.config.control_mode == ControlMode.KEYBOARD else ControlMode.KEYBOARD
                 elif i == 8:
+                    self.game.config.enable_logging = not self.game.config.enable_logging
+                    self.game.logger.set_enabled(self.game.config.enable_logging)
+                    if self.game.config.enable_logging:
+                        self.game.logger.info("日志记录已开启")
+                elif i == 9:
                     self.game.config.save()
                     if getattr(self.game, 'settings_from_pause', False):
                         self.game.settings_from_pause = False

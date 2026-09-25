@@ -209,6 +209,35 @@ def register(mod_loader):
     mod_loader.register("on_render_hud", render_handler)
 ```
 
+### 4.10 高级自由钩子（v1.0.1 新增）
+
+以下钩子允许 Mod 更自由地接管核心逻辑，返回特定值可覆盖游戏行为：
+
+| 钩子名 | 参数 | 返回值 | 说明 |
+|--------|------|--------|------|
+| `on_touch_event` | `(event, game)` | 返回 `True` 拦截该事件 | 触控事件（按下/移动/抬起）分发前触发，可用于自定义手势/覆盖控件行为 |
+| `on_player_move` | `(game, move_x, move_y, dt)` | 返回 `(nx, ny)` 覆盖移动 | 玩家移动结算前触发，可完全接管/改写移动输入 |
+| `on_player_fire` | `(weapon, player)` | - | 当前武器开火前触发 |
+| `on_skill_use` | `(skill_type, player)` | - | 技能施放时触发 |
+| `on_enemy_update` | `(enemy, dt)` | - | 每个敌人更新前触发，可读取/修改敌人状态 |
+| `on_damage_dealt` | `(victim, damage, damage_type, attacker)` | 返回数值覆盖伤害 | 任意伤害结算（玩家或敌人受击）前触发，返回值将作为最终伤害 |
+
+示例（覆盖玩家移动并拦截触控）：
+
+```python
+def register(mod_loader):
+    def on_move(game, mx, my, dt):
+        return (mx * 2, my * 2)   # 移动速度翻倍
+    def on_touch(ev, game):
+        if ev.get("type") == "down" and ev.get("x", 0) < 0.2:
+            return True            # 拦截屏幕左 20% 区域的点击
+    def on_damage(victim, dmg, dtype, attacker):
+        return dmg * 1.5           # 所有伤害提高 50%
+    mod_loader.register("on_player_move", on_move)
+    mod_loader.register("on_touch_event", on_touch)
+    mod_loader.register("on_damage_dealt", on_damage)
+```
+
 ---
 
 ## 5. Mod API 参考

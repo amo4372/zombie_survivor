@@ -11,3 +11,7 @@ build_encrypted.py
 *.p12
 *.jks
 .env
+
+# 发布包构建产物（上传到 GitHub Releases，不入库）
+releases/
+*.zip

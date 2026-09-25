@@ -316,6 +316,12 @@ HOOK_KEYDOWN = "on_keydown"               # 按键按下时 (key) -> 返回 True
 HOOK_MOUSE_CLICK = "on_mouse_click"       # 鼠标点击时 (pos, button) -> 返回 True 阻止默认
 HOOK_MENU_DRAW = "on_menu_draw"           # 菜单绘制后 (screen, game)
 HOOK_STATE_CHANGE = "on_state_change"     # 游戏状态切换时 (old_state, new_state)
+HOOK_TOUCH_EVENT = "on_touch_event"       # 触控事件 (event, game) -> 任一返回 True 则拦截该事件
+HOOK_PLAYER_MOVE = "on_player_move"       # 玩家移动前 (game, move_x, move_y, dt) -> 返回 (nx, ny) 覆盖移动
+HOOK_PLAYER_FIRE = "on_player_fire"       # 武器开火时 (weapon, player)
+HOOK_SKILL_USE = "on_skill_use"           # 技能施放时 (skill_type, player)
+HOOK_ENEMY_UPDATE = "on_enemy_update"     # 敌人更新前 (enemy, dt)
+HOOK_DAMAGE_DEALT = "on_damage_dealt"     # 任意伤害结算 (victim, damage, damage_type, attacker) -> 返回新伤害
 
 
 class ModAPI:

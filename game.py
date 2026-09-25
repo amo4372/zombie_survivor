@@ -17,7 +17,7 @@ from assets import AssetManager, SOUND_MAP, MUSIC_MAP, MAP_MUSIC_MAP
 from records import GameRecords, GameSession
 from codex import MONSTER_CODEX, WEAPON_CODEX, MONSTER_CATEGORIES, WEAPON_CATEGORIES, codex_unlock_manager
 from skill_tree_view import SkillTreeRenderer, skill_tree_unlock_manager
-from mod_loader import (load_all_mods, trigger_hook, HOOK_GAME_START, HOOK_GAME_TICK, HOOK_ENEMY_SPAWN, HOOK_ENEMY_DEATH, HOOK_PLAYER_DAMAGE, HOOK_KEYDOWN, HOOK_RENDER_HUD, HOOK_GAME_OVER, HOOK_WAVE_COMPLETE)
+from mod_loader import (load_all_mods, trigger_hook, HOOK_GAME_START, HOOK_GAME_TICK, HOOK_ENEMY_SPAWN, HOOK_ENEMY_DEATH, HOOK_PLAYER_DAMAGE, HOOK_KEYDOWN, HOOK_RENDER_HUD, HOOK_GAME_OVER, HOOK_WAVE_COMPLETE, HOOK_TOUCH_EVENT, HOOK_PLAYER_MOVE, HOOK_PLAYER_FIRE, HOOK_SKILL_USE, HOOK_ENEMY_UPDATE, HOOK_DAMAGE_DEALT)
 from logger import GameLogger
 import updater
 
@@ -103,6 +103,7 @@ class Config:
         self.use_external_assets = True  # 是否使用外部图片资源
         self.render_buff_effects = True  # 是否渲染buff等额外效果
         self.graphics_quality = "balanced"  # performance / balanced / quality
+        self.enable_logging = True      # 游戏日志开关（用户可选）
         self.config_file = "config.json"
         self.load()
 
@@ -121,6 +122,7 @@ class Config:
                     self.use_external_assets = data.get("use_external_assets", True)
                     self.render_buff_effects = data.get("render_buff_effects", True)
                     self.graphics_quality = data.get("graphics_quality", "balanced")
+                    self.enable_logging = data.get("enable_logging", True)
         except Exception as e:
             logger.error(f"配置加载失败: {e}")
 
@@ -136,6 +138,7 @@ class Config:
             "use_external_assets": self.use_external_assets,
             "render_buff_effects": self.render_buff_effects,
             "graphics_quality": self.graphics_quality,
+            "enable_logging": self.enable_logging,
         }
         try:
             with open(self.config_file, "w", encoding="utf-8") as f:
@@ -197,6 +200,9 @@ class Game:
 
         self.config = Config()
         logger.info(f"控制模式: {self.config.control_mode.name}")
+        # 应用日志开关：默认只写游戏日志文件，不打印终端
+        logger.set_enabled(self.config.enable_logging)
+        logger.set_console(False)
 
         self.font_small = FontManager.get(14)
         self.font = FontManager.get(18)
@@ -404,6 +410,7 @@ class Game:
             Button(cx, 675, 200, 45, "设置", color=GRAY),
             Button(cx, 730, 200, 45, "教程", color=BLUE),
             Button(cx, 785, 200, 45, "退出", color=RED),
+            Button(cx, 785, 200, 45, "更新说明", color=GRAY),
         ]
         # 模式选择按钮
         self.mode_select_buttons = [
@@ -453,7 +460,8 @@ class Game:
             Button(cx, 425, 200, 45, "伤害数字: 开", color=GRAY),
             Button(cx, 480, 200, 45, "屏幕震动: 开", color=GRAY),
             Button(cx, 535, 200, 45, "控制: 键控", color=GRAY),
-            Button(cx, 595, 200, 50, "返回", color=RED),
+            Button(cx, 590, 200, 45, "日志记录: 开", color=GRAY),
+            Button(cx, 655, 200, 50, "返回", color=RED),
         ]
         self.pause_buttons = [
             Button(cx, 200, 200, 50, "继续", color=GREEN),
@@ -468,6 +476,10 @@ class Game:
         self.update_back_btn = Button(640 - 100, 720 - 60, 200, 45, "返回菜单", color=DARK_RED)
         self.update_check_btn = Button(640 - 100, 300, 200, 50, "检查更新", color=GREEN)
         self.update_download_btn = Button(640 - 100, 370, 200, 50, "下载并更新", color=CYAN)
+        # 更新说明界面
+        self.update_notes_scroll = 0
+        self.update_notes_version = None
+        self.update_notes_text = "正在加载更新说明..."
         self.current_version_str = updater.get_current_version()
         logger.info("菜单按钮初始化完成")
 
@@ -1293,6 +1305,10 @@ class Game:
 
     def _use_skill(self, skill_type):
         """使用指定技能"""
+        try:
+            trigger_hook(HOOK_SKILL_USE, skill_type, self.player)
+        except Exception:
+            pass
         if not self.player:
             return False
         if not self.player.can_act():
@@ -2479,7 +2495,7 @@ class Game:
             return mouse_pos, mouse_pressed
 
         # 菜单/设置/教程/剧情资料库/难度选择的滚轮和触摸滚动
-        if self.state in (GameState.MENU, GameState.SETTINGS, GameState.TUTORIAL, GameState.RECORDS, GameState.STORY_ARCHIVE, GameState.CODEX, GameState.MODE_SELECT, GameState.DIFFICULTY_SELECT, GameState.MOD_MANAGER, GameState.ACHIEVEMENTS, GameState.UPDATE):
+        if self.state in (GameState.MENU, GameState.SETTINGS, GameState.TUTORIAL, GameState.RECORDS, GameState.STORY_ARCHIVE, GameState.CODEX, GameState.MODE_SELECT, GameState.DIFFICULTY_SELECT, GameState.MOD_MANAGER, GameState.ACHIEVEMENTS, GameState.UPDATE, GameState.UPDATE_NOTES):
             for event in all_events:
                 if event.type == pygame.QUIT:
                     logger.info("收到退出事件")
@@ -2772,6 +2788,9 @@ class Game:
                 self.mod_manager_scroll = 0
                 self.mod_selected = None
         elif self.state == GameState.UPDATE:
+            if key == pygame.K_ESCAPE:
+                self.state = GameState.MENU
+        elif self.state == GameState.UPDATE_NOTES:
             if key == pygame.K_ESCAPE:
                 self.state = GameState.MENU
 
@@ -4286,8 +4305,14 @@ class Game:
         self._active_touch_last.clear()
 
     def _reset_touch_state(self):
-        """重置所有触控状态，防止游戏状态切换后摇杆/按钮卡死"""
-        # 重置虚拟摇杆
+        """强制重置所有触控控件状态，防止游戏状态切换后摇杆/攻击/按钮卡死。
+
+        关键：多指操控时（如一只手移动、一只手攻击）按下菜单键返回暂停，
+        仍按住的攻击/摇杆手指的 up 事件在状态切换后不再被 _update_playing 消费，
+        因此必须完整清掉所有控件的按下/射击/绑定状态，否则回到游戏后
+        攻击摇杆会持续处于 is_shooting 状态（射击按钮卡死）。
+        """
+        # 虚拟摇杆
         if hasattr(self, 'joystick') and self.joystick:
             if hasattr(self.joystick, 'reset'):
                 self.joystick.reset()
@@ -4298,22 +4323,77 @@ class Game:
                 self.joystick.knob_y = self.joystick.base_y
                 self.joystick.value_x = 0
                 self.joystick.value_y = 0
-        # 重置所有触控按钮的pressed状态
+        # 重置所有触控按钮的 pressed / 绑定手指 / 长按状态
         if hasattr(self, 'touch_buttons'):
             for btn in self.touch_buttons.values():
-                if hasattr(btn, 'pressed'):
-                    btn.pressed = False
-                if hasattr(btn, 'was_pressed'):
-                    btn.was_pressed = False
-        # 重置技能/投掷物施法器的瞄准状态
-        for attr in ['skill_caster', 'throwable_caster', 'aim_button']:
+                for _a in ('pressed', 'was_pressed', 'just_released', 'just_pressed', 'is_long_press'):
+                    if hasattr(btn, _a):
+                        setattr(btn, _a, False)
+                if hasattr(btn, 'touch_id'):
+                    btn.touch_id = None
+        # 重置攻击摇杆 / 技能施法器 / 投掷物施法器 / 技能选择器
+        # 必须清掉 active / is_shooting / is_aiming / touch_id / knob 偏移，才能彻底解除卡死
+        for attr in ['aim_button', 'skill_caster', 'throwable_caster', 'skill_selector']:
             obj = getattr(self, attr, None)
-            if obj:
-                if hasattr(obj, 'is_aiming'):
-                    obj.is_aiming = False
-                if hasattr(obj, 'pressed'):
-                    obj.pressed = False
-        # 注意：这里不清空 touch_events，状态切换时合成的 up 需存活到 _update_playing 消费
+            if not obj:
+                continue
+            for _a in ('active', 'pressed', 'is_shooting', 'is_aiming', 'was_pressed',
+                       'just_released', 'just_pressed', 'wheel_active', 'is_long_press',
+                       'should_open_wheel'):
+                if hasattr(obj, _a):
+                    setattr(obj, _a, False)
+            if hasattr(obj, 'touch_id'):
+                obj.touch_id = None
+            if hasattr(obj, 'knob_offset_x'):
+                obj.knob_offset_x = 0
+            if hasattr(obj, 'knob_offset_y'):
+                obj.knob_offset_y = 0
+        # 技能轮盘 / 武器轮盘：关闭活动状态
+        for _w in (getattr(self, 'skill_wheel', None), getattr(self, 'weapon_wheel', None)):
+            if _w and hasattr(_w, 'active'):
+                _w.active = False
+        # 注意：这里不清空 touch_events，状态切换时合成的 up 交由各控件消费；
+        # 由于上面已把 touch_id 全部置空，残留的合成 up 会被控件安全忽略。
+
+    def _open_update_notes(self):
+        """打开“更新说明”界面：先用本地内置说明，再后台拉取 GitHub 最新发布说明"""
+        self.update_notes_scroll = 0
+        self.update_notes_text = (
+            f"当前版本: v{self.current_version_str}\n\n"
+            "丧尸幸存者 Zombie Survivor - 俯视角僵尸生存射击游戏\n"
+            "由 AI 开发维护。\n\n"
+            "## 功能特色\n"
+            "- 无尽生存：升级、选择技能、切换武器\n"
+            "- 多模式：故事 / 无尽 / 限时；多难度：简单/普通/困难/地狱\n"
+            "- 武器、技能、精英怪与 Boss、符文、Buff 系统\n"
+            "- 触控与键鼠双支持，适配班班通等触控一体机\n"
+            "- 内置 GitHub Release 热更新（检查/下载/应用/自动重启）\n\n"
+            "## v1.0.1 更新内容\n"
+            "- 修复多指操控时按菜单返回后射击按钮卡死的问题\n"
+            "- 修复菜单/开头音乐在新旧版本间反复切换的异常\n"
+            "- 新增：设置中可开关游戏日志记录（写入日志文件）\n"
+            "- 新增：游戏内“更新说明”界面\n"
+            "- 扩展热更新支持资源文件更新\n"
+            "- 新增更多 Mod 钩子\n"
+            "- 补全缺失图像资源（程序化生成）\n"
+            "\n"
+            "（正在后台获取 GitHub 最新发布说明...）"
+        )
+        self.update_notes_version = None
+        try:
+            import threading
+            def _load():
+                ver, body = updater.fetch_release_notes()
+                if ver and body:
+                    self.update_notes_version = ver
+                    self.update_notes_text = f"最新版本: v{ver}\n\n{body}"
+                else:
+                    self.update_notes_text = self.update_notes_text.replace(
+                        "（正在后台获取 GitHub 最新发布说明...）",
+                        "（未能联网获取最新发布说明，显示本地内置版本）")
+            threading.Thread(target=_load, daemon=True).start()
+        except Exception:
+            pass
 
     def update(self, dt):
         # 状态变化检测：切换状态时先合成 up（释放仍按住的控件），回到 PLAYING 再全量重置
@@ -4322,7 +4402,10 @@ class Game:
         state_changed = (self.state != self._last_state)
         if state_changed:
             self._synthesize_touch_ups()
-            if self.state == GameState.PLAYING:
+            # 离开 PLAYING 也要全量重置触控（多指操控中按菜单返回时，
+            # 仍按住的攻击/摇杆手指的 up 事件不会被 _update_playing 消费，
+            # 必须清掉控件状态，否则攻击摇杆会持续 is_shooting 卡死）
+            if self.state == GameState.PLAYING or self._last_state == GameState.PLAYING:
                 self._reset_touch_state()
         self._last_state = self.state
 
@@ -4462,7 +4545,11 @@ class Game:
                     self._active_touch_pos.pop(_fid, None)
                     self._active_touch_last.pop(_fid, None)
                     logger.debug(f"触控超时强制释放: 手指id={_fid}")
-            _tev = self.touch_events
+            _tev = []
+            for _e in self.touch_events:
+                _r = trigger_hook(HOOK_TOUCH_EVENT, _e, self)
+                if not (True in _r):
+                    _tev.append(_e)
             self.joystick.handle_touch(_tev, self.scale, self._active_touch_ids)
             # Windows 触控一体机（班班通等）的触摸以鼠标事件合成为主，up 可能被系统手势/驱动吞掉：
             # 用 mouse.get_pressed 兜底释放"鼠标手指(id=-1)"，防止摇杆/攻击按钮卡在按下态
@@ -4612,6 +4699,13 @@ class Game:
         rune_speed_mult = 1.0 + getattr(self, 'rune_buffs', {}).get("speed", 0)
         orig_speed_mult = self.player.speed_mult
         self.player.speed_mult *= rune_speed_mult
+        # Mod 钩子：玩家移动覆盖
+        for _mv in trigger_hook(HOOK_PLAYER_MOVE, self, move_x, move_y, dt):
+            if isinstance(_mv, (tuple, list)) and len(_mv) >= 2:
+                try:
+                    move_x, move_y = float(_mv[0]), float(_mv[1])
+                except Exception:
+                    pass
         self.player.update(dt, move_x, move_y, mouse_angle, self.world, sprinting=sprinting)
         # 符文：再生效果
         if hasattr(self, 'rune_manager'):
@@ -4703,6 +4797,7 @@ class Game:
             if weapon.can_fire():
                 # 符文伤害加成
                 rune_dmg_mult = 1.0 + getattr(self, 'rune_buffs', {}).get("damage", 0)
+                trigger_hook(HOOK_PLAYER_FIRE, weapon, self.player)
                 proj_list = weapon.fire(
                     self.player.x, self.player.y, mouse_angle,
                     self.player.damage_mult * self.player.damage_boost_mult * self.player.buff_manager.get_damage_mult() * rune_dmg_mult, self.player.speed_mult,
@@ -4811,6 +4906,10 @@ class Game:
         for enemy in self.enemies[:]:
             # 选择最近的玩家作为目标
             target_x, target_y, target_obj = self.player.x, self.player.y, self.player
+            try:
+                trigger_hook(HOOK_ENEMY_UPDATE, enemy, dt)
+            except Exception:
+                pass
             result = enemy.update(dt, target_x, target_y, target_obj, self.world)
             # 显示敌人受到的buff伤害数字（Enemy.update内部已处理buff_manager.update）
             for dmg, dtype in getattr(enemy, 'buff_damage_events', []):
