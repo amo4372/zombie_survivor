@@ -2,3 +2,12 @@ __pycache__/
 game_log.txt
 *.json
 dist_encrypted/
+
+# 安全性文件（含加密密钥，不推送远程）
+crypto_tool.py
+build_encrypted.py
+*.pem
+*.key
+*.p12
+*.jks
+.env

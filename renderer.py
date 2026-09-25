@@ -139,7 +139,13 @@ class Renderer:
         mouse_pressed = pygame.mouse.get_pressed()
 
         for i, btn in enumerate(self.game.menu_buttons):
-            btn.base_y = (180 + i * 55)
+            # 两列布局：左列 i=0..5，右列 i=6..10，避免11个按钮单列溢出720逻辑高
+            if i < 6:
+                btn.base_x = 360
+                btn.base_y = 260 + i * 68
+            else:
+                btn.base_x = 720
+                btn.base_y = 260 + (i - 6) * 68
             # 继续游戏按钮：无存档时禁用
             if i == 0:
                 btn.enabled = self.game.has_saved_game()
