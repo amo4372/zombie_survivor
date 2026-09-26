@@ -495,7 +495,7 @@ class Renderer:
                 self.screen.blit(line_surf, (int(100 * scale), log_y + 30 + i * 22))
 
         # 按钮
-        btn_y = int(450 * scale)
+        btn_y = 450  # BASE 坐标，Button.get_scaled_rect 内部乘 scale
         if not is_downloading and not is_extracting:
             check_btn = getattr(self.game, 'update_check_btn', None)
             if check_btn:
@@ -530,7 +530,7 @@ class Renderer:
         # 返回按钮
         back_btn = getattr(self.game, 'update_back_btn', None)
         if back_btn:
-            back_btn.base_y = int(620 * scale)
+            back_btn.base_y = 620  # BASE 坐标
             if back_btn.update(mouse_pos, mouse_pressed, self.game.touch_events, scale):
                 self.game.state = GameState.MENU
             back_btn.draw(self.screen, self.game.font_large, scale)
@@ -541,82 +541,74 @@ class Renderer:
 
 
     def _draw_update_notes(self):
-        """渲染“更新说明”界面：版本 + 可滚动正文 + 返回"""
+        """渲染"更新说明"界面：版本 + ScrollablePanel 可滚动正文 + 返回
+        统一采用图鉴 ScrollablePanel 实现：触控拖动 + 鼠标拖动 + 滚轮 + 自动换行 + max_scroll 边界 + 滚动条"""
+        from ui import ScrollablePanel
         scale = self.game.scale
         sw = self.game.scaled_width
         sh = self.game.scaled_height
         self.screen.fill(VOID_BLACK)
 
+        # 标题
         title = self.game.font_title.render("更新说明", True, GOLD)
-        title_rect = title.get_rect(center=(sw // 2, int(70 * scale)))
+        title_rect = title.get_rect(center=(sw // 2, int(48 * scale)))
         self.screen.blit(title, title_rect)
 
+        # 版本
         ver = getattr(self.game, 'update_notes_version', None)
         ver_txt = f"最新版本 v{ver}" if ver else f"当前版本 v{self.game.current_version_str}"
         ver_surf = self.game.font.render(ver_txt, True, CYAN)
-        ver_rect = ver_surf.get_rect(center=(sw // 2, int(120 * scale)))
+        ver_rect = ver_surf.get_rect(center=(sw // 2, int(90 * scale)))
         self.screen.blit(ver_surf, ver_rect)
 
         mouse_pos = pygame.mouse.get_pos()
         mouse_pressed = pygame.mouse.get_pressed()
 
-        # 正文滚动
+        # 正文滚动面板（统一图鉴实现）
+        panel_x = int(40 * scale)
+        panel_y = int(125 * scale)
+        panel_w = sw - int(80 * scale)
+        panel_h = sh - panel_y - int(75 * scale)
+
         body = getattr(self.game, 'update_notes_text', '')
-        text = self.game.font_small
-        line_h = int(24 * scale)
-        area_x = int(70 * scale)
-        area_y = int(155 * scale)
-        area_w = sw - area_x * 2
-        area_h = sh - area_y - int(90 * scale)
-        self.game.update_notes_scroll = max(0, getattr(self.game, 'update_notes_scroll', 0))
+        panel = getattr(self.game, '_update_notes_panel', None)
+        if panel is None:
+            panel = ScrollablePanel(panel_x, panel_y, panel_w, panel_h,
+                                    title="", font=self.game.font_small, title_font=self.game.font_large)
+            self.game._update_notes_panel = panel
+        panel.x = panel_x
+        panel.y = panel_y
+        panel.width = panel_w
+        panel.height = panel_h
 
-        # 滚轮滚动
-        for ev in pygame.event.get(pygame.MOUSEWHEEL):
-            self.game.update_notes_scroll = max(0, self.game.update_notes_scroll - ev.y * line_h * 2)
-        # 触摸拖动（简单：FINGERMOTION 增量）
-        tev = getattr(self.game, 'touch_events', [])
-        for e in tev:
-            if e["type"] == "move":
-                self.game.update_notes_scroll = max(0, self.game.update_notes_scroll + 8)
+        # 按行着色：# 标题金色，-/* 列表浅灰，其余白色
+        colored = []
+        for ln in body.split('\n'):
+            stripped = ln.lstrip()
+            if stripped.startswith('#'):
+                colored.append((ln, GOLD, 0, False))
+            elif stripped.startswith('-') or stripped.startswith('*'):
+                colored.append((ln, LIGHT_GRAY, 12, False))
+            else:
+                colored.append((ln, (225, 225, 225), 0, False))
+        panel.set_content(colored)
 
-        # 裁剪绘制
-        clip = self.screen.get_clip()
-        self.screen.set_clip(pygame.Rect(area_x, area_y, area_w, area_h))
-        lines = body.split('\n')
-        y = area_y - self.game.update_notes_scroll
-        for ln in lines:
-            if ln.strip() == '':
-                y += line_h * 0.6
-                continue
-            # 长行自动换行
-            rendered = ln
-            while len(rendered) > 0:
-                if text.size(rendered)[0] <= area_w - 20:
-                    sub = rendered; rendered = ''
-                else:
-                    w = 0; cut = 0
-                    for i, ch in enumerate(rendered):
-                        w += text.size(ch)[0]
-                        if w > area_w - 20:
-                            cut = i; break
-                    if cut <= 0:
-                        cut = max(1, len(rendered) - 1)
-                    sub = rendered[:cut]; rendered = rendered[cut:]
-                if y >= area_y - line_h and y <= area_y + area_h:
-                    color = GOLD if sub.startswith('#') else (LIGHT_GRAY if sub.startswith('-') or sub.startswith('*') else WHITE)
-                    self.screen.blit(text.render(sub.strip(), True, color), (area_x + 6, y))
-                y += line_h
-        self.screen.set_clip(clip)
+        # 输入处理（鼠标拖动 + 触控拖动；滚轮在 game.update 统一处理）
+        panel.handle_mouse(mouse_pos, mouse_pressed)
+        if hasattr(self.game, 'touch_events'):
+            panel.handle_touch(self.game.touch_events)
+        panel.draw(self.screen)
 
-        # 返回按钮
+        # 返回按钮（BASE 坐标，Button 内部乘 scale）
         back = getattr(self.game, 'update_back_btn', None)
         if back:
-            back.base_y = sh - int(60 * scale)
-            if back.update(mouse_pos, mouse_pressed, tev, scale):
+            back.base_y = 660
+            if back.update(mouse_pos, mouse_pressed, self.game.touch_events, scale):
                 self.game.state = GameState.MENU
             back.draw(self.screen, self.game.font_large, scale)
-        hint = self.game.font_small.render("滚轮/滑动滚动 · ESC 返回菜单", True, DARK_GRAY)
-        self.screen.blit(hint, (int(70 * scale), sh - int(28 * scale)))
+
+        hint = self.game.font_small.render("滚轮 / 手指滑动滚动 · ESC 返回菜单", True, DARK_GRAY)
+        self.screen.blit(hint, (int(40 * scale), sh - int(22 * scale)))
 
     def _draw_mod_manager(self):
         """渲染 Mod 管理界面"""
@@ -1253,7 +1245,37 @@ class Renderer:
             if not mouse_pressed[0]:
                 self.game._world_list_pressed = False
                 self.game._world_list_dragging = False
-        
+
+        # 触控拖动列表滚动 + 点击选择（统一图鉴实现，修复触控需点好几下的问题）
+        for te in self.game.touch_events:
+            te_type = te.get("type", "")
+            te_pos = te.get("pos", (0, 0))
+            te_id = te.get("id", 0)
+            if te_type == "down" and list_rect.collidepoint(te_pos[0], te_pos[1]):
+                self.game._world_touch_dragging = True
+                self.game._world_touch_drag_start_y = te_pos[1]
+                self.game._world_touch_drag_start_scroll = self.game.codex_world_list_scroll
+                self.game._world_touch_id = te_id
+                self.game._world_touch_moved = False
+            elif te_type == "move" and getattr(self.game, '_world_touch_dragging', False) and te_id == getattr(self.game, '_world_touch_id', -1):
+                delta = te_pos[1] - self.game._world_touch_drag_start_y
+                if abs(delta) > 5:
+                    self.game._world_touch_moved = True
+                self.game.codex_world_list_scroll = max(0, min(max_scroll, self.game._world_touch_drag_start_scroll - delta))
+            elif te_type == "up" and te_id == getattr(self.game, '_world_touch_id', -1):
+                self.game._world_touch_dragging = False
+                # 非拖动的抬手 = 点击选择
+                if not getattr(self.game, '_world_touch_moved', False) and list_rect.collidepoint(te_pos[0], te_pos[1]):
+                    for _i, (_key, _data) in enumerate(lore_items):
+                        _item_y = list_y + 10 + _i * (item_height + 5) - self.game.codex_world_list_scroll
+                        _item_rect = pygame.Rect(list_x + 10, _item_y, list_w - 20, item_height)
+                        if _item_rect.collidepoint(te_pos[0], te_pos[1]):
+                            self.game.codex_world_selected = _key
+                            self.game.codex_scroll = 0
+                            if hasattr(self.game, '_world_scroll_panel') and self.game._world_scroll_panel:
+                                self.game._world_scroll_panel.scroll_y = 0
+                            break
+
         # 绘制条目（使用裁剪区域）
         clip_rect = pygame.Rect(list_x + 5, list_y + 5, list_w - 10, list_h - 10)
         self.screen.set_clip(clip_rect)

@@ -2526,6 +2526,9 @@ class Game:
                         self.mod_manager_scroll = max(0, self.mod_manager_scroll - event.y * 40)
                     elif self.state == GameState.ACHIEVEMENTS:
                         self.ach_scroll_offset = max(0, self.ach_scroll_offset - event.y * 40)
+                    elif self.state == GameState.UPDATE_NOTES:
+                        if hasattr(self, '_update_notes_panel') and self._update_notes_panel:
+                            self._update_notes_panel.handle_wheel(event.y)
                 elif event.type == pygame.FINGERDOWN:
                     x = event.x * self.scaled_width
                     y = event.y * self.scaled_height
@@ -4368,6 +4371,13 @@ class Game:
             "- 武器、技能、精英怪与 Boss、符文、Buff 系统\n"
             "- 触控与键鼠双支持，适配班班通等触控一体机\n"
             "- 内置 GitHub Release 热更新（检查/下载/应用/自动重启）\n\n"
+            "## v1.0.2 更新内容\n"
+            "- 修复：手机端检查更新页面按钮布局（下载/返回按钮被挤出屏幕外）\n"
+            "- 修复：更新说明界面文字无法手动滚动、自动滚走消失的问题\n"
+            "- 统一：所有滚动文字界面采用图鉴 ScrollablePanel 实现（触控+鼠标+滚轮+边界+滚动条）\n"
+            "- 修复：图鉴世界观分类按钮触控需点好几下才响应的问题\n"
+            "- 排查：技能选择/轮盘/对话等弹出界面切换时的触控状态重置，防止按键卡死\n"
+            "\n"
             "## v1.0.1 更新内容\n"
             "- 修复多指操控时按菜单返回后射击按钮卡死的问题\n"
             "- 修复菜单/开头音乐在新旧版本间反复切换的异常\n"
