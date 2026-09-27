@@ -484,6 +484,8 @@ class Renderer:
 
             log_lines = []
             for line in changelog.split('\n'):
+                if not line.strip():
+                    continue  # 跳过空行，避免渲染空串崩溃
                 if len(line) > 60:
                     log_lines.append(line[:60])
                     log_lines.append(line[60:])
@@ -1722,7 +1724,7 @@ class Renderer:
                 if name == "shoot" and player.riot_gear.equipped:
                     original_label = btn.label
                     original_color = btn.color
-                    btn.label = "击"
+                    btn.label = "肘击"
                     btn.color = PURPLE
                     btn.draw(self.screen, self.game.font_small, scale)
                     btn.label = original_label

@@ -10,6 +10,24 @@ import time
 from config import *
 
 
+class SafeFont:
+    """字体渲染兜底：空文本/渲染异常时返回透明 surface，避免 pygame 'Text has zero width' 崩溃。
+    用于 changelog 含空行等场景，render('') 不再抛 pygame.error。"""
+    def __init__(self, font):
+        self._font = font
+
+    def render(self, text, antialias=True, color=(255, 255, 255), bgcolor=None):
+        if text is None or (isinstance(text, str) and not text.strip()):
+            return pygame.Surface((1, 1), pygame.SRCALPHA)
+        try:
+            return self._font.render(text, antialias, color, bgcolor)
+        except pygame.error:
+            return pygame.Surface((1, 1), pygame.SRCALPHA)
+
+    def __getattr__(self, name):
+        return getattr(self._font, name)
+
+
 class FontManager:
     _fonts = {}
     _base_path = None
@@ -24,8 +42,8 @@ class FontManager:
         if key in cls._fonts:
             return cls._fonts[key]
         font = cls._load_font(size)
-        cls._fonts[key] = font
-        return font
+        cls._fonts[key] = SafeFont(font)
+        return cls._fonts[key]
 
     @classmethod
     def _load_font(cls, size):

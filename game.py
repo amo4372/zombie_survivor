@@ -368,17 +368,16 @@ class Game:
 
         # 触控按钮 - 三列两行布局，避免重叠
         self.touch_buttons = {
-            "shoot": TouchButton(BASE_WIDTH - 500, BASE_HEIGHT - 145, 62, "射", RED),
-            "weapon_switch": WeaponSwitchButton(BASE_WIDTH - 520, BASE_HEIGHT - 320, 42, "换", PURPLE),
+            "shoot": TouchButton(BASE_WIDTH - 500, BASE_HEIGHT - 145, 62, "射击", RED),
+            "weapon_switch": WeaponSwitchButton(BASE_WIDTH - 520, BASE_HEIGHT - 320, 42, "换武器", PURPLE),
             "pause": TouchButton(60, 55, 38, "II", GRAY),
-            "chat": TouchButton(60, BASE_HEIGHT - 200, 42, "聊", CYAN),
         }
         # 技能切换按钮（右上列）
         self.skill_selector = SkillSelector(BASE_WIDTH - 220, BASE_HEIGHT - 320, 42)
         # 技能释放按钮（右下列）
         self.skill_caster = SkillCaster(BASE_WIDTH - 130, BASE_HEIGHT - 145, 52)
         # 投掷物切换按钮（中上列）
-        self.throwable_switch_btn = TouchButton(BASE_WIDTH - 370, BASE_HEIGHT - 320, 42, "弹", ORANGE)
+        self.throwable_switch_btn = TouchButton(BASE_WIDTH - 370, BASE_HEIGHT - 320, 42, "投掷", ORANGE)
         # 投掷物释放器（中下列，复用SkillCaster的瞄准逻辑）
         self.throwable_caster = SkillCaster(BASE_WIDTH - 310, BASE_HEIGHT - 145, 48)
         # 触控模式下显示按钮，键盘模式下隐藏
@@ -2935,6 +2934,10 @@ class Game:
         self.assets.play_sound("bash")
         success = self.player.riot_gear.bash(direction_angle)
         if success:
+            # 肘击消耗已扣 riot_gear.stamina，同步回玩家共享体力池。
+            # 若不回流，Player.update 每帧会把 self.stamina 单向覆盖回 riot_gear.stamina，
+            # 导致肘击体力消耗被抹掉 -> 体力与玩家不共享、恒接近满（接近无限）
+            self.player.stamina = self.player.riot_gear.stamina
             self.floating_texts.append(FloatingText(
                 self.player.x, self.player.y - 40, "盾牌冲撞!", color=CYAN, lifetime=1.0
             ))
@@ -4371,6 +4374,12 @@ class Game:
             "- 武器、技能、精英怪与 Boss、符文、Buff 系统\n"
             "- 触控与键鼠双支持，适配班班通等触控一体机\n"
             "- 内置 GitHub Release 热更新（检查/下载/应用/自动重启）\n\n"
+            "## v1.0.3 更新内容\n"
+            "- 修复：检查更新成功后渲染 GitHub 更新日志时空行导致的崩溃（Text has zero width）\n"
+            "- 修复：装备防爆套装后体力不共享、接近无限的问题（肘击消耗不再被抹掉）\n"
+            "- 删除：触控端的聊天按钮\n"
+            "- 优化：触控按钮单字扩充为清晰表达（射击/换武器/投掷）\n"
+            "\n"
             "## v1.0.2 更新内容\n"
             "- 修复：手机端检查更新页面按钮布局（下载/返回按钮被挤出屏幕外）\n"
             "- 修复：更新说明界面文字无法手动滚动、自动滚走消失的问题\n"
