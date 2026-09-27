@@ -221,6 +221,7 @@ class Game:
         self.particles = None
         self.dialogue = None
 
+        self.rune_manager = RuneManager()  # 符文系统（修复：此前从未初始化导致不生效）
         self.enemies = []
         self.projectiles = []
         self.special_items = []  # 场景道具（武器箱/宝箱/生命/弹药等）
@@ -371,6 +372,7 @@ class Game:
             "shoot": TouchButton(BASE_WIDTH - 500, BASE_HEIGHT - 145, 62, "射击", RED),
             "weapon_switch": WeaponSwitchButton(BASE_WIDTH - 520, BASE_HEIGHT - 320, 42, "换武器", PURPLE),
             "pause": TouchButton(60, 55, 38, "II", GRAY),
+            "sprint": TouchButton(210, BASE_HEIGHT - 130, 40, "疾跑", AMBER),
         }
         # 技能切换按钮（右上列）
         self.skill_selector = SkillSelector(BASE_WIDTH - 220, BASE_HEIGHT - 320, 42)
@@ -880,6 +882,8 @@ class Game:
             logger.info(f"世界创建完成，地图: {self.map_config['name']}")
 
             self.player = Player(0, 0)
+            # 应用符文属性加成（需在玩家初始化后）
+            self._apply_rune_bonuses()
             # Mod 游戏开始钩子
             try:
                 trigger_hook(HOOK_GAME_START, self)
@@ -2972,13 +2976,15 @@ class Game:
                 is_crit = random.random() < self.player.crit_chance
                 actual_damage = rg.charge_damage * self.player.damage_mult * self.player.buff_manager.get_damage_mult() * (self.player.crit_damage if is_crit else 1)
                 enemy.take_damage(actual_damage)
-                # 强控制：眩晕
-                enemy.apply_buff(BuffType.STUN, duration=rg.charge_stun_duration)
-                enemy.knockdown(1.0)
-                # 击退
+                # 强控制：眩晕（对 boss 控制效果减半）
+                _is_boss = getattr(enemy, "is_boss", False)
+                enemy.apply_buff(BuffType.STUN, duration=rg.charge_stun_duration * (0.5 if _is_boss else 1.0))
+                enemy.knockdown(1.0 if not _is_boss else 0.5)
+                # 击退（对 boss 大幅减弱）
                 if dist > 0:
-                    enemy.x += math.cos(angle_rad) * rg.charge_knockback
-                    enemy.y += math.sin(angle_rad) * rg.charge_knockback
+                    _kb = rg.charge_knockback * (0.3 if _is_boss else 1.0)
+                    enemy.x += math.cos(angle_rad) * _kb
+                    enemy.y += math.sin(angle_rad) * _kb
                 self.damage_numbers.append(DamageNumber(enemy.x, enemy.y, actual_damage, is_crit=is_crit, damage_type="melee"))
                 self.particles.spawn_blood(enemy.x, enemy.y, 12)
                 self.particles.spawn_explosion(enemy.x, enemy.y, CYAN, 15)
@@ -4116,7 +4122,7 @@ class Game:
                         ItemType.SPEED_BOOST, ItemType.SHIELD_REPAIR, ItemType.BUFF_CHARM
                     ])
             
-            self.special_items.append(SpecialItem(rx, ry, item_type))
+            self.world.items.append(SpecialItem(rx, ry, item_type))
         
         # 显示奖励提示
         scale_names = {1: "小型", 2: "中型", 3: "大型", 4: "巨型"}
@@ -4374,7 +4380,16 @@ class Game:
             "- 武器、技能、精英怪与 Boss、符文、Buff 系统\n"
             "- 触控与键鼠双支持，适配班班通等触控一体机\n"
             "- 内置 GitHub Release 热更新（检查/下载/应用/自动重启）\n\n"
-            "## v1.0.3 更新内容\n"
+            "## v1.0.4 更新内容\n"
+            "- 新增：触控端疾跑按钮（按住疾跑，键鼠下仍为 Ctrl）\n"
+            "- 平衡：削弱防爆套装（冲撞伤害、控制时长降低；肘击/冲刺体力消耗增加；对 Boss 控制效果减半）\n"
+            "- 钩爪：Boss 现在只能被钩中产生僵直，无法拉回；修复拉力过强导致被勾物乱飞\n"
+            "- 钩爪：拉回后目标进入长僵直，短时间内无法移动或攻击玩家\n"
+            "- 修复：Buff 持续伤害与钩爪伤害击杀敌人后不触发死亡结算/不掉落/尸体残留的问题\n"
+            "- 修复：击退尸潮后找不到奖励（奖励改走正常掉落管线，可拾取）\n"
+            "- 启用：符文系统（此前初始化缺失导致掉落加成、再生等完全不生效）\n"
+            "- 修复：武器图鉴缺失武器（补齐 机枪 / 榴弹发射器 / 等离子步枪 / 连狙，共 32 把）\n"
+            "\n"
             "- 修复：检查更新成功后渲染 GitHub 更新日志时空行导致的崩溃（Text has zero width）\n"
             "- 修复：装备防爆套装后体力不共享、接近无限的问题（肘击消耗不再被抹掉）\n"
             "- 删除：触控端的聊天按钮\n"
@@ -4590,6 +4605,11 @@ class Game:
                     self.skill_selector.is_long_press = False
                     self.skill_selector.should_open_wheel = False
             move_x, move_y = self.joystick.get_direction()
+
+            # 触控疾跑按钮：按住期间疾跑
+            sprint_btn = self.touch_buttons.get("sprint")
+            if sprint_btn and sprint_btn.pressed:
+                sprinting = True
 
             # 攻击/瞄准摇杆
             self.aim_button.handle_touch(_tev, self.scale)
@@ -5146,6 +5166,10 @@ class Game:
                         if d < heal_r:
                             other.hp = min(other.max_hp, other.hp + heal_amt)
                 self.particles.spawn_heal_particles(enemy.x, enemy.y, 20)
+
+            # 统一死亡清理：DOT/buff/钩爪等路径致死后在此触发掉落与移除
+            if not enemy.alive:
+                self._on_enemy_death(enemy)
 
             elif result == "phantom_teleport":
                 # 幻影瞬移特效
@@ -5849,6 +5873,17 @@ class Game:
                 # 4级以上眩晕
                 if grapple_lvl >= 4:
                     enemy.apply_buff(BuffType.STUN, duration=1.0)
+                # Boss 免勾取：只能命中产生僵直/眩晕，不能拉回
+                if getattr(enemy, "is_boss", False):
+                    rg = self.player.riot_gear
+                    rg.grapple_state = "retracting"
+                    rg.grapple_hit_stun_timer = rg.grapple_hit_stun_duration * 0.5
+                    rg.grapple_target = None
+                    enemy.apply_buff(BuffType.STUN, duration=0.8)
+                    self.floating_texts.append(FloatingText(
+                        enemy.x, enemy.y - 30, "僵直!", color=YELLOW, lifetime=1.0
+                    ))
+                    return
                 # 勾中敌人
                 self.player.riot_gear.set_grapple_target(enemy)
                 self.player.riot_gear.grapple_state = "hit"
@@ -5911,6 +5946,9 @@ class Game:
                     return
 
     def _on_enemy_death(self, enemy):
+        if getattr(enemy, '_death_processed', False):
+            return
+        enemy._death_processed = True
         # 记录击杀
         # Mod 敌人死亡钩子
         try:

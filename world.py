@@ -34,12 +34,16 @@ class SpecialItem:
             ItemType.SMOKE_GRENADE: ((120, 120, 120), (180, 180, 180)),
             ItemType.CLUSTER_BOMB: ((180, 100, 30), (240, 180, 60)),
             ItemType.EMP_GRENADE: ((0, 180, 220), (100, 240, 255)),
+            ItemType.RUNE: ((120, 60, 200), (180, 120, 255)),
+            ItemType.MYSTERY_BOX: ((90, 90, 140), (160, 160, 220)),
+            ItemType.GOLDEN_CHEST: ((218, 165, 32), (255, 230, 120)),
         }
         # 武器箱和宝箱更大、存在更久
-        if item_type in (ItemType.WEAPON_BOX, ItemType.TREASURE_CHEST):
+        if item_type in (ItemType.WEAPON_BOX, ItemType.TREASURE_CHEST, ItemType.GOLDEN_CHEST,
+                         ItemType.RUNE, ItemType.MYSTERY_BOX):
             self.size = 18
             self.lifetime = 120.0
-        if item_type == ItemType.TREASURE_CHEST:
+        if item_type in (ItemType.TREASURE_CHEST, ItemType.GOLDEN_CHEST):
             self.size = 22
         self.color = self.colors.get(item_type, (WHITE, GRAY))[0]
         self.glow_color = self.colors.get(item_type, (WHITE, GRAY))[1]
@@ -85,6 +89,9 @@ class SpecialItem:
             ItemType.SMOKE_GRENADE: "item_smoke",
             ItemType.CLUSTER_BOMB: "item_cluster",
             ItemType.EMP_GRENADE: "item_emp",
+            ItemType.RUNE: "item_rune",
+            ItemType.MYSTERY_BOX: "item_mystery",
+            ItemType.GOLDEN_CHEST: "item_golden",
         }
         img_key = item_img_map.get(self.item_type)
         if assets is not None and img_key is not None and assets.has_image(img_key):

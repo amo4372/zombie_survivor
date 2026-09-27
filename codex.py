@@ -532,6 +532,41 @@ WEAPON_CODEX = {
         "rarity": "稀有",
         "lore": "战术撤退的好帮手，烟雾中僵尸会失去目标。",
     },
+    # === 重武器补充 ===
+    "MACHINE_GUN": {
+        "name": "机枪",
+        "category": "重武器",
+        "description": "高射速压制武器，适合对付成群尸潮。",
+        "stats": {"damage": "18", "fire_rate": "极快", "range": "中远", "ammo": "100"},
+        "rarity": "稀有",
+        "lore": "100发弹链让它成为尸潮清道夫，子弹倾泻如暴雨。",
+    },
+    # === 特殊武器补充 ===
+    "GRENADE_LAUNCHER": {
+        "name": "榴弹发射器",
+        "category": "特殊",
+        "description": "抛物线榴弹，可越过障碍物造成范围爆炸。",
+        "stats": {"damage": "70", "fire_rate": "慢", "range": "中远", "ammo": "6"},
+        "rarity": "史诗",
+        "lore": "曲射的火力点，绕过掩体让躲藏的僵尸无处可逃。",
+    },
+    "PLASMA_RIFLE": {
+        "name": "等离子步枪",
+        "category": "特殊",
+        "description": "发射高能等离子弹，穿透并持续灼烧敌人。",
+        "stats": {"damage": "60", "fire_rate": "快", "range": "远", "ammo": "60"},
+        "rarity": "史诗",
+        "lore": "未来科技的武器，等离子弹头能撕裂护甲并留下灼烧的余烬。",
+    },
+    # === 狙击枪补充 ===
+    "SEMI_AUTO_SNIPER": {
+        "name": "连狙",
+        "category": "狙击枪",
+        "description": "半自动狙击步枪，高射速高精度，适合连续收割敌人。",
+        "stats": {"damage": "65", "fire_rate": "快", "range": "极远", "ammo": "10"},
+        "rarity": "稀有",
+        "lore": "放弃了一枪毙命的执念，换来连续点射的火力，是战场多面手的最爱。",
+    },
 }
 
 # ============================================================

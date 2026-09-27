@@ -41,14 +41,14 @@ class RiotGear:
         self.grapple_head_pos = None
         self.grapple_state = "idle"
         self.grapple_speed = 150
-        self.grapple_pull_speed = 70
+        self.grapple_pull_speed = 55
         self.grapple_hit_stun_timer = 0
         self.grapple_hit_stun_duration = 0.6
         self.grapple_max_range = 800
         self.grapple_stamina_cost = 0
         self.bash_auto = False
         self.bash_direction = 0
-        self.bash_stamina_cost = 10
+        self.bash_stamina_cost = 14
         self.bash_anim_timer = 0
         self.bash_anim_duration = 0.2
         self.bash_hit_pos = None
@@ -59,8 +59,8 @@ class RiotGear:
         self.charge_speed = 680
         self.charge_direction = 0
         self.charge_hit_ids = set()  # 已命中的敌人id，避免重复伤害
-        self.charge_damage = 220
-        self.charge_stun_duration = 2.0
+        self.charge_damage = 160
+        self.charge_stun_duration = 1.2
         self.charge_knockback = 150
         self.equip_time = 0
         self.debuff_threshold = 60.0
@@ -231,6 +231,14 @@ class RiotGear:
                     # 到达玩家90像素外且超过最小拉回时间，释放
                     if hasattr(self.grapple_target, 'grappled'):
                         self.grapple_target.grappled = False
+                    # 拉回完成：给予长僵直，使目标短时间内无法移动/攻击玩家
+                    try:
+                        if hasattr(self.grapple_target, 'apply_buff'):
+                            self.grapple_target.apply_buff(BuffType.STUN, duration=1.5)
+                        if hasattr(self.grapple_target, 'knockdown'):
+                            self.grapple_target.knockdown(1.0)
+                    except Exception:
+                        pass
                     # 释放时给敌人一个短暂的击退，让它停在玩家面前
                     if hasattr(self.grapple_target, 'knockback_x'):
                         kb_dir_x = (self.grapple_target.x - player_x) / max(1, dist)
@@ -745,9 +753,9 @@ class Player:
         # === 疾跑体力系统 ===
         is_moving = (abs(move_x) > 0.05 or abs(move_y) > 0.05)
         gear_equipped = self.riot_gear.equipped
-        sprint_cost_mult = 1.6 if gear_equipped else 1.0
+        sprint_cost_mult = 1.9 if gear_equipped else 1.0
         regen_mult = 0.65 if gear_equipped else 1.0
-        gear_move_drain = 4.0 if gear_equipped else 0.0
+        gear_move_drain = 5.5 if gear_equipped else 0.0
 
         if sprinting and is_moving and not self.stamina_exhausted and self.stamina > 0:
             self.sprinting = True
