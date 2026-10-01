@@ -190,6 +190,33 @@ class RuneManager:
         """返回所有已拥有符文的列表 [(RuneType, stacks), ...]"""
         return [(rt, s) for rt, s in self.runes.items()]
 
+    # ===== 跨局永久符文（可升级）=====
+    def load_permanent(self, runes_dict):
+        """从跨局存档加载永久符文: {rune_name: level} → runes"""
+        self.runes = {}
+        if not runes_dict:
+            return
+        for name, level in runes_dict.items():
+            try:
+                rt = RuneType[name]
+            except Exception:
+                continue
+            if isinstance(level, (int, float)) and level > 0:
+                self.runes[rt] = int(level)
+
+    def upgrade_rune(self, rune_type):
+        """永久升级符文: 层数+1（跨局累积，突破局内max_stacks上限）"""
+        current = self.runes.get(rune_type, 0)
+        self.runes[rune_type] = current + 1
+        return True
+
+    def get_permanent_level(self, rune_type):
+        return self.runes.get(rune_type, 0)
+
+    def to_permanent_dict(self):
+        """导出为可存档的 {rune_name: level}"""
+        return {rt.name: s for rt, s in self.runes.items()}
+
 
 def random_rune(luck_bonus=0):
     """随机抽取一枚符文，luck_bonus提升稀有度概率"""

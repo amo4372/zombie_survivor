@@ -240,249 +240,253 @@ class GameWorld:
         if (cx, cy) in self.generated_chunks:
             return
         self.generated_chunks.add((cx, cy))
-
+        self._cx, self._cy = cx, cy
         wx_start = cx * self.chunk_size
         wy_start = cy * self.chunk_size
+        margin = 240
+        bx0, by0 = wx_start + margin, wy_start + margin
+        bx1, by1 = wx_start + self.chunk_size - margin, wy_start + self.chunk_size - margin
+        gen = {
+            MapType.SCHOOL: self._gen_school,
+            MapType.STREET: self._gen_street,
+            MapType.DOWNTOWN: self._gen_downtown,
+            MapType.SUBURB: self._gen_suburb,
+            MapType.NUCLEAR_PLANT: self._gen_nuclear,
+        }.get(self.map_type, self._gen_school)
+        gen(bx0, by0, bx1, by1)
 
-        num_obstacles = random.randint(18, 30)
-        # 根据地图类型选择障碍物
-        obstacle_pool = self.map_config.get("obstacle_types", [
-            'desk', 'chair', 'fence', 'wall', 'barricade', 'pillar', 'debris_pile'
-        ])
-        for _ in range(num_obstacles):
-            obstacle_type = random.choice(obstacle_pool)
+    # ================= 情景化生成辅助 =================
+    def _add_obs(self, otype, x, y, w, h, color=None, rot=0):
+        """添加一个障碍物(带碰撞), 与已有障碍物重叠则跳过"""
+        r = pygame.Rect(int(x), int(y), int(w), int(h))
+        if r.width < 4 or r.height < 4:
+            return
+        # 出生 chunk (0,0) 的玩家出生区保留空地(玩家出生在左上角 0,0)
+        if getattr(self, '_cx', None) == 0 and getattr(self, '_cy', None) == 0:
+            if r.colliderect(pygame.Rect(0, 0, 460, 460)):
+                return
+        for o in self.obstacles:
+            if o['rect'].colliderect(r):
+                return
+        if color is None:
+            color = self._obs_color(otype)
+        self.obstacles.append({'rect': r, 'type': otype, 'color': color, 'rotation': rot})
 
-            x = random.randint(wx_start + 80, wx_start + self.chunk_size - 80)
-            y = random.randint(wy_start + 80, wy_start + self.chunk_size - 80)
+    def _obs_color(self, otype):
+        palettes = {
+            'desk': (139,119,101), 'chair': (80,70,60), 'podium': (100,80,60),
+            'blackboard': (30,60,40), 'bookshelf': (90,60,40), 'locker': (60,80,100),
+            'wall': (145,130,115), 'fence': (150,135,110), 'barricade': (90,70,40),
+            'building': (140,120,105), 'car': (170,80,80), 'house': (120,90,60),
+            'tree': (30,70,30), 'reactor': (40,50,70), 'pipe': (70,75,85),
+            'debris_pile': (55,50,45), 'pillar': (70,70,75), 'basketball_hoop': (200,80,80),
+            'pingpong_table': (40,80,120), 'water_dispenser': (200,200,210),
+            'trash_bin': (50,80,50), 'flower_bed': (60,100,50), 'school_bus': (220,180,30),
+            'bus_stop': (50,70,90), 'streetlight': (70,70,75), 'mailbox': (40,60,120),
+            'fire_hydrant': (180,40,40), 'bench': (90,70,50), 'shopping_cart': (80,80,85),
+            'vending_machine': (150,40,40), 'dumpster': (60,80,50), 'bus': (180,160,40),
+            'truck': (120,50,40), 'checkpoint': (100,80,40), 'sandbag': (130,110,70),
+            'wrecked_tank': (50,55,45), 'burning_car': (80,30,20), 'billboard': (70,70,80),
+            'shed': (100,70,45), 'bush': (40,80,35), 'well': (90,85,75),
+            'haystack': (180,150,60), 'tractor': (40,70,40), 'water_tower': (100,100,110),
+            'control_panel': (50,55,65), 'barrel': (150,120,30), 'crate': (110,85,50),
+            'generator': (60,60,70), 'cooling_tower': (80,85,95),
+            'radiation_barrier': (200,180,30), 'terminal': (30,35,45),
+            'server_rack': (35,40,50), 'container': (50,60,50),
+            'bus_stop': (50,70,90), 'school_bus': (220,180,30),
+        }
+        return palettes.get(otype, (60,55,50))
 
-            if obstacle_type == 'building':
-                w = random.randint(80, 200)
-                h = random.randint(80, 200)
-                color = random.choice([(140, 120, 105), (130, 130, 145), (125, 110, 95)])
-            elif obstacle_type == 'car':
-                w = random.randint(50, 80)
-                h = random.randint(25, 40)
-                color = random.choice([(170, 80, 80), (80, 100, 150), (130, 130, 130), (150, 125, 80)])
-            elif obstacle_type == 'fence':
-                w = random.randint(100, 250)
-                h = random.randint(8, 15)
-                color = (150, 135, 110)
-            elif obstacle_type == 'wall':
-                w = random.randint(60, 150)
-                h = random.randint(15, 25)
-                color = (145, 130, 115)
-            elif obstacle_type == 'barricade':
-                w = random.randint(40, 80)
-                h = random.randint(20, 35)
-                color = (90, 70, 40)
-            elif obstacle_type == 'container':
-                w = random.randint(60, 100)
-                h = random.randint(30, 50)
-                color = random.choice([(50, 60, 50), (60, 50, 40), (45, 45, 55)])
-            elif obstacle_type == 'debris_pile':
-                w = random.randint(30, 60)
-                h = random.randint(20, 40)
-                color = (55, 50, 45)
-            elif obstacle_type == 'pillar':
-                w = random.randint(15, 30)
-                h = random.randint(15, 30)
-                color = (70, 70, 75)
-            # === 学校特色障碍物 ===
-            elif obstacle_type == 'desk':
-                w = random.randint(45, 60)
-                h = random.randint(28, 35)
-                color = random.choice([(139, 119, 101), (160, 140, 120), (120, 100, 80)])
-            elif obstacle_type == 'chair':
-                w = random.randint(20, 28)
-                h = random.randint(20, 28)
-                color = random.choice([(80, 70, 60), (90, 80, 70), (70, 60, 50)])
-            elif obstacle_type == 'podium':
-                w = random.randint(50, 70)
-                h = random.randint(35, 45)
-                color = (100, 80, 60)
-            elif obstacle_type == 'blackboard':
-                w = random.randint(120, 200)
-                h = random.randint(15, 20)
-                color = (30, 60, 40)
-            elif obstacle_type == 'bookshelf':
-                w = random.randint(60, 90)
-                h = random.randint(20, 30)
-                color = (90, 60, 40)
-            elif obstacle_type == 'locker':
-                w = random.randint(30, 50)
-                h = random.randint(40, 55)
-                color = random.choice([(60, 80, 100), (80, 60, 60), (60, 80, 60)])
-            elif obstacle_type == 'basketball_hoop':
-                w = random.randint(25, 35)
-                h = random.randint(25, 35)
-                color = (200, 80, 80)
-            elif obstacle_type == 'pingpong_table':
-                w = random.randint(70, 90)
-                h = random.randint(35, 45)
-                color = (40, 80, 120)
-            elif obstacle_type == 'water_dispenser':
-                w = random.randint(25, 35)
-                h = random.randint(40, 50)
-                color = (200, 200, 210)
-            elif obstacle_type == 'trash_bin':
-                w = random.randint(20, 30)
-                h = random.randint(25, 35)
-                color = (50, 80, 50)
-            elif obstacle_type == 'flower_bed':
-                w = random.randint(50, 80)
-                h = random.randint(30, 50)
-                color = (60, 100, 50)
-            elif obstacle_type == 'school_bus':
-                w = random.randint(100, 140)
-                h = random.randint(40, 55)
-                color = (220, 180, 30)
-            # === 街区特色障碍物 ===
-            elif obstacle_type == 'bus_stop':
-                w = random.randint(40, 55)
-                h = random.randint(20, 30)
-                color = (50, 70, 90)
-            elif obstacle_type == 'streetlight':
-                w = random.randint(12, 18)
-                h = random.randint(50, 70)
-                color = (70, 70, 75)
-            elif obstacle_type == 'mailbox':
-                w = random.randint(15, 22)
-                h = random.randint(25, 35)
-                color = (40, 60, 120)
-            elif obstacle_type == 'fire_hydrant':
-                w = random.randint(14, 20)
-                h = random.randint(20, 28)
-                color = (180, 40, 40)
-            elif obstacle_type == 'bench':
-                w = random.randint(45, 65)
-                h = random.randint(15, 22)
-                color = (90, 70, 50)
-            elif obstacle_type == 'shopping_cart':
-                w = random.randint(25, 35)
-                h = random.randint(30, 40)
-                color = (80, 80, 85)
-            elif obstacle_type == 'vending_machine':
-                w = random.randint(28, 38)
-                h = random.randint(45, 55)
-                color = random.choice([(150, 40, 40), (40, 80, 120), (50, 100, 60)])
-            elif obstacle_type == 'dumpster':
-                w = random.randint(45, 60)
-                h = random.randint(30, 40)
-                color = (60, 80, 50)
-            # === 市中心特色障碍物 ===
-            elif obstacle_type == 'bus':
-                w = random.randint(90, 120)
-                h = random.randint(35, 45)
-                color = random.choice([(180, 160, 40), (50, 80, 120)])
-            elif obstacle_type == 'truck':
-                w = random.randint(80, 110)
-                h = random.randint(35, 45)
-                color = random.choice([(120, 50, 40), (50, 60, 70)])
-            elif obstacle_type == 'checkpoint':
-                w = random.randint(50, 70)
-                h = random.randint(25, 35)
-                color = (100, 80, 40)
-            elif obstacle_type == 'sandbag':
-                w = random.randint(30, 50)
-                h = random.randint(15, 22)
-                color = (130, 110, 70)
-            elif obstacle_type == 'wrecked_tank':
-                w = random.randint(70, 90)
-                h = random.randint(40, 50)
-                color = (50, 55, 45)
-            elif obstacle_type == 'burning_car':
-                w = random.randint(50, 70)
-                h = random.randint(25, 35)
-                color = (80, 30, 20)
-            elif obstacle_type == 'billboard':
-                w = random.randint(80, 120)
-                h = random.randint(12, 18)
-                color = (70, 70, 80)
-            # === 郊区特色障碍物 ===
-            elif obstacle_type == 'house':
-                w = random.randint(70, 100)
-                h = random.randint(50, 70)
-                color = random.choice([(120, 90, 60), (100, 80, 70), (90, 100, 80)])
-            elif obstacle_type == 'shed':
-                w = random.randint(35, 50)
-                h = random.randint(30, 40)
-                color = (100, 70, 45)
-            elif obstacle_type == 'tree':
-                w = random.randint(30, 45)
-                h = random.randint(30, 45)
-                color = (30, 70, 30)
-            elif obstacle_type == 'bush':
-                w = random.randint(25, 40)
-                h = random.randint(20, 30)
-                color = (40, 80, 35)
-            elif obstacle_type == 'well':
-                w = random.randint(25, 35)
-                h = random.randint(25, 35)
-                color = (90, 85, 75)
-            elif obstacle_type == 'haystack':
-                w = random.randint(35, 50)
-                h = random.randint(30, 40)
-                color = (180, 150, 60)
-            elif obstacle_type == 'tractor':
-                w = random.randint(45, 60)
-                h = random.randint(35, 45)
-                color = (40, 70, 40)
-            elif obstacle_type == 'water_tower':
-                w = random.randint(35, 50)
-                h = random.randint(55, 70)
-                color = (100, 100, 110)
-            # === 核电站特色障碍物 ===
-            elif obstacle_type == 'reactor':
-                w = random.randint(80, 110)
-                h = random.randint(80, 110)
-                color = (40, 50, 70)
-            elif obstacle_type == 'pipe':
-                w = random.randint(60, 100)
-                h = random.randint(12, 20)
-                color = (70, 75, 85)
-            elif obstacle_type == 'control_panel':
-                w = random.randint(40, 60)
-                h = random.randint(25, 35)
-                color = (50, 55, 65)
-            elif obstacle_type == 'barrel':
-                w = random.randint(18, 25)
-                h = random.randint(25, 32)
-                color = random.choice([(150, 120, 30), (40, 80, 100), (120, 40, 40)])
-            elif obstacle_type == 'crate':
-                w = random.randint(25, 35)
-                h = random.randint(25, 35)
-                color = (110, 85, 50)
-            elif obstacle_type == 'generator':
-                w = random.randint(45, 60)
-                h = random.randint(35, 45)
-                color = (60, 60, 70)
-            elif obstacle_type == 'cooling_tower':
-                w = random.randint(60, 80)
-                h = random.randint(70, 90)
-                color = (80, 85, 95)
-            elif obstacle_type == 'radiation_barrier':
-                w = random.randint(40, 60)
-                h = random.randint(15, 22)
-                color = (200, 180, 30)
-            elif obstacle_type == 'terminal':
-                w = random.randint(25, 35)
-                h = random.randint(30, 40)
-                color = (30, 35, 45)
-            elif obstacle_type == 'server_rack':
-                w = random.randint(30, 45)
-                h = random.randint(50, 65)
-                color = (35, 40, 50)
-            else:
-                w = random.randint(40, 100)
-                h = random.randint(10, 20)
-                color = (60, 55, 50)
+    def _add_wall_run(self, otype, x, y, length, th, horizontal=True, gap_frac=None):
+        """沿方向铺一段墙, 中间留缺口"""
+        if gap_frac is None:
+            gap_frac = (0.45, 0.55)
+        gs = int(length * gap_frac[0])
+        ge = int(length * gap_frac[1])
+        if horizontal:
+            if gs > 0:
+                self._add_obs(otype, x, y, gs, th)
+            if length - ge > 0:
+                self._add_obs(otype, x + ge, y, length - ge, th)
+        else:
+            if gs > 0:
+                self._add_obs(otype, x, y, th, gs)
+            if length - ge > 0:
+                self._add_obs(otype, x, y + ge, th, length - ge)
 
-            self.obstacles.append({
-                'rect': pygame.Rect(x, y, w, h),
-                'type': obstacle_type,
-                'color': color,
-                'rotation': random.randint(-5, 5) if obstacle_type in ['car', 'debris_pile'] else 0
-            })
+    def _add_room(self, x, y, w, h, otype='wall', wall_h=16, gaps=None):
+        """生成矩形房间四面墙(每边留门洞), 返回内部区域"""
+        if gaps is None:
+            gaps = {'top':(0.44,0.56),'bottom':(0.44,0.56),'left':(0.44,0.56),'right':(0.44,0.56)}
+        self._add_wall_run(otype, x, y, w, wall_h, True, gaps['top'])
+        self._add_wall_run(otype, x, y + h - wall_h, w, wall_h, True, gaps['bottom'])
+        self._add_wall_run(otype, x, y, h, wall_h, False, gaps['left'])
+        self._add_wall_run(otype, x + w - wall_h, y, h, wall_h, False, gaps['right'])
+        return pygame.Rect(x + wall_h, y + wall_h, max(20, w - 2*wall_h), max(20, h - 2*wall_h))
+
+    def _fill_classroom(self, inner):
+        """教室内布局: 黑板+讲台+课桌成排+书架+储物柜"""
+        # 黑板(上墙)
+        self._add_obs('blackboard', inner.x + inner.w//4, inner.y - 2, inner.w//2, 18)
+        # 讲台
+        self._add_obs('podium', inner.centerx - 40, inner.y + 30, 80, 44)
+        # 课桌成排(网格)
+        desk_w, desk_h, gap = 100, 62, 46
+        cols = max(1, (inner.w - 30) // (desk_w + gap))
+        rows = max(1, (inner.h - 130) // (desk_h + gap + 30))
+        sx = inner.x + 15
+        sy = inner.y + 90
+        for r_ in range(rows):
+            for c_ in range(cols):
+                dx = sx + c_ * (desk_w + gap)
+                dy = sy + r_ * (desk_h + gap + 30)
+                self._add_obs('desk', dx, dy, desk_w, desk_h)
+                # 配椅子
+                if c_ % 2 == 0:
+                    self._add_obs('chair', dx - 26, dy + desk_h - 10, 34, 30)
+        # 靠墙书架/储物柜
+        self._add_obs('bookshelf', inner.x + 8, inner.y + inner.h - 44, 70, 34)
+        self._add_obs('locker', inner.right - 60, inner.y + inner.h - 70, 52, 60)
+        self._add_obs('trash_bin', inner.right - 16, inner.y + inner.h - 40, 26, 34)
+
+    def _gen_school(self, x0, y0, x1, y1):
+        """校园: 教室(课桌成排+黑板+讲台) + 走廊 + 拐角 + 墙体"""
+        W, H = x1 - x0, y1 - y0
+        cw = int(W * 0.36); ch = int(H * 0.40)
+        # 三间教室
+        rooms = [
+            (x0 + 10, y0 + 12, cw, ch),                       # 左上教室
+            (x0 + W - cw - 10, y0 + 12, cw, ch),              # 右上教室
+            (x0 + 10, y0 + H - ch - 12, cw, ch),              # 左下教室
+        ]
+        for rx, ry, rw, rh in rooms:
+            inner = self._add_room(rx, ry, rw, rh, 'wall', 18)
+            self._fill_classroom(inner)
+        # 中间纵向走廊(两段墙留出入口)
+        corr_x = x0 + W//2 - 100
+        self._add_wall_run('wall', corr_x, y0, H, 18, False, (0.30,0.42))
+        self._add_wall_run('wall', corr_x + 200, y0, H, 18, False, (0.58,0.70))
+        # 走廊内储物柜/垃圾桶
+        for i in range(3):
+            self._add_obs('locker', corr_x + 20 + i*60, y0 + 40, 48, 58)
+            self._add_obs('locker', corr_x + 20 + i*60, y0 + H - 100, 48, 58)
+        # 右下空地: 篮球架/乒乓球桌/饮水机/花坛
+        gx = x0 + W - 300; gy = y0 + H - 220
+        self._add_obs('basketball_hoop', gx + 40, gy, 60, 60)
+        self._add_obs('pingpong_table', gx + 150, gy, 110, 60)
+        self._add_obs('water_dispenser', gx + 40, gy + 110, 44, 56)
+        self._add_obs('flower_bed', gx + 160, gy + 100, 90, 46)
+        self._add_obs('trash_bin', gx + 60, gy + 170, 26, 32)
+
+    def _gen_street(self, x0, y0, x1, y1):
+        """街区: 纵向主路 + 两侧建筑/车辆/设施"""
+        W, H = x1 - x0, y1 - y0
+        road_cx = x0 + W//2
+        road_w = 220
+        # 路两侧建筑(排成排)
+        for side in (0, 1):
+            build_x = x0 + (10 if side == 0 else W - 190)
+            y = y0 + 20
+            while y < y1 - 150:
+                bw = 170; bh = 120
+                self._add_obs('building', build_x, y, bw, bh)
+                # 门前设施
+                self._add_obs('mailbox', build_x + 30, y + bh, 26, 36)
+                self._add_obs('bench', build_x + 90, y + bh, 60, 24)
+                y += bh + 90
+        # 路边车辆与设施
+        for i in range(4):
+            y = y0 + 60 + i * (H//4)
+            side = 0 if i % 2 == 0 else 1
+            cx = road_cx + (120 if side == 0 else -120 - 90)
+            self._add_obs('car', cx, y, 90, 46)
+            self._add_obs('streetlight', road_cx + (150 if side==0 else -150-18), y, 16, 60)
+            self._add_obs('fire_hydrant', road_cx + (70 if side==0 else -70-18), y + 40, 20, 26)
+        # 路障/废墟点缀
+        for i in range(3):
+            self._add_obs('barricade', road_cx - 60 + i*70, y0 + 260 + i*80, 90, 30)
+        self._add_obs('vending_machine', x0 + 230, y0 + 80, 44, 60)
+        self._add_obs('dumpster', x1 - 240, y1 - 120, 70, 46)
+        self._add_obs('school_bus', road_cx - 50, y1 - 100, 160, 60)
+
+    def _gen_downtown(self, x0, y0, x1, y1):
+        """市中心: 密集楼宇 + 废墟 + 燃烧车辆 + 检查站/路障 + 十字通道"""
+        W, H = x1 - x0, y1 - y0
+        # 高密度建筑群(网格布置, 留十字道路)
+        bw, bh, gap = 190, 160, 90
+        cols = max(1, W // (bw + gap))
+        rows = max(1, H // (bh + gap))
+        for r_ in range(rows):
+            for c_ in range(cols):
+                bx = x0 + c_ * (bw + gap) + 15
+                by = y0 + r_ * (bh + gap) + 15
+                if random.random() < 0.85:
+                    self._add_obs('building', bx, by, bw, bh)
+                    if random.random() < 0.4:
+                        self._add_obs('billboard', bx + 30, by - 6, 100, 16)
+                else:
+                    self._add_obs('debris_pile', bx + 40, by + 40, 80, 60)
+        # 街道废墟/燃烧车/检查站
+        for i in range(4):
+            self._add_obs('burning_car', x0 + 40 + i*120, y0 + 150, 80, 42)
+            self._add_obs('debris_pile', x0 + 90 + i*160, y1 - 160, 70, 50)
+        self._add_obs('checkpoint', x0 + W - 260, y0 + 90, 90, 40)
+        self._add_obs('sandbag', x0 + W - 230, y0 + 150, 120, 30)
+        self._add_obs('wrecked_tank', x0 + 60, y1 - 90, 100, 56)
+        self._add_obs('truck', x1 - 200, y1 - 130, 130, 56)
+        self._add_obs('bus', x0 + 220, y0 + 320, 130, 56)
+
+    def _gen_suburb(self, x0, y0, x1, y1):
+        """郊区: 分散独栋房屋 + 院子围栏 + 树/灌木 + 小路"""
+        W, H = x1 - x0, y1 - y0
+        hw, hh = 170, 120
+        gap_x, gap_y = 180, 140
+        cols = max(2, W // (hw + gap_x))
+        rows = max(2, H // (hh + gap_y))
+        for r_ in range(rows):
+            for c_ in range(cols):
+                hx = x0 + c_ * (hw + gap_x) + 10
+                hy = y0 + r_ * (hh + gap_y) + 10
+                if random.random() < 0.75:
+                    self._add_obs('house', hx, hy, hw, hh)
+                    # 院子围栏
+                    self._add_wall_run('fence', hx - 40, hy + hh + 10, hw + 80, 12, True, (0.2,0.8))
+                    self._add_wall_run('fence', hx - 40, hy + hh + 10, 12, 90, False)
+                    self._add_wall_run('fence', hx + hw + 28, hy + hh + 10, 12, 90, False)
+                    # 院中树/灌木
+                    self._add_obs('tree', hx + hw + 60, hy + 20, 50, 50)
+                    self._add_obs('bush', hx + 40, hy + hh + 40, 40, 30)
+                else:
+                    self._add_obs('haystack', hx, hy + 20, 60, 44)
+                    self._add_obs('tractor', hx + 90, hy + 30, 70, 50)
+        # 池塘/水塔/水井
+        self._add_obs('well', x0 + 60, y0 + 60, 40, 34)
+        self._add_obs('water_tower', x1 - 130, y0 + 60, 60, 80)
+        self._add_obs('shed', x0 + W - 220, y1 - 160, 80, 56)
+
+    def _gen_nuclear(self, x0, y0, x1, y1):
+        """核电站: 厂房 + 反应堆 + 冷却塔 + 管道 + 围栏 + 辐射屏障"""
+        W, H = x1 - x0, y1 - y0
+        # 主厂房
+        main_inner = self._add_room(x0 + 80, y0 + 80, W - 160, H - 160, 'wall', 20)
+        # 厂房内: 反应堆 + 控制台 + 服务器 + 发电机 + 管道
+        self._add_obs('reactor', main_inner.x + main_inner.w//2 - 60, main_inner.y + 60, 120, 110)
+        self._add_obs('control_panel', main_inner.x + 40, main_inner.y + 50, 80, 44)
+        self._add_obs('server_rack', main_inner.right - 90, main_inner.y + 50, 50, 70)
+        self._add_obs('generator', main_inner.x + main_inner.w//2 - 40, main_inner.bottom - 120, 80, 56)
+        # 管道沿墙
+        self._add_obs('pipe', main_inner.x + 30, main_inner.y + main_inner.h//2, main_inner.w - 60, 16)
+        # 冷却塔(厂房外)
+        self._add_obs('cooling_tower', x0 + 40, y1 - 150, 90, 110)
+        self._add_obs('cooling_tower', x1 - 130, y1 - 150, 90, 110)
+        # 油桶/板条箱点缀
+        for i in range(4):
+            self._add_obs('barrel', main_inner.x + 60 + i*70, main_inner.bottom - 60, 30, 36)
+        self._add_obs('crate', main_inner.right - 70, main_inner.bottom - 60, 40, 40)
+        # 辐射屏障(出入口)
+        self._add_obs('radiation_barrier', x0 + W//2 - 90, y0 + 30, 180, 22)
+        # 核电站围栏(四周)
+        self._add_wall_run('fence', x0, y0 + H - 40, W, 12, True, (0.1,0.9))
 
     def ensure_chunks_around(self, x, y, radius=1500):
         min_cx = math.floor((x - radius) / self.chunk_size)
@@ -804,9 +808,12 @@ class GameWorld:
                 pygame.draw.rect(screen, color, draw_rect)
                 pygame.draw.rect(screen, (color[0]-15, color[1]-15, color[2]-15), draw_rect, max(1, int(2*scale)))
 
-            shadow_rect = draw_rect.copy()
-            shadow_rect.y += max(2, int(3*scale))
-            pygame.draw.rect(screen, (0, 0, 0, 80), shadow_rect, border_radius=2)
+            # 半透明投影(用SRCALPHA surface正常alpha混合, 避免pygame.draw不支持alpha导致纯黑块)
+            shadow_rect = pygame.Rect(draw_rect.x + 3, draw_rect.bottom - max(2, int(3*scale)),
+                                      max(1, draw_rect.width), max(3, int(5*scale)))
+            sh_surf = pygame.Surface((shadow_rect.width, shadow_rect.height), pygame.SRCALPHA)
+            sh_surf.fill((0, 0, 0, 70))
+            screen.blit(sh_surf, (shadow_rect.x, shadow_rect.y))
 
 
 class HordeManager:

@@ -346,6 +346,8 @@ class Game:
         self._ach_touch_last_y = None
         #成就解锁toast队列
         self.ach_toast_queue = []
+        # 实时成就检查节流计时器
+        self._ach_check_timer = 0.0
         #成就返回按钮
         self.ach_back_btn = Button(640 -100, 720 -80, 200,50,"返回菜单",color=DARK_RED)
 
@@ -839,13 +841,101 @@ class Game:
                 pass
 
     def _unlock_achievement(self, key):
-        """即时解锁成就并显示提示"""
+        """即时解锁成就并显示提示（实时弹窗toast + 浮字）"""
         if self.records and self.records.unlock_achievement(key):
             ach = self.records.get_achievements().get(key, {})
             desc = ach.get("desc", key)
+            # 实时弹出成就toast（右上角弹窗）
+            try:
+                self.ach_toast_queue.append({"key": key, "desc": desc, "timer": 4.0})
+            except Exception:
+                pass
             self.floating_texts.append(FloatingText(self.player.x, self.player.y - 60,
                 f"成就解锁: {desc}", color=GOLD, lifetime=4.0))
             logger.info(f"成就解锁: {key} - {desc}")
+
+    def _check_achievements_realtime(self):
+        """游戏中实时结算成就（不等到游戏结束），达标即解锁+实时弹出"""
+        if not hasattr(self, 'records') or self.records is None:
+            return
+        try:
+            rd = self.records.data
+            ach = rd.get("achievements", {})
+            d = self.session.data if (self.session is not None) else {}
+            game_coef = self.records.calculate_achievement_coefficient(d)
+            # 本局存活时间
+            try:
+                from datetime import datetime as _dt
+                time_survived = int((_dt.now() - self.session.start_time).total_seconds()) if self.session is not None else 0
+            except Exception:
+                time_survived = int(getattr(self, 'map_time_elapsed', 0) or 0)
+            tk = rd.get("total_kills", 0)
+            td = rd.get("total_deaths", 0)
+            kb = rd.get("kills_by_type", {})
+            boss_total = kb.get("boss_long", 0) + kb.get("boss_xiang", 0)
+            su = rd.get("skill_usage", {})
+            dkills = sum(d.get("kills_by_type", {}).values())
+
+            def cond(key, ok):
+                try:
+                    item = ach.get(key, {})
+                    if not ok or item.get("unlocked", False):
+                        return
+                    thr = item.get("coef_threshold", 0)
+                    if thr > 0 and game_coef < thr:
+                        return
+                    self._unlock_achievement(key)
+                except Exception:
+                    pass
+
+            # 击杀
+            cond("first_blood", tk >= 1)
+            cond("zombie_slayer", tk >= 100)
+            cond("zombie_hunter", tk >= 1000)
+            cond("zombie_destroyer", tk >= 10000)
+            # 存活
+            cond("survivor", time_survived >= 300)
+            cond("veteran", time_survived >= 900)
+            cond("legend", time_survived >= 1800)
+            # 死亡
+            cond("die_1", td >= 1); cond("die_10", td >= 10)
+            cond("die_100", td >= 100); cond("die_1000", td >= 1000); cond("die_10000", td >= 10000)
+            # 技能/武器
+            cond("skill_master", d.get("skills_upgraded", 0) >= 20)
+            cond("weapon_collector", d.get("weapons_collected", 0) >= 13)
+            # Boss
+            cond("boss_slayer", boss_total >= 10)
+            cond("dragon_hunter", kb.get("boss_long", 0) >= 5)
+            cond("xiang_hunter", kb.get("boss_xiang", 0) >= 5)
+            # 战斗/累计
+            cond("shield_master", rd.get("total_shield_blocks", 0) >= 100)
+            cond("grapple_master", rd.get("total_grapples", 0) >= 50)
+            cond("berserker", su.get("berserk", 0) >= 10)
+            cond("centurion", dkills >= 100)
+            cond("crit_master", rd.get("total_critical_hits", 0) >= 500)
+            cond("damage_deal_500k", rd.get("total_damage_dealt", 0) >= 500000)
+            cond("gunner", rd.get("total_shots_fired", 0) >= 10000)
+            cond("tough_guy", rd.get("total_damage_taken", 0) >= 200000)
+            # 尸潮
+            cond("horde_survivor_5", rd.get("total_horde_survived", 0) >= 5)
+            cond("horde_survivor_20", rd.get("total_horde_survived", 0) >= 20)
+            # 本局
+            cond("turret_master", d.get("turrets_deployed", 0) >= 10)
+            cond("chest_opener", d.get("chests_opened", 0) >= 5)
+            cond("ice_sculptor", d.get("enemies_frozen", 0) >= 30)
+            cond("poison_master", d.get("poison_kills", 0) >= 30)
+            cond("purifier", su.get("purify", 0) >= 10)
+            cond("war_crier", d.get("war_cry_kills", 0) >= 50)
+            # 元素/隐藏
+            cond("elemental_master", d.get("has_flame_enchant", False) and d.get("has_frost_enchant", False) and d.get("has_poison_enchant", False))
+            cond("fire_and_ice", d.get("has_flame_enchant", False) and d.get("has_frost_enchant", False))
+            cond("debuff_collector", d.get("max_debuffs_at_once", 0) >= 5)
+            cond("burning_survivor", d.get("burning_survive_time", 0) >= 60)
+            cond("bleeding_warrior", d.get("bleeding_kills", 0) >= 20)
+            # 地狱铁人
+            cond("iron_will", d.get("difficulty") == "地狱" and time_survived >= 480)
+        except Exception as e:
+            logger.log_exception(e)
 
     def start_game(self):
         logger.info("开始新游戏")
@@ -882,6 +972,8 @@ class Game:
             logger.info(f"世界创建完成，地图: {self.map_config['name']}")
 
             self.player = Player(0, 0)
+            # 加载跨局永久符文(可升级)到本局符文管理器
+            self._load_permanent_runes()
             # 应用符文属性加成（需在玩家初始化后）
             self._apply_rune_bonuses()
             # Mod 游戏开始钩子
@@ -3311,7 +3403,7 @@ class Game:
             # 4. 随机符文（局内永久buff，使用新符文系统）
             luck = self.rune_manager.get_bonus("drop_rate_mult") if hasattr(self, 'rune_manager') else 0
             rune_type = random_rune(luck_bonus=luck)
-            if hasattr(self, 'rune_manager') and self.rune_manager.add_rune(rune_type):
+            if hasattr(self, 'rune_manager') and self._gain_rune(rune_type):
                 cfg = RUNE_CONFIG[rune_type]
                 rewards.append(f"符文: {cfg['name']}")
                 self._apply_rune_bonuses()
@@ -3410,7 +3502,7 @@ class Game:
             # 符文：局内永久buff
             luck = self.rune_manager.get_bonus("drop_rate_mult") if hasattr(self, 'rune_manager') else 0
             rune_type = random_rune(luck_bonus=luck)
-            if hasattr(self, 'rune_manager') and self.rune_manager.add_rune(rune_type):
+            if hasattr(self, 'rune_manager') and self._gain_rune(rune_type):
                 cfg = RUNE_CONFIG[rune_type]
                 self.floating_texts.append(FloatingText(self.player.x, self.player.y - 40,
                     f"获得符文: {cfg['name']}!", color=cfg['color'], lifetime=3.5))
@@ -3433,7 +3525,7 @@ class Game:
             for _ in range(rune_count):
                 rune_type = random_rune(luck_bonus=luck + 0.5)  # 黄金宝箱提升稀有度
                 if hasattr(self, 'rune_manager'):
-                    self.rune_manager.add_rune(rune_type)
+                    self._gain_rune(rune_type)
                     cfg = RUNE_CONFIG[rune_type]
                     self.floating_texts.append(FloatingText(self.player.x, self.player.y - 70,
                         f"符文: {cfg['name']}!", color=cfg['color'], lifetime=3.0))
@@ -3480,7 +3572,7 @@ class Game:
                 elif ekind == "rune":
                     if hasattr(self, 'rune_manager'):
                         rt = random_rune()
-                        self.rune_manager.add_rune(rt)
+                        self._gain_rune(rt)
                         self._apply_rune_bonuses()
                 elif ekind == "ammo":
                     for w in self.player.weapons:
@@ -3502,6 +3594,35 @@ class Game:
                         from entities import Enemy, EnemyType
                         self.enemies.append(Enemy(zx, zy, EnemyType.ZOMBIE, 1, self.config.difficulty))
             self.particles.spawn_explosion(self.player.x, self.player.y, PURPLE, 15)
+
+    def _load_permanent_runes(self):
+        """从跨局存档加载永久符文(可升级)到本局符文管理器"""
+        if not hasattr(self, 'rune_manager'):
+            return
+        perm = {}
+        try:
+            if hasattr(self, 'records') and self.records is not None:
+                perm = self.records.data.get("permanent_runes", {}) or {}
+        except Exception:
+            perm = {}
+        self.rune_manager.load_permanent(perm)
+
+    def _gain_rune(self, rune_type):
+        """获得/升级一枚符文：升级本局层数 + 同步跨局永久存档"""
+        if not hasattr(self, 'rune_manager'):
+            return False
+        if not self.rune_manager.upgrade_rune(rune_type):
+            return False
+        # 同步跨局永久存档
+        try:
+            if hasattr(self, 'records') and self.records is not None:
+                self.records.data.setdefault("permanent_runes", {})
+                self.records.data["permanent_runes"][rune_type.name] = \
+                    self.rune_manager.get_stacks(rune_type)
+                self.records._save()
+        except Exception:
+            pass
+        return True
 
     def _apply_rune_bonuses(self):
         """应用所有符文的属性加成到玩家"""
@@ -4079,11 +4200,11 @@ class Game:
         
         # 奖励数量和类型根据规模、时间、难度综合计算
         base_count = {1: 1, 2: 2, 3: 3, 4: 4}.get(scale, 1)
-        # 时间系数：每存活3分钟，奖励+1（上限+3）
-        time_bonus = min(3, int(self.horde_manager.total_time / 180))
-        # 难度系数：困难+1，地狱+2
-        diff_bonus = {"困难": 1, "地狱": 2, "hard": 1, "hell": 2}.get(self.config.difficulty, 0)
-        reward_count = base_count + time_bonus + diff_bonus
+        # 时间系数：每存活5分钟，奖励+1（上限+2）
+        time_bonus = min(2, int(self.horde_manager.total_time / 300))
+        # 难度系数：困难+1，地狱+1（限制奖励泛滥）
+        diff_bonus = {"困难": 1, "地狱": 1, "hard": 1, "hell": 1}.get(self.config.difficulty, 0)
+        reward_count = min(3, base_count + time_bonus // 2 + diff_bonus)
         
         # 奖励生成中心：优先使用 boss 死亡位置，否则使用玩家位置
         _boss_pos = getattr(self, 'last_boss_death_pos', None)
@@ -4098,15 +4219,15 @@ class Game:
             
             # 奖励类型选择：根据规模和运气
             luck = self.rune_manager.get_bonus("drop_rate_mult") if hasattr(self, 'rune_manager') else 0
-            chest_chance = 0.35 + min(0.25, self.horde_manager.total_time / 600) + diff_bonus * 0.08 + luck * 0.1
-            golden_chance = 0.05 + min(0.1, self.horde_manager.total_time / 1200) + luck * 0.05
-            rune_chance = 0.15 + luck * 0.1
-            mystery_chance = 0.08
+            chest_chance = 0.22 + min(0.18, self.horde_manager.total_time / 900) + diff_bonus * 0.06 + luck * 0.08
+            golden_chance = 0.04 + min(0.08, self.horde_manager.total_time / 1500) + luck * 0.04
+            rune_chance = 0.13 + luck * 0.08
+            mystery_chance = 0.07
             
             roll = random.random()
-            if scale >= 4 or (scale >= 3 and roll < golden_chance):
-                item_type = ItemType.GOLDEN_CHEST  # 巨型尸潮必出黄金宝箱
-            elif scale >= 3 or (scale >= 2 and roll < chest_chance):
+            if scale >= 4 and roll < golden_chance:
+                item_type = ItemType.GOLDEN_CHEST  # 巨型尸潮有概率出黄金宝箱
+            elif scale >= 3 and roll < chest_chance + golden_chance:
                 item_type = ItemType.TREASURE_CHEST
             elif roll < chest_chance + rune_chance:
                 item_type = ItemType.RUNE
@@ -4486,6 +4607,11 @@ class Game:
         self._update_enemy_throwables(dt)
         self._update_fire_zones(dt)
         self._update_smoke_zones(dt)
+        # 实时成就结算（节流0.5s，不等到游戏结束）
+        self._ach_check_timer -= dt
+        if self._ach_check_timer <= 0:
+            self._check_achievements_realtime()
+            self._ach_check_timer = 0.5
         self._update_black_holes(dt)
         self._update_medic_pods(dt)
 

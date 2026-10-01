@@ -213,6 +213,8 @@ class GameRecords:
             "highest_combo_kills": 0,
             # === 故事模式剧情收集 ===
             "collected_story": [],
+            # === 永久符文（跨局生效，可升级）：{rune_name: level} ===
+            "permanent_runes": {},
         }
 
         # 顶层key：只补缺失，不覆盖旧数据
