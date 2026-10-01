@@ -561,7 +561,7 @@ class RiotGear:
 
 
 class Player:
-    def __init__(self, x, y):
+    def __init__(self, x, y, start_weapon=WeaponType.PISTOL, start_weapon_level=1):
         self.x = x
         self.y = y
         self.size = 16
@@ -577,11 +577,18 @@ class Player:
         self.exp_to_level = 100
         self.score = 0
 
-        self.weapons = [Weapon(WeaponType.FISTS)]
+        # 局外选定武器，局内仅一种武器，不可切换
+        self.weapons = [Weapon(start_weapon, level=start_weapon_level)]
         self.current_weapon_idx = 0
 
         self.skill_tree = SkillTree()
         self.active_skills = {}
+
+        # 角色加成（局外角色特殊能力）
+        self.damage_multiplier = 1.0   # 射击伤害倍率加成
+        self.crit_bonus_add = 0.0       # 额外暴击率
+        self.health_regen = 0.0         # 每2秒回血
+        self.dmg_reduce = 0.0           # 受伤减免
 
         self.riot_gear = RiotGear()
         self.riot_gear_cooldown = 0
@@ -950,6 +957,10 @@ class Player:
             pass
 
     def take_damage(self, damage, damage_type="melee", from_front=False, attack_x=None, attack_y=None):
+        # 角色受伤减免（如铁壁）
+        dmg_reduce = getattr(self, 'dmg_reduce', 0.0)
+        if dmg_reduce > 0:
+            damage = max(0, damage * (1.0 - dmg_reduce))
         # Mod 钩子：玩家受伤 - 允许 mod 修改伤害值
         try:
             import mod_loader
@@ -1986,14 +1997,15 @@ class Enemy:
         if self.healer_wave_cd > 0:
             self.healer_wave_cd -= dt
 
-        # 快速僵尸：冲刺攻击（接近时突然加速冲刺）
+        # 快速僵尸：冲刺攻击（前摇后突然加速冲刺，位移由game.py在前摇结束后执行）
         if self.enemy_type == EnemyType.ZOMBIE_FAST:
             if 60 < dist < 200 and self.fast_dash_ready and random.random() < 0.03:
                 self.fast_dash_ready = False
                 d = math.hypot(player_x - self.x, player_y - self.y)
                 if d > 0:
-                    self.x += (player_x - self.x) / d * 80
-                    self.y += (player_y - self.y) / d * 80
+                    self.fast_dash_dir = ((player_x - self.x) / d, (player_y - self.y) / d)
+                else:
+                    self.fast_dash_dir = (1, 0)
                 return "fast_dash"
             if dist > 250:
                 self.fast_dash_ready = True
@@ -2064,9 +2076,9 @@ class Enemy:
                 self.special_ability_cd = 4.0
                 d = math.hypot(player_x - self.x, player_y - self.y)
                 if d > 0:
-                    leap_dist = min(dist, getattr(self, "leap_range", 200))
-                    self.x += (player_x - self.x) / d * leap_dist
-                    self.y += (player_y - self.y) / d * leap_dist
+                    self.leap_dir = ((player_x - self.x) / d, (player_y - self.y) / d)
+                else:
+                    self.leap_dir = (1, 0)
                 return "leaper_strike"
 
         # 食尸者：吞噬尸体变强（在game.py中检测尸体）
@@ -2117,6 +2129,7 @@ class Enemy:
             "wraith_fear": {"duration": 0.6, "radius": 120},
             "healer_wave": {"duration": 1.0, "radius": 100},
             "leaper_strike": {"duration": 0.5, "radius": 30},
+            "fast_dash": {"duration": 0.4, "radius": 40},
         }
         return windup_configs.get(attack_type)
 

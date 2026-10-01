@@ -11,7 +11,8 @@ class Projectile:
     def __init__(self, x, y, vx, vy, damage, max_range, color, size, 
                  pierce=1, explosive=False, explosion_radius=0, is_flame=False,
                  is_plasma=False, is_chain=False, is_rail=False, gravity=0,
-                 is_laser=False, laser_width=0, laser_duration=0, laser_angle=0):
+                 is_laser=False, laser_width=0, laser_duration=0, laser_angle=0,
+                 is_scythe_throw=False):
         self.x = x
         self.y = y
         self.vx = vx
@@ -35,6 +36,7 @@ class Projectile:
         self.laser_timer = laser_duration
         self.laser_angle = laser_angle
         self.gravity = gravity
+        self.is_scythe_throw = is_scythe_throw
         self.lifetime = 3.0 if is_flame else (laser_duration if is_laser else 10.0)
         self.alive = True
         self.should_explode = False
@@ -189,7 +191,7 @@ class Weapon:
     def _setup_weapon(self):
         configs = {
             WeaponType.PISTOL: {
-                "name": "手枪", "damage": 15, "fire_rate": 0.4, 
+                "name": "手枪", "damage": 17, "fire_rate": 0.38, 
                 "range": 400, "speed": 12, "spread": 0.05, "pierce": 1,
                 "color": YELLOW, "projectile_size": 4, "shake": 2,
                 "desc": "基础武器，可靠但威力一般",
@@ -287,13 +289,6 @@ class Weapon:
                 "ammo": 2, "reload": 2.0
             },
             # ========== 近战武器 ==========
-            WeaponType.FISTS: {
-                "name": "拳头", "damage": 15, "fire_rate": 0.4,
-                "range": 55, "speed": 0, "spread": 0, "pierce": 1,
-                "color": (220, 180, 150), "projectile_size": 0, "shake": 1,
-                "desc": "基础近战武器，无限使用",
-                "ammo": "∞", "reload": 0, "is_melee": True
-            },
             WeaponType.KNIFE: {
                 "name": "匕首", "damage": 28, "fire_rate": 0.25,
                 "range": 60, "speed": 0, "spread": 0, "pierce": 1,
@@ -315,6 +310,14 @@ class Weapon:
                 "desc": "持续高DPS，移动减速",
                 "ammo": "∞", "reload": 0, "is_melee": True, "move_slow": 0.5
             },
+            WeaponType.SCYTHE: {
+                "name": "死神镰刀", "damage": 45, "fire_rate": 0.5,
+                "range": 80, "speed": 0, "spread": 0, "pierce": 3,
+                "color": (180, 60, 220), "projectile_size": 0, "shake": 4,
+                "desc": "死神之镰：近战挥砍，换弹时朝面朝方向扔出并返回",
+                "ammo": "∞", "reload": 1.4, "is_melee": True, "is_scythe": True,
+                "throw_range": 320, "throw_damage": 55, "throw_speed": 13
+            },
             # ========== 手枪扩展 ==========
             WeaponType.REVOLVER: {
                 "name": "左轮手枪", "damage": 45, "fire_rate": 0.7,
@@ -332,7 +335,7 @@ class Weapon:
             },
             # ========== 冲锋枪扩展 ==========
             WeaponType.SMG: {
-                "name": "冲锋枪", "damage": 12, "fire_rate": 0.08,
+                "name": "冲锋枪", "damage": 14, "fire_rate": 0.08,
                 "range": 350, "speed": 13, "spread": 0.07, "pierce": 1,
                 "color": DARK_GRAY, "projectile_size": 3, "shake": 2,
                 "desc": "高射速基础冲锋枪",
@@ -346,7 +349,7 @@ class Weapon:
                 "ammo": 25, "reload": 2.0
             },
             WeaponType.P90: {
-                "name": "P90", "damage": 11, "fire_rate": 0.06,
+                "name": "P90", "damage": 13, "fire_rate": 0.06,
                 "range": 380, "speed": 14, "spread": 0.06, "pierce": 1,
                 "color": (180, 160, 120), "projectile_size": 3, "shake": 2,
                 "desc": "极高射速，大容量弹匣",
@@ -384,7 +387,7 @@ class Weapon:
             },
             # ========== 霰弹枪扩展 ==========
             WeaponType.AA12: {
-                "name": "AA12", "damage": 10, "fire_rate": 0.2,
+                "name": "AA12", "damage": 14, "fire_rate": 0.2,
                 "range": 280, "speed": 11, "spread": 0.12, "pierce": 1,
                 "pellets": 6, "color": BLACK, "projectile_size": 3, "shake": 4,
                 "desc": "全自动霰弹枪，近距离压制",

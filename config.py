@@ -180,6 +180,7 @@ class GameState(Enum):
     UPDATE = auto()  # 新增：自动更新页面
     UPDATE_NOTES = auto()  # 新增：更新说明/版本详情页面
     RUNE_VIEW = auto()  # 新增：符文查看界面（玩家拥有符文+详情）
+    EQUIP_SELECT = auto()  # 新增：局外装备选择（武器+角色，开始游戏前）
 
 
 class ControlMode(Enum):
@@ -252,10 +253,10 @@ class WeaponType(Enum):
     DOUBLE_BARREL = auto()     # 双管霰弹 - 近距离毁灭
     SEMI_AUTO_SNIPER = auto()  # 连狙 - 半自动狙击，高射速高精度
     # 近战武器
-    FISTS = auto()             # 拳头 - 基础近战，无限耐久
     KNIFE = auto()             # 匕首 - 快速近战，高暴击
     BAT = auto()               # 棒球棍 - 中速近战，击退效果
     CHAINSAW = auto()          # 电锯 - 持续伤害，高DPS
+    SCYTHE = auto()            # 死神镰刀 - 近战+扔出返回，击败王某解锁
     # 手枪扩展
     REVOLVER = auto()          # 左轮手枪 - 高伤害，低射速
     DESERT_EAGLE = auto()      # 沙漠之鹰 - 超高伤害，低射速
@@ -710,3 +711,102 @@ class SkillType(Enum):
     PURIFY = auto()            # 净化 - 清除debuff并短暂无敌
     ELEMENTAL_MASTERY = auto() # 元素精通 - 增强debuff效果
     ADRENALINE = auto()        # 肾上腺素 - 装备防爆套装时体力上限和回复提升
+
+
+# ==================== 局外商店：武器价格（金币） ====================
+# 武器解锁价格（首次购买），升级费用 = 基础价 * 0.6 * 目标等级
+WEAPON_PRICES = {
+    "PISTOL": 0,             # 初始武器，默认拥有
+    "KNIFE": 120, "BAT": 180, "CHAINSAW": 320,
+    "REVOLVER": 250, "DESERT_EAGLE": 450,
+    "SMG": 220, "UMP45": 380, "P90": 420,
+    "RIFLE": 300, "AK47": 500, "M4A1": 460, "SCAR": 560,
+    "SHOTGUN": 350, "DOUBLE_BARREL": 420, "AA12": 600,
+    "SNIPER": 400, "SEMI_AUTO_SNIPER": 520, "AWP": 680,
+    "MACHINE_GUN": 550, "MINIGUN": 900, "LMG": 650,
+    "ROCKET_LAUNCHER": 700, "GRENADE_LAUNCHER": 620,
+    "FLAMETHROWER": 480, "CROSSBOW": 300, "PLASMA_RIFLE": 640, "RAILGUN": 980,
+    "GRENADE": 150, "MOLOTOV": 150, "SMOKE_GRENADE": 120,
+    # 死神镰刀：需打败王某（ZOMBIE_WANG）后才可购买解锁
+    "SCYTHE": 3000,
+}
+# 死神镰刀特殊解锁条件标记
+SCYTHE_REQUIRES_WANG = True
+
+# ==================== 局外角色（有特殊能力，可购买/升级） ====================
+# 每个角色：价格、描述、能力、初始属性加成
+CHARACTERS = {
+    "幸存者": {
+        "price": 0, "desc": "均衡型，适合新手",
+        "hp_bonus": 0, "speed_bonus": 0, "damage_bonus": 0,
+        "crit_bonus": 0, "ability": "无特殊能力"
+    },
+    "医护兵": {
+        "price": 500, "desc": "受治疗时额外回复，且随时间缓慢回血",
+        "hp_bonus": 20, "speed_bonus": 0, "damage_bonus": 0,
+        "crit_bonus": 0, "ability": "回血: 每2秒回复1点生命",
+        "regen": 0.5
+    },
+    "突击手": {
+        "price": 800, "desc": "枪械伤害更高，射击节奏更快",
+        "hp_bonus": 0, "speed_bonus": 0, "damage_bonus": 0.12,
+        "crit_bonus": 0.05, "ability": "火力: 伤害+12%，暴击+5%"
+    },
+    "疾行者": {
+        "price": 900, "desc": "移动速度更快，闪避能力出众",
+        "hp_bonus": 0, "speed_bonus": 0.35, "damage_bonus": 0,
+        "crit_bonus": 0, "ability": "疾风: 移速+0.35"
+    },
+    "铁壁": {
+        "price": 1100, "desc": "生命上限更高，受伤更少",
+        "hp_bonus": 50, "speed_bonus": 0, "damage_bonus": 0,
+        "crit_bonus": 0, "ability": "铁壁: 生命上限+50",
+        "dmg_reduce": 0.1
+    },
+    "死神": {
+        "price": 2500, "desc": "近战伤害极高，嗜血成性（需解锁死神镰刀后出现）",
+        "hp_bonus": -10, "speed_bonus": 0.1, "damage_bonus": 0.25,
+        "crit_bonus": 0.1, "ability": "死神: 近战伤害+25%，暴击+10%",
+        "requires_scythe": True
+    },
+}
+
+# ==================== 组合技（多个技能达到等级后触发） ====================
+# key: 组合名; require: {技能类型名: 最低等级}; bonus: 解锁时获得的被动加成
+COMBO_SKILLS = {
+    "火焰风暴": {
+        "require": {"FLAME_ENCHANT": 2, "ELEMENTAL_MASTERY": 1},
+        "desc": "火焰附魔+元素精通：燃烧伤害大幅提升",
+        "bonus": {"damage": 0.15},
+    },
+    "冰霜领域": {
+        "require": {"FROST_ENCHANT": 2, "ELEMENTAL_MASTERY": 1},
+        "desc": "冰霜附魔+元素精通：冻结时间延长，冰伤提升",
+        "bonus": {"damage": 0.15},
+    },
+    "剧毒专家": {
+        "require": {"POISON_ENCHANT": 2, "ELEMENTAL_MASTERY": 1},
+        "desc": "剧毒附魔+元素精通：中毒持续与伤害提升",
+        "bonus": {"damage": 0.15},
+    },
+    "狂暴野兽": {
+        "require": {"BERSERK": 2, "BLOODLUST": 1},
+        "desc": "狂暴+嗜血：攻速提升，击杀后更强",
+        "bonus": {"fire_rate": 0.15},
+    },
+    "钢铁巨像": {
+        "require": {"STEEL_WILL": 2, "RIOT_GEAR": 1},
+        "desc": "钢铁意志+防爆套装：受伤大幅减免",
+        "bonus": {"reduce": 0.15},
+    },
+    "疾影闪烁": {
+        "require": {"BLINK": 2, "PHANTOM_STRIKE": 1},
+        "desc": "闪烁+幻影打击：位移与分身更频繁",
+        "bonus": {"fire_rate": 0.10, "damage": 0.10},
+    },
+    "雷霆风暴": {
+        "require": {"CHAIN_LIGHTNING": 2, "OVERLOAD": 1},
+        "desc": "连锁闪电+过载：闪电更强更远",
+        "bonus": {"damage": 0.20},
+    },
+}

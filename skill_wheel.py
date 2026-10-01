@@ -72,7 +72,9 @@ class SkillWheel:
                         if min_diff < math.pi / len(self.skills):
                             self.selected_skill = selected
             elif event["type"] == "up":
-                if event.get("id", 0) == self.touch_id:
+                # 轮盘可能在玩家手指按下后才打开（长按技能按钮触发），此时 touch_id 未初始化。
+                # 若 touch_id 为空，接受任意手指的 up 关闭轮盘；否则仅接受匹配手指。
+                if event.get("id", 0) == self.touch_id or (self.touch_id is None and event.get("id", 0) is not None):
                     self.touch_id = None
                     self.just_selected = True
                     self.active = False

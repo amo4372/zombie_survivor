@@ -434,14 +434,23 @@ class SkillTree:
                 available.append(skill)
         return available
 
-    def get_random_skill_cards(self, count=3):
+    def get_random_skill_cards(self, count=3, current_weapon=None):
         """随机获取技能卡供选择（基于技能权重的归一化爆率系统）
         
         权重规则：
         - 技能自身 weight 属性（稀有度）
         - 未解锁技能额外 ×2（鼓励尝试新技能）
         - 满级技能不出现（已在 get_available_skills 中过滤）
+        - 近战武器（如死神镰刀）时，近战类技能权重 ×3（技能池按武器类型优化）
         """
+        melee_boost = set()
+        try:
+            for name in ("BERSERK", "PHANTOM_STRIKE", "SHOCKWAVE", "STEEL_WILL", "BLOODLUST", "FLAME_ENCHANT", "FROST_ENCHANT", "POISON_ENCHANT"):
+                s = getattr(SkillType, name, None)
+                if s is not None:
+                    melee_boost.add(s)
+        except Exception:
+            pass
         available = self.get_available_skills()
         if len(available) <= count:
             return available
@@ -451,6 +460,9 @@ class SkillTree:
             w = skill.weight
             if skill.current_level == 0:
                 w *= 2.0  # 未解锁技能权重翻倍
+            is_melee = bool(current_weapon and getattr(current_weapon, "is_melee", False))
+            if is_melee and getattr(skill, "skill_type", None) in melee_boost:
+                w *= 3.0  # 近战武器优先近战/附魔类技能
             weights.append(max(0.01, w))
         selected = []
         temp_available = available.copy()

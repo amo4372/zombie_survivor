@@ -159,6 +159,10 @@ class GameRecords:
                 "damage_deal_500k": {"unlocked": False, "desc": "累计造成50万伤害", "date": None, "group":"战斗", "hidden":False},
                 "gunner": {"unlocked": False, "desc": "累计射击10000发子弹", "date": None, "group":"战斗", "hidden":False, "coef_threshold": 0},
                 "tough_guy": {"unlocked": False, "desc": "累计承受20万伤害", "date": None, "group":"战斗", "hidden":False, "coef_threshold": 0},
+                "wang_slayer": {"unlocked": False, "desc": "击败王某（Boss）", "date": None, "group":"战斗", "hidden":False, "coef_threshold": 0},
+                "map_complete": {"unlocked": False, "desc": "通关全部故事地图", "date": None, "group":"剧情", "hidden":False, "coef_threshold": 0},
+                "coin_rich": {"unlocked": False, "desc": "累计获得1000金币", "date": None, "group":"财富", "hidden":False, "coef_threshold": 0},
+                "combo_master": {"unlocked": False, "desc": "解锁3个组合技", "date": None, "group":"技能", "hidden":False, "coef_threshold": 0},
                 # 生存
                 "survivor": {"unlocked": False, "desc": "存活超过5分钟", "date": None, "group":"生存", "hidden":False, "coef_threshold": 0},
                 "veteran": {"unlocked": False, "desc": "存活超过15分钟", "date": None, "group":"生存", "hidden":False, "coef_threshold": 0},
@@ -211,6 +215,19 @@ class GameRecords:
             "total_dodge_count": 0,
             "total_life_steal_heal": 0,
             "highest_combo_kills": 0,
+            # === 金币（积分另一形式，用于购买武器/角色/升级）===
+            "coins": 0,
+            "total_coins_earned": 0,
+            # === 局外武器解锁/升级：{weapon_name: {"unlocked": bool, "level": int}} ===
+            "owned_weapons": {},
+            # === 角色解锁/升级：{char_name: {"unlocked": bool, "level": int}} ===
+            "owned_characters": {},
+            # === 地图解锁（故事模式）：{map_name: {"unlocked": bool, "cleared": bool}} ===
+            "unlocked_maps": {},
+            # === 是否击败王某（Boss），解锁死神镰刀购买 ===
+            "defeated_wang": False,
+            # === 已解锁组合技 ===
+            "combo_unlocked": [],
             # === 故事模式剧情收集 ===
             "collected_story": [],
             # === 永久符文（跨局生效，可升级）：{rune_name: level} ===
@@ -533,6 +550,16 @@ class GameRecords:
             unlock("centurion")
         if d.get("damage_taken", 0) == 0 and not d.get("died", True):
             unlock("untouchable")
+        # 新增：击败王某 / 通关全图 / 金币累计 / 组合技
+        if self.data.get("defeated_wang", False):
+            unlock("wang_slayer")
+        _story_maps = ["SCHOOL", "STREET", "DOWNTOWN", "SUBURB", "NUCLEAR_PLANT"]
+        if all(self.data.get("unlocked_maps", {}).get(m, {}).get("cleared", False) for m in _story_maps):
+            unlock("map_complete")
+        if self.data.get("total_coins_earned", 0) >= 1000:
+            unlock("coin_rich")
+        if len(self.data.get("combo_unlocked", [])) >= 3:
+            unlock("combo_master")
         # 新增成就检测
         if self.data["total_horde_survived"] >=5:
             unlock("horde_survivor_5")
@@ -628,6 +655,97 @@ class GameRecords:
         self.data = {}
         self._ensure_structure()
         self._save()
+
+    # ==================== 金币系统 ====================
+    def get_coins(self):
+        return self.data.get("coins", 0)
+
+    def add_coins(self, amount):
+        amount = max(0, int(amount))
+        self.data["coins"] = self.data.get("coins", 0) + amount
+        self.data["total_coins_earned"] = self.data.get("total_coins_earned", 0) + amount
+        self._save()
+        return self.data["coins"]
+
+    def spend_coins(self, amount):
+        if self.get_coins() >= amount:
+            self.data["coins"] = self.get_coins() - amount
+            self._save()
+            return True
+        return False
+
+    # ==================== 局外武器解锁/升级 ====================
+    def is_weapon_owned(self, weapon_name):
+        return self.data.get("owned_weapons", {}).get(weapon_name, {}).get("unlocked", False)
+
+    def get_weapon_level(self, weapon_name):
+        return self.data.get("owned_weapons", {}).get(weapon_name, {}).get("level", 1)
+
+    def unlock_weapon_purchase(self, weapon_name):
+        """购买解锁武器（默认等级1）"""
+        self.data.setdefault("owned_weapons", {})
+        self.data["owned_weapons"][weapon_name] = {"unlocked": True, "level": 1}
+        self._save()
+
+    def upgrade_weapon_purchase(self, weapon_name, level):
+        self.data.setdefault("owned_weapons", {})
+        self.data["owned_weapons"][weapon_name] = {"unlocked": True, "level": level}
+        self._save()
+
+    # ==================== 角色解锁/升级 ====================
+    def is_character_owned(self, char_name):
+        return self.data.get("owned_characters", {}).get(char_name, {}).get("unlocked", False)
+
+    def get_character_level(self, char_name):
+        return self.data.get("owned_characters", {}).get(char_name, {}).get("level", 1)
+
+    def unlock_character_purchase(self, char_name):
+        self.data.setdefault("owned_characters", {})
+        self.data["owned_characters"][char_name] = {"unlocked": True, "level": 1}
+        self._save()
+
+    def upgrade_character_purchase(self, char_name, level):
+        self.data.setdefault("owned_characters", {})
+        self.data["owned_characters"][char_name] = {"unlocked": True, "level": level}
+        self._save()
+
+    # ==================== 地图解锁（故事模式） ====================
+    def is_map_unlocked(self, map_name):
+        return self.data.get("unlocked_maps", {}).get(map_name, {}).get("unlocked", False)
+
+    def is_map_cleared(self, map_name):
+        return self.data.get("unlocked_maps", {}).get(map_name, {}).get("cleared", False)
+
+    def unlock_map(self, map_name):
+        self.data.setdefault("unlocked_maps", {})
+        self.data["unlocked_maps"][map_name] = {
+            "unlocked": True, "cleared": self.data["unlocked_maps"].get(map_name, {}).get("cleared", False)
+        }
+        self._save()
+
+    def clear_map(self, map_name):
+        self.data.setdefault("unlocked_maps", {})
+        self.data["unlocked_maps"][map_name] = {"unlocked": True, "cleared": True}
+        self._save()
+
+    # ==================== 王某（Boss）击败标记 ====================
+    def has_defeated_wang(self):
+        return self.data.get("defeated_wang", False)
+
+    def mark_wang_defeated(self):
+        self.data["defeated_wang"] = True
+        self._save()
+
+    # ==================== 组合技 ====================
+    def get_combo_unlocked(self):
+        return set(self.data.get("combo_unlocked", []))
+
+    def unlock_combo(self, name):
+        combos = self.data.get("combo_unlocked", [])
+        if name not in combos:
+            combos.append(name)
+            self.data["combo_unlocked"] = combos
+            self._save()
 
 class GameSession:
     """单局游戏会话记录器"""

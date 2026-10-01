@@ -253,9 +253,34 @@ class GameWorld:
             MapType.SUBURB: self._gen_suburb,
             MapType.NUCLEAR_PLANT: self._gen_nuclear,
         }.get(self.map_type, self._gen_school)
-        gen(bx0, by0, bx1, by1)
+        # 删除情景化大地图：改为普通零散障碍物
+        self._gen_scattered(bx0, by0, bx1, by1)
 
     # ================= 情景化生成辅助 =================
+    def _gen_scattered(self, x0, y0, x1, y1):
+        """普通零散障碍物：随机散落的基础障碍物（墙壁段/路障/木箱/碎石堆/垃圾桶/树），无情景化布局"""
+        W, H = x1 - x0, y1 - y0
+        types = ['wall', 'barricade', 'crate', 'debris_pile', 'trash_bin', 'tree']
+        count = random.randint(9, 15)
+        attempts = 0
+        placed = 0
+        while placed < count and attempts < 60:
+            attempts += 1
+            t = random.choice(types)
+            if t == 'wall':
+                w = random.randint(30, 80); h = random.randint(12, 18)
+            elif t == 'tree':
+                w = random.randint(22, 34); h = random.randint(22, 34)
+            else:
+                w = random.randint(16, 34); h = random.randint(16, 34)
+            if W - w - 20 <= 0 or H - h - 20 <= 0:
+                continue
+            cx = x0 + random.randint(10, int(W) - w - 10)
+            cy = y0 + random.randint(10, int(H) - h - 10)
+            rot = random.choice([0, 90]) if t == 'wall' else 0
+            self._add_obs(t, cx, cy, w, h, rot=rot)
+            placed += 1
+
     def _add_obs(self, otype, x, y, w, h, color=None, rot=0):
         """添加一个障碍物(带碰撞), 与已有障碍物重叠则跳过"""
         r = pygame.Rect(int(x), int(y), int(w), int(h))
@@ -1035,19 +1060,20 @@ class HordeManager:
             if random.random() < elite_weight:
                 return random.choice(elite_pool)
 
-        # === 严格按时间/章节解锁（前期只有普通僵尸）===
+        # === 严格按时间/章节解锁（前期只普通+快速，避免前期僵尸类型过多）===
         # 时间阈值（秒）；current_scale>=2 时提前解锁一档，加速节奏
         t = self.total_time
         boost = (self.current_scale >= 2)
         unlock_pool = [EnemyType.ZOMBIE_NORMAL]
         if t >= 30.0 or boost:
             unlock_pool.append(EnemyType.ZOMBIE_FAST)
-        if t >= 60.0 or boost:
+        # 前期尽量只有普通僵尸和快速僵尸；更高级类型显著推迟
+        if t >= 120.0 or boost:
             unlock_pool.extend([EnemyType.ZOMBIE_TANK, EnemyType.ZOMBIE_GHOUL])
-        if t >= 90.0 or boost:
+        if t >= 180.0 or boost:
             unlock_pool.append(EnemyType.ZOMBIE_BERSERKER)
             unlock_pool.extend(mid_pool)
-        if t >= 150.0 or self.current_scale >= 3:
+        if t >= 300.0 or self.current_scale >= 3:
             unlock_pool.extend(advanced_pool)
 
         if self.horde_active:

@@ -9,6 +9,7 @@ import random
 from config import *
 from buff import BuffType
 from codex import codex_unlock_manager
+from weapons import Weapon
 
 class Camera:
     def __init__(self, width, height):
@@ -89,6 +90,8 @@ class Renderer:
             self._draw_mode_select()
         elif state == GameState.DIFFICULTY_SELECT:
             self._draw_difficulty_select()
+        elif state == GameState.EQUIP_SELECT:
+            self._draw_equip_select()
         elif state == GameState.STORY_ARCHIVE:
             self._draw_story_archive()
         elif state == GameState.CODEX:
@@ -289,7 +292,8 @@ class Renderer:
                     difficulties = ["简单", "普通", "困难", "地狱"]
                     self.game.config.difficulty = difficulties[i]
                     self.game.config.save()
-                    self.game.start_game()
+                    # 进入局外装备选择（武器+角色）界面，确认后开始游戏
+                    self.game.state = GameState.EQUIP_SELECT
                 elif i == 4:
                     self.game.state = GameState.MODE_SELECT
             btn.draw(self.screen, self.game.font_large, scale)
@@ -298,6 +302,168 @@ class Renderer:
                 desc_rect = desc_text.get_rect(center=(sw // 2, int((240 + i * 75) * scale)))
                 self.screen.blit(desc_text, desc_rect)
 
+
+    def _draw_equip_select(self):
+        """局外装备选择界面：选武器（购买/升级）+ 选角色（购买/升级）"""
+        self.screen.fill(VOID_BLACK)
+        scale = self.game.scale
+        sw = self.game.scaled_width
+        sh = self.game.scaled_height
+        g = self.game
+
+        title = self.game.font_title.render("选择装备", True, WHITE)
+        self.screen.blit(title, title.get_rect(center=(sw // 2, int(48 * scale))))
+
+        # 金币余额
+        coin_txt = self.game.font.render(f"金币: {g.records.get_coins()}", True, GOLD)
+        self.screen.blit(coin_txt, coin_txt.get_rect(topright=(sw - 40, int(30 * scale))))
+
+        # 当前选择
+        cur_weapon_name = Weapon(g.selected_weapon).name if g.selected_weapon else "-"
+        cur_char = g.selected_character or "幸存者"
+        sel_txt = self.game.font.render(f"当前: {cur_weapon_name} Lv.{g.selected_weapon_level} | 角色: {cur_char}", True, GREEN)
+        self.screen.blit(sel_txt, sel_txt.get_rect(center=(sw // 2, int(88 * scale))))
+
+        mouse_pos = pygame.mouse.get_pos()
+        mouse_pressed = pygame.mouse.get_pressed()
+        # 点击检测：触控与鼠标 up 事件已统一合入 touch_events
+        clicked = None
+        for ev in g.touch_events:
+            if ev["type"] == "up":
+                clicked = ev["pos"]
+                break
+
+        # ---- 武器栏 ----
+        wx, wy, ww, wh = int(60 * scale), int(120 * scale), int(580 * scale), int(450 * scale)
+        pygame.draw.rect(self.screen, (20, 20, 28), (wx, wy, ww, wh), border_radius=8)
+        pygame.draw.rect(self.screen, (60, 60, 80), (wx, wy, ww, wh), 2, border_radius=8)
+        w_title = self.game.font.render("武器 (点击选择/购买，可升级)", True, WHITE)
+        self.screen.blit(w_title, (wx + 10, wy + 5))
+        rows = g.get_weapon_shop_rows()
+        row_h = int(56 * scale)
+        visible = max(1, int(wh // row_h))
+        rows_vis = rows[g.equip_weapon_scroll: g.equip_weapon_scroll + visible]
+        for i, (wt, name, price, owned, level, locked, desc) in enumerate(rows_vis):
+            ry = wy + 35 + i * row_h
+            rect = pygame.Rect(wx + 6, ry, ww - 12, row_h - 6)
+            is_sel = (g.selected_weapon == wt)
+            color = (35, 40, 60) if is_sel else (28, 28, 38)
+            pygame.draw.rect(self.screen, color, rect, border_radius=6)
+            if is_sel:
+                pygame.draw.rect(self.screen, GOLD, rect, 2, border_radius=6)
+            # 名称
+            ncol = LIGHT_GRAY if locked else WHITE
+            n_txt = self.game.font_small.render(name, True, ncol)
+            self.screen.blit(n_txt, (rect.x + 8, rect.y + 6))
+            # 状态
+            if locked:
+                st = self.game.font_small.render(locked, True, CRIMSON)
+                self.screen.blit(st, (rect.right - 8 - st.get_width(), rect.y + 6))
+            elif owned:
+                st = self.game.font_small.render(f"Lv.{level} (已拥有)", True, GREEN)
+                self.screen.blit(st, (rect.right - 8 - st.get_width(), rect.y + 6))
+            else:
+                st = self.game.font_small.render(f"{price}金币", True, GOLD)
+                self.screen.blit(st, (rect.right - 8 - st.get_width(), rect.y + 6))
+            # 点击处理
+            if clicked and rect.collidepoint(clicked):
+                if locked:
+                    g.equip_hover = f"未解锁: {locked}"
+                elif owned:
+                    g.equip_select_weapon(wt)
+                else:
+                    res = g.equip_buy_weapon(wt)
+                    g.equip_hover = {"ok": f"已购买 {name}", "no_coin": "金币不足", "locked_wang": "需先击败王某",
+                                     "owned": "已拥有"}.get(res, "")
+            # 悬停高亮
+            if rect.collidepoint(mouse_pos) and not is_sel:
+                pygame.draw.rect(self.screen, (70, 70, 90), rect, 2, border_radius=6)
+
+        # ---- 角色栏 ----
+        cx, cy, cw, ch = int(680 * scale), int(120 * scale), int(540 * scale), int(450 * scale)
+        pygame.draw.rect(self.screen, (20, 20, 28), (cx, cy, cw, ch), border_radius=8)
+        pygame.draw.rect(self.screen, (60, 60, 80), (cx, cy, cw, ch), 2, border_radius=8)
+        c_title = self.game.font.render("角色 (点击选择/购买，可升级)", True, WHITE)
+        self.screen.blit(c_title, (cx + 10, cy + 5))
+        crows = g.get_character_shop_rows()
+        c_row_h = int(72 * scale)
+        c_visible = max(1, int(ch // c_row_h))
+        for i, (cname, cprice, cowned, clevel, cdesc, cability, clocked) in enumerate(crows):
+            ry = cy + 35 + i * c_row_h
+            rect = pygame.Rect(cx + 6, ry, cw - 12, c_row_h - 8)
+            is_sel = (g.selected_character == cname or (g.selected_character is None and cname == "幸存者"))
+            color = (35, 40, 60) if is_sel else (28, 28, 38)
+            pygame.draw.rect(self.screen, color, rect, border_radius=6)
+            if is_sel:
+                pygame.draw.rect(self.screen, GOLD, rect, 2, border_radius=6)
+            ncol = LIGHT_GRAY if clocked else WHITE
+            n_txt = self.game.font_small.render(cname, True, ncol)
+            self.screen.blit(n_txt, (rect.x + 8, rect.y + 6))
+            if clocked:
+                st = self.game.font_small.render(clocked, True, CRIMSON)
+                self.screen.blit(st, (rect.right - 8 - st.get_width(), rect.y + 6))
+            elif cowned:
+                st = self.game.font_small.render(f"Lv.{clevel}", True, GREEN)
+                self.screen.blit(st, (rect.right - 8 - st.get_width(), rect.y + 6))
+            else:
+                st = self.game.font_small.render(f"{cprice}金币", True, GOLD)
+                self.screen.blit(st, (rect.right - 8 - st.get_width(), rect.y + 6))
+            # 能力描述
+            ab = self.game.font_small.render(cability, True, LIGHT_GRAY)
+            self.screen.blit(ab, (rect.x + 8, rect.y + 26))
+            if clicked and rect.collidepoint(clicked):
+                if clocked:
+                    g.equip_hover = f"未解锁: {clocked}"
+                elif cowned:
+                    g.equip_select_character(cname)
+                else:
+                    res = g.equip_buy_character(cname)
+                    g.equip_hover = {"ok": f"已购买 {cname}", "no_coin": "金币不足", "locked_wang": "需先击败王某",
+                                     "owned": "已拥有"}.get(res, "")
+            if rect.collidepoint(mouse_pos) and not is_sel:
+                pygame.draw.rect(self.screen, (70, 70, 90), rect, 2, border_radius=6)
+
+        # ---- 地图选择（故事模式：第一遍通关解锁，之后可直接选图）----
+        if g.config.game_mode == GameMode.STORY:
+            map_label = self.game.font.render("故事地图:", True, WHITE)
+            self.screen.blit(map_label, map_label.get_rect(center=(sw // 2 - int(220 * scale), int(582 * scale))))
+            mx = sw // 2 - int(150 * scale)
+            for mi, m in enumerate(STORY_MAP_ORDER):
+                unlocked = g.records.is_map_unlocked(m.name)
+                mrect = pygame.Rect(mx + mi * 105, int(566 * scale), 95, 32)
+                mcol = (30, 70, 35) if unlocked else (45, 45, 55)
+                pygame.draw.rect(self.screen, mcol, mrect, border_radius=6)
+                mname = MAP_CONFIGS[m]["name"]
+                mtxt = self.game.font_small.render(mname if len(mname) <= 3 else mname[:3], True, WHITE if unlocked else (90, 90, 100))
+                self.screen.blit(mtxt, mtxt.get_rect(center=mrect.center))
+                if g.selected_map_for_story == m:
+                    pygame.draw.rect(self.screen, GOLD, mrect, 2, border_radius=6)
+                if clicked and mrect.collidepoint(clicked) and unlocked:
+                    g.selected_map_for_story = m
+
+        # 悬停/反馈信息（显示在标题下方）
+        if g.equip_hover:
+            ht = self.game.font_small.render(g.equip_hover, True, ORANGE)
+            self.screen.blit(ht, ht.get_rect(center=(sw // 2, int(96 * scale))))
+            g.equip_hover = None
+
+        # ---- 底部按钮：开始 / 返回 ----
+        start_rect = pygame.Rect(sw // 2 - int(150 * scale), int(622 * scale), int(300 * scale), int(54 * scale))
+        pygame.draw.rect(self.screen, (40, 90, 40), start_rect, border_radius=10)
+        pygame.draw.rect(self.screen, GREEN, start_rect, 2, border_radius=10)
+        stxt = self.game.font.render("开始游戏", True, WHITE)
+        self.screen.blit(stxt, stxt.get_rect(center=start_rect.center))
+        back_rect = pygame.Rect(sw // 2 - int(150 * scale), int(674 * scale), int(300 * scale), int(42 * scale))
+        pygame.draw.rect(self.screen, (60, 50, 50), back_rect, border_radius=8)
+        pygame.draw.rect(self.screen, GRAY, back_rect, 2, border_radius=8)
+        btxt = self.game.font_small.render("返回难度选择", True, LIGHT_GRAY)
+        self.screen.blit(btxt, btxt.get_rect(center=back_rect.center))
+
+        if clicked:
+            if start_rect.collidepoint(clicked):
+                g.equip_confirm()
+            elif back_rect.collidepoint(clicked):
+                g.state = GameState.DIFFICULTY_SELECT
 
     def _draw_text_viewer(self):
         """渲染可拾取文本查看界面"""
@@ -1593,7 +1759,8 @@ class Renderer:
             # 技能前摇预警：释放带前摇的技能时显示警示（红色闪烁圈+危险标记）
             if (getattr(enemy, 'boss_is_executing', False)
                     or getattr(enemy, 'skill_windup', 0) > 0
-                    or getattr(enemy, 'skill_telegraph', 0) > 0):
+                    or getattr(enemy, 'skill_telegraph', 0) > 0
+                    or getattr(enemy, 'special_windup_timer', 0) > 0):
                 self._draw_skill_warning(enemy, cam_x, cam_y, scale)
 
         # 绘制玩家
@@ -1784,8 +1951,8 @@ class Renderer:
         if self.game.config.control_mode == ControlMode.KEYBOARD and self.game.skill_caster.is_aiming:
             self.game.skill_caster._draw_aim_preview(self.screen, self.game.selected_skill, self.game.scale)
 
-        # ==========键鼠长按Q投掷物瞄准预览 ==========
-        if self.game.config.control_mode == ControlMode.KEYBOARD and hasattr(self.game, 'throwable_caster') and self.game.throwable_caster.is_aiming:
+        # ========== 投掷物瞄准预览（键鼠长按Q/触控长按投掷均显示） ==========
+        if hasattr(self.game, 'throwable_caster') and self.game.throwable_caster and self.game.throwable_caster.is_aiming:
             tc = self.game.throwable_caster
             scale = self.game.scale
             px = int((tc.player_x - tc.camera_x) * scale)
