@@ -4727,6 +4727,22 @@ class Game:
         if self.player.riot_gear.charge_active:
             move_x, move_y = 0, 0
 
+        # === 恐惧(FEAR)状态：无法自控，随机乱走 ===
+        _fear_buff = self.player.buff_manager.get_buff(BuffType.FEAR) if hasattr(self.player, 'buff_manager') else None
+        if _fear_buff is not None and not _fear_buff.is_expired():
+            if not hasattr(self, '_fear_rand_angle'):
+                import random
+                self._fear_rand_angle = random.uniform(0, math.pi * 2)
+            if not hasattr(self, '_fear_phase'):
+                self._fear_phase = 0.0
+            # 恐惧：随机乱走（不响应玩家输入），攻击已被 attack_speed_mult=0 禁用
+            _fear_speed = 0.9
+            _fa = self._fear_rand_angle + math.sin(self._fear_phase * 0.8) * 0.6
+            self._fear_phase += dt
+            move_x = math.cos(_fa) * _fear_speed
+            move_y = math.sin(_fa) * _fear_speed
+            sprinting = False
+
         # 更新防爆套装动画
         self._update_riot_animation(dt)
 
@@ -4965,6 +4981,10 @@ class Game:
                 if self.lighting.quality != self.config.graphics_quality:
                     self.lighting.set_quality(self.config.graphics_quality)
                 self.lighting.update(dt)
+
+            # 粒子系统同步画质（性能档削减粒子密度，质量档增强）
+            if getattr(self.particles, 'quality', None) != self.config.graphics_quality:
+                self.particles.quality = self.config.graphics_quality
 
             # 爆炸僵尸自爆
             if result == "explode":
@@ -5348,8 +5368,8 @@ class Game:
             # 限制怪物在地图内
             enemy.x, enemy.y = self.world.clamp_position(enemy.x, enemy.y, enemy.size)
 
-            # 怪物与玩家碰撞
-            if enemy.get_rect().colliderect(self.player.get_rect()):
+            # 怪物与玩家碰撞（被钩爪拉回中的敌人无法造成任何伤害）
+            if (not enemy.grappled) and enemy.get_rect().colliderect(self.player.get_rect()):
                 dx = enemy.x - self.player.x
                 dy = enemy.y - self.player.y
                 dist = math.hypot(dx, dy)
@@ -5398,7 +5418,7 @@ class Game:
                         self.camera.shake(6, 0.4)
 
             # 普通远程敌人攻击（选择最近玩家作为目标）
-            if getattr(enemy, "attack_range", 0) > 0 and not getattr(enemy, "is_boss", False):
+            if (not enemy.grappled) and getattr(enemy, "attack_range", 0) > 0 and not getattr(enemy, "is_boss", False):
                 # 选择最近的玩家作为远程攻击目标
                 r_target_x, r_target_y = self.player.x, self.player.y
                 dist_e_p = math.hypot(enemy.x - r_target_x, enemy.y - r_target_y)
@@ -5416,10 +5436,11 @@ class Game:
                         self.enemy_projectiles.append(proj)
             
             # 怪物投掷道具
-            dist_e_p = math.hypot(enemy.x - self.player.x, enemy.y - self.player.y)
-            throw_result = enemy.try_throw(dt, self.player.x, self.player.y, dist_e_p)
-            if throw_result:
-                self._spawn_enemy_throwable(throw_result)
+            if not enemy.grappled:
+                dist_e_p = math.hypot(enemy.x - self.player.x, enemy.y - self.player.y)
+                throw_result = enemy.try_throw(dt, self.player.x, self.player.y, dist_e_p)
+                if throw_result:
+                    self._spawn_enemy_throwable(throw_result)
 
         # 更新钩爪碰撞检测
         self._update_grapple_collision()

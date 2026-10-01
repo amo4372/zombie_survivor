@@ -1314,6 +1314,19 @@ class ParticleSystem:
     def __init__(self):
         self.particles = []
         self.death_auras = []
+        self.quality = "balanced"  # performance / balanced / quality，决定粒子密度
+
+    def _density(self, count):
+        """按画质档位调整粒子数量（不砍粒子，只随画质缩放密度）"""
+        try:
+            n = int(count)
+        except (TypeError, ValueError):
+            n = 5
+        if self.quality == "performance":
+            return max(1, int(n * 0.4))
+        elif self.quality == "quality":
+            return int(n * 1.4)
+        return n
 
     def spawn(self, x, y, color, count=5, size_range=(2, 6),
               velocity_range=(-3, 3), lifetime_range=(0.3, 1.0)):
@@ -1322,6 +1335,7 @@ class ParticleSystem:
             count = int(count)
         except (TypeError, ValueError):
             count = 5
+        count = self._density(count)
         try:
             lo, hi = int(size_range[0]), int(size_range[1])
         except (TypeError, ValueError, IndexError):
@@ -1350,6 +1364,7 @@ class ParticleSystem:
 
     def spawn_heal_particles(self, x, y, count=15):
         """生成治疗粒子（绿色向上飘动）"""
+        count = self._density(count)
         for _ in range(count):
             size = random.randint(3, 7)
             vx = random.uniform(-1.5, 1.5)

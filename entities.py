@@ -644,12 +644,16 @@ class Player:
 
     def can_act(self):
         """检查玩家是否可以执行主动操作（射击/技能/切换武器等）
-        死亡、眩晕、冻结状态下不可操作"""
+        死亡、眩晕、冻结、恐惧状态下不可操作"""
         if not self.alive:
             return False
         # 检查Buff系统的眩晕/冻结状态
         if hasattr(self, 'buff_manager') and self.buff_manager:
             if self.buff_manager.is_stunned() or self.buff_manager.is_frozen():
+                return False
+            # 恐惧：无法攻击/施放技能
+            _fear = self.buff_manager.get_buff(BuffType.FEAR)
+            if _fear is not None and not _fear.is_expired():
                 return False
         # 兼容直接属性
         if getattr(self, 'stunned', False) or getattr(self, 'frozen', False):
@@ -1127,6 +1131,7 @@ class Enemy:
         # Boss控制抗性设置（在_setup_enemy后设置is_boss）
         if getattr(self, 'is_boss', False):
             self.control_resistance = 0.85  # Boss 85%概率免疫控制
+            self.can_throw = True  # Boss具备投掷能力（fire/rock/acid）
         elif getattr(self, 'is_elite', False):
             self.control_resistance = 0.4   # 精英 40%免疫
 
@@ -1192,7 +1197,8 @@ class Enemy:
             EnemyType.ZOMBIE_RANGED: {
                 "hp": 30, "speed": 1.5, "damage": 18, "size": 14,
                 "color": PURPLE, "exp": 20, "score": 20,
-                "attack_range": 300, "attack_cooldown": 2.0
+                "attack_range": 300, "attack_cooldown": 2.0,
+                "can_throw": True, "throw_type": "rock",
             },
             # === 新机制僵尸 ===
             EnemyType.ZOMBIE_EXPLODER: {
@@ -1273,6 +1279,7 @@ class Enemy:
                 "is_elite": True, "name": "精英术士",
                 "is_ranged": True, "projectile_damage": 30, "attack_range": 350,
                 "applies_curse": True,
+                "can_throw": True, "throw_type": "fire",
             },
             EnemyType.ELITE_GUARDIAN: {
                 "hp": 400, "speed": 1.0, "damage": 20, "size": 22,
@@ -1287,6 +1294,7 @@ class Enemy:
                 "color": LIME, "exp": 18, "score": 18,
                 "is_ranged": True, "projectile_damage": 12, "attack_range": 250,
                 "applies_corrosion": True,
+                "can_throw": True, "throw_type": "acid",
             },
             EnemyType.ZOMBIE_LEAPER: {
                 "hp": 25, "speed": 2.0, "damage": 18, "size": 13,
