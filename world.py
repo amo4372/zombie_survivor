@@ -1084,12 +1084,13 @@ class HordeManager:
 
     def _select_boss_type(self):
         """根据规模和模式选择Boss类型，标记疫苗Boss"""
-        # 巨型尸潮：高级Boss（含极强双形态王某）
+        # 王某（极强双形态）更易遇到：巨型尸潮权重最高，大型尸潮也出现
         if self.current_scale >= self.SCALE_MASSIVE:
-            bosses = [EnemyType.BOSS_MUTANT, EnemyType.BOSS_QUEEN, EnemyType.BOSS_TITAN, EnemyType.BOSS_WANG]
+            bosses = [EnemyType.BOSS_MUTANT, EnemyType.BOSS_QUEEN, EnemyType.BOSS_TITAN,
+                      EnemyType.BOSS_WANG, EnemyType.BOSS_WANG, EnemyType.BOSS_WANG]
             boss_type = random.choice(bosses)
         elif self.current_scale >= self.SCALE_LARGE:
-            bosses = [EnemyType.BOSS_LONG, EnemyType.BOSS_XIANG, EnemyType.BOSS_MUTANT]
+            bosses = [EnemyType.BOSS_LONG, EnemyType.BOSS_XIANG, EnemyType.BOSS_MUTANT, EnemyType.BOSS_WANG]
             boss_type = random.choice(bosses)
         else:
             bosses = [EnemyType.BOSS_LONG, EnemyType.BOSS_XIANG]

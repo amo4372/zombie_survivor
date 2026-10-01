@@ -4232,6 +4232,14 @@ class Game:
         if not hasattr(self, 'enemy_throwables'):
             self.enemy_throwables = []
         for g in self.enemy_throwables[:]:
+            # 实时追踪玩家当前位置（投掷物会调整方向砸向玩家，显著提高命中率）
+            dxp = self.player.x - g["x"]
+            dyp = self.player.y - g["y"]
+            dp = math.hypot(dxp, dyp)
+            if dp > 1:
+                spd = 260
+                g["vx"] = dxp / dp * spd
+                g["vy"] = dyp / dp * spd
             g["x"] += g["vx"] * dt
             g["y"] += g["vy"] * dt
             g["timer"] -= dt
@@ -4249,9 +4257,9 @@ class Game:
             else:
                 self.particles.spawn(g["x"], g["y"], GRAY, 1, (3, 6), (-2, 2), (0.3, 0.6))
             
-            # 检测命中玩家
+            # 检测命中玩家（判定范围加大，保证能砸中移动中的玩家）
             player_dist = math.hypot(g["x"] - self.player.x, g["y"] - self.player.y)
-            if player_dist < 25:
+            if player_dist < 40:
                 self._detonate_enemy_throwable(g)
                 self.enemy_throwables.remove(g)
                 continue
@@ -4282,7 +4290,7 @@ class Game:
             })
             # 直接伤害玩家
             player_dist = math.hypot(x - self.player.x, y - self.player.y)
-            if player_dist < 80:
+            if player_dist < 90:
                 self.player.take_damage(int(damage * 0.5), damage_type="fire")
                 self.player.buff_manager.add_buff(BuffType.BURN, duration=3.0)
 
@@ -4291,7 +4299,7 @@ class Game:
             self.assets.play_sound("poison_splash")
             self.particles.spawn_explosion(x, y, POISON_GREEN, 50)
             player_dist = math.hypot(x - self.player.x, y - self.player.y)
-            if player_dist < 70:
+            if player_dist < 80:
                 self.player.take_damage(int(damage), damage_type="melee")
                 self.player.buff_manager.add_buff(BuffType.CORROSION, duration=5.0)
                 self.player.buff_manager.add_buff(BuffType.POISON, duration=4.0)
@@ -4301,7 +4309,7 @@ class Game:
             self.assets.play_sound("curse_cast")
             self.particles.spawn_explosion(x, y, PURPLE, 40)
             player_dist = math.hypot(x - self.player.x, y - self.player.y)
-            if player_dist < 70:
+            if player_dist < 80:
                 self.player.take_damage(int(damage * 0.7), damage_type="magic")
                 self.player.buff_manager.add_buff(BuffType.CURSE, duration=6.0)
                 self.player.buff_manager.add_buff(BuffType.WEAKEN, duration=5.0)
@@ -4312,7 +4320,7 @@ class Game:
             self.camera.shake(10, 0.6)
             self.particles.spawn_explosion(x, y, GRAY, 30)
             player_dist = math.hypot(x - self.player.x, y - self.player.y)
-            if player_dist < 40:
+            if player_dist < 60:
                 self.player.take_damage(int(damage), damage_type="melee")
                 if random.random() < 0.4:
                     self.player.buff_manager.add_buff(BuffType.STUN, duration=1.0)
@@ -6531,7 +6539,7 @@ class Game:
             name = getattr(et, 'name', str(et)).upper()
             elite_types = {"ZOMBIE_TANK", "ZOMBIE_BERSERKER", "ZOMBIE_RANGED", "ZOMBIE_EXPLODER",
                            "ZOMBIE_PHANTOM", "ZOMBIE_HEALER", "ZOMBIE_SHIELD", "ZOMBIE_SPLITTER",
-                           "ZOMBIE_WRAITH", "ZOMBIE_THROWER", "ZOMBIE_WANG"}
+                           "ZOMBIE_WRAITH", "ZOMBIE_THROWER", "ZOMBIE_WANG", "BOSS_WANG"}
             if name in elite_types:
                 base = random.randint(6, 12)
             else:
@@ -6568,13 +6576,13 @@ class Game:
                 pass
         # 击败王某标记（解锁死神镰刀购买）
         _et = getattr(enemy, 'enemy_type', None)
-        if _et is not None and getattr(_et, 'name', '') == 'ZOMBIE_WANG':
+        if _et is not None and getattr(_et, 'name', '').upper() in ('ZOMBIE_WANG', 'BOSS_WANG'):
             try:
                 self.records.mark_wang_defeated()
                 self._unlock_achievement("wang_slayer")
                 # 图鉴解锁王某
                 try:
-                    _cu = codex_unlock_manager.unlock_monster("ZOMBIE_WANG")
+                    _cu = codex_unlock_manager.unlock_monster("BOSS_WANG")
                     if _cu:
                         self._codex_unlock_toast(_cu, "王某")
                 except Exception:

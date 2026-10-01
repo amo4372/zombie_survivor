@@ -293,7 +293,7 @@ MONSTER_CODEX = {
         "weakness": "行动迟缓",
         "lore": "病毒与巨人症深度结合的终极产物，他的体型堪比一座小山，每一步都能震动大地。",
     },
-    "ZOMBIE_WANG": {
+    "BOSS_WANG": {
         "name": "王某",
         "category": "Boss",
         "description": "最强的终极Boss，手持枪械与死神镰刀双形态切换，拥有碾压级的战斗力。",

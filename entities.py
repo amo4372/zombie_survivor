@@ -2155,10 +2155,10 @@ class Enemy:
         if dist < 150 or dist > 450:
             return None
         # 投掷概率
-        if random.random() > 0.3:
-            self.throw_cd = random.uniform(4.0, 8.0)
+        if random.random() > 0.5:
+            self.throw_cd = random.uniform(2.0, 3.5)
             return None
-        self.throw_cd = random.uniform(6.0, 12.0)
+        self.throw_cd = random.uniform(3.0, 6.0)
         
         # 根据怪物类型选择投掷物
         throw_type = "rock"  # 默认石块
