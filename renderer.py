@@ -344,8 +344,11 @@ class Renderer:
         list_h = wh - header_h
         visible = max(1, int(list_h // row_h))
         max_scroll = max(0, len(rows) - visible)
-        g.equip_weapon_scroll = min(g.equip_weapon_scroll, max_scroll)
-        rows_vis = rows[g.equip_weapon_scroll: g.equip_weapon_scroll + visible]
+        # 滚动值必须为整数（触控拖动会产生 float，需转 int）
+        scroll_i = max(0, int(g.equip_weapon_scroll))
+        scroll_i = min(scroll_i, max_scroll)
+        g.equip_weapon_scroll = scroll_i
+        rows_vis = rows[scroll_i: scroll_i + visible]
         for i, (wt, name, price, owned, level, locked, desc) in enumerate(rows_vis):
             ry = list_top + i * row_h
             rect = pygame.Rect(wx + 6, ry + 3, ww - 12, row_h - 8)

@@ -2697,7 +2697,7 @@ class Game:
                             n = len(self.get_weapon_shop_rows())
                             visible = max(1, int((440 - 36) / (62 * self.scale)))
                             maxs = max(0, n - visible)
-                            self.equip_weapon_scroll = max(0, min(maxs, self.equip_weapon_scroll - event.y))
+                            self.equip_weapon_scroll = max(0, min(maxs, int(self.equip_weapon_scroll) - event.y))
                         except Exception:
                             pass
                 elif event.type == pygame.FINGERDOWN:
@@ -2752,7 +2752,7 @@ class Game:
                                 n = len(self.get_weapon_shop_rows())
                                 visible = max(1, int((440 - 36) / (62 * self.scale)))
                                 maxs = max(0, n - visible)
-                                self.equip_weapon_scroll = max(0, min(maxs, new_offset))
+                                self.equip_weapon_scroll = max(0, min(maxs, int(new_offset)))
                             except Exception:
                                 pass
                 elif event.type == pygame.FINGERUP:
