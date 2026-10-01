@@ -330,7 +330,7 @@ class GameWorld:
         self._add_obs('blackboard', inner.x + inner.w//4, inner.y - 2, inner.w//2, 18)
         # 讲台
         self._add_obs('podium', inner.centerx - 40, inner.y + 30, 80, 44)
-        # 课桌成排(网格)
+        # 课桌成排(网格，隔格放置降低密度)
         desk_w, desk_h, gap = 100, 62, 46
         cols = max(1, (inner.w - 30) // (desk_w + gap))
         rows = max(1, (inner.h - 130) // (desk_h + gap + 30))
@@ -338,6 +338,8 @@ class GameWorld:
         sy = inner.y + 90
         for r_ in range(rows):
             for c_ in range(cols):
+                if (r_ + c_) % 2 != 0:  # 隔格放置，仅保留一半课桌
+                    continue
                 dx = sx + c_ * (desk_w + gap)
                 dy = sy + r_ * (desk_h + gap + 30)
                 self._add_obs('desk', dx, dy, desk_w, desk_h)
@@ -418,18 +420,18 @@ class GameWorld:
         rows = max(1, H // (bh + gap))
         for r_ in range(rows):
             for c_ in range(cols):
+                if (r_ + c_) % 2 != 0:  # 隔格放置，降低密度
+                    continue
                 bx = x0 + c_ * (bw + gap) + 15
                 by = y0 + r_ * (bh + gap) + 15
-                if random.random() < 0.85:
+                if random.random() < 0.7:
                     self._add_obs('building', bx, by, bw, bh)
-                    if random.random() < 0.4:
-                        self._add_obs('billboard', bx + 30, by - 6, 100, 16)
                 else:
                     self._add_obs('debris_pile', bx + 40, by + 40, 80, 60)
         # 街道废墟/燃烧车/检查站
-        for i in range(4):
-            self._add_obs('burning_car', x0 + 40 + i*120, y0 + 150, 80, 42)
-            self._add_obs('debris_pile', x0 + 90 + i*160, y1 - 160, 70, 50)
+        for i in range(3):
+            self._add_obs('burning_car', x0 + 40 + i*140, y0 + 150, 80, 42)
+            self._add_obs('debris_pile', x0 + 90 + i*180, y1 - 160, 70, 50)
         self._add_obs('checkpoint', x0 + W - 260, y0 + 90, 90, 40)
         self._add_obs('sandbag', x0 + W - 230, y0 + 150, 120, 30)
         self._add_obs('wrecked_tank', x0 + 60, y1 - 90, 100, 56)
@@ -445,9 +447,11 @@ class GameWorld:
         rows = max(2, H // (hh + gap_y))
         for r_ in range(rows):
             for c_ in range(cols):
+                if (r_ + c_) % 2 != 0:  # 隔格放置，降低密度
+                    continue
                 hx = x0 + c_ * (hw + gap_x) + 10
                 hy = y0 + r_ * (hh + gap_y) + 10
-                if random.random() < 0.75:
+                if random.random() < 0.6:
                     self._add_obs('house', hx, hy, hw, hh)
                     # 院子围栏
                     self._add_wall_run('fence', hx - 40, hy + hh + 10, hw + 80, 12, True, (0.2,0.8))
@@ -588,6 +592,9 @@ class GameWorld:
         for item in self.items:
             item.draw(screen, camera_x, camera_y, scale, assets)
 
+        # 预分配一个SRCALPHA阴影surface供所有障碍物复用（性能优化）
+        shadow_surf = pygame.Surface((8, 8), pygame.SRCALPHA)
+
         for obs in self.obstacles:
             rect = obs['rect']
             if rect.right < visible_left or rect.left > visible_right or                rect.bottom < visible_top or rect.top > visible_bottom:
@@ -606,12 +613,11 @@ class GameWorld:
             if obs_type == 'building':
                 pygame.draw.rect(screen, color, draw_rect)
                 pygame.draw.rect(screen, (color[0]+20, color[1]+20, color[2]+20), draw_rect, max(1, int(2*scale)))
-                for wx in range(draw_rect.x + 5, draw_rect.right - 5, 20):
-                    for wy in range(draw_rect.y + 5, draw_rect.bottom - 5, 20):
-                        if random.random() < 0.3:
-                            win_color = (80, 90, 100) if random.random() < 0.5 else (20, 20, 25)
-                            pygame.draw.rect(screen, win_color, 
-                                (wx, wy, int(8*scale), int(8*scale)))
+                # 简化：固定两个窗口，去循环
+                if draw_rect.width > 24:
+                    pygame.draw.rect(screen, (40, 45, 50),
+                                    pygame.Rect(draw_rect.x+draw_rect.width//4, draw_rect.y+4,
+                                                max(4, draw_rect.width//3), max(3, draw_rect.height//3)))
             elif obs_type == 'car':
                 pygame.draw.ellipse(screen, color, draw_rect)
                 pygame.draw.ellipse(screen, (color[0]-20, color[1]-20, color[2]-20), draw_rect, max(1, int(2*scale)))
@@ -622,17 +628,11 @@ class GameWorld:
                 pygame.draw.rect(screen, (40, 50, 60), win_rect)
             elif obs_type == 'fence':
                 pygame.draw.rect(screen, color, draw_rect)
-                for fx in range(draw_rect.x, draw_rect.right, 15):
-                    pygame.draw.line(screen, (color[0]+15, color[1]+15, color[2]+15),
-                                    (fx, draw_rect.y), (fx, draw_rect.bottom), max(1, int(scale)))
+                pygame.draw.line(screen, (color[0]+15, color[1]+15, color[2]+15),
+                                (draw_rect.centerx, draw_rect.y), (draw_rect.centerx, draw_rect.bottom), max(1, int(scale)))
             elif obs_type == 'wall':
                 pygame.draw.rect(screen, color, draw_rect)
-                brick_h = max(3, int(6 * scale))
-                for by in range(draw_rect.y, draw_rect.bottom, brick_h):
-                    offset = (by // brick_h) % 2 * 10
-                    for bx in range(draw_rect.x + offset, draw_rect.right, 20):
-                        pygame.draw.line(screen, (color[0]-10, color[1]-10, color[2]-10),
-                                        (bx, by), (bx, min(by+brick_h, draw_rect.bottom)), max(1, int(scale)))
+                pygame.draw.rect(screen, (color[0]-10, color[1]-10, color[2]-10), draw_rect, max(1, int(2*scale)))
             elif obs_type == 'barricade':
                 pygame.draw.rect(screen, color, draw_rect)
                 pygame.draw.line(screen, (color[0]+30, color[1]+30, color[2]+30),
@@ -641,22 +641,13 @@ class GameWorld:
                                 draw_rect.topright, draw_rect.bottomleft, max(2, int(3*scale)))
             elif obs_type == 'container':
                 pygame.draw.rect(screen, color, draw_rect)
-                stripe_h = max(2, int(4 * scale))
-                for sy in range(draw_rect.y, draw_rect.bottom, stripe_h * 2):
-                    pygame.draw.rect(screen, (color[0]+10, color[1]+10, color[2]+10),
-                                    (draw_rect.x, sy, draw_rect.width, stripe_h))
+                pygame.draw.rect(screen, (color[0]+10, color[1]+10, color[2]+10), draw_rect, max(1, int(scale)))
             elif obs_type == 'debris_pile':
                 center = draw_rect.center
                 radius = min(draw_rect.width, draw_rect.height) // 2
                 pygame.draw.circle(screen, color, center, radius)
-                for _ in range(5):
-                    offset_x = random.randint(-max(1, radius//2), max(1, radius//2))
-                    offset_y = random.randint(-max(1, radius//2), max(1, radius//2))
-                    upper = max(3, radius // 3)
-                    r2 = random.randint(2, upper)
-
-                    pygame.draw.circle(screen, (color[0]+15, color[1]+15, color[2]+15),
-                                     (center[0]+offset_x, center[1]+offset_y), r2)
+                pygame.draw.circle(screen, (color[0]+15, color[1]+15, color[2]+15),
+                                 (center[0]+radius//3, center[1]-radius//3), max(2, radius//3))
             elif obs_type == 'pillar':
                 pygame.draw.rect(screen, color, draw_rect, border_radius=max(2, int(4*scale)))
                 pygame.draw.rect(screen, (color[0]+20, color[1]+20, color[2]+20), draw_rect, 
@@ -677,12 +668,10 @@ class GameWorld:
                 if draw_rect.width > 15:
                     hole_rect = pygame.Rect(draw_rect.x + 4, desk_top.bottom + 2, draw_rect.width - 8, max(3, draw_rect.height // 4))
                     pygame.draw.rect(screen, (color[0]-40, color[1]-40, color[2]-40), hole_rect)
-                # 桌面上的书/文具（随机）
-                if draw_rect.width > 20 and random.random() < 0.6:
-                    book_w = random.randint(5, max(6, draw_rect.width // 3))
-                    book_x = random.randint(draw_rect.x + 3, max(draw_rect.x + 4, draw_rect.right - book_w - 3))
-                    book_color = random.choice([(180, 60, 60), (60, 80, 160), (180, 150, 50), (100, 60, 120)])
-                    pygame.draw.rect(screen, book_color, (book_x, desk_top.y + 2, book_w, max(2, desk_top.height - 4)))
+                # 桌面上的书（固定一本，去循环）
+                if draw_rect.width > 20:
+                    pygame.draw.rect(screen, (150, 90, 90),
+                                    (desk_top.x + 4, desk_top.y + 2, max(3, desk_top.width//3), max(2, desk_top.height - 4)))
             elif obs_type == 'chair':
                 # 椅子：座面+靠背
                 pygame.draw.rect(screen, color, draw_rect)
@@ -700,48 +689,28 @@ class GameWorld:
                 pygame.draw.rect(screen, (80, 50, 30), draw_rect)  # 木框
                 inner = pygame.Rect(draw_rect.x + 3, draw_rect.y + 3, max(2, draw_rect.width - 6), max(2, draw_rect.height - 6))
                 pygame.draw.rect(screen, color, inner)
-                # 粉笔字迹
-                if random.random() < 0.5 and inner.width > 20 and inner.height > 8:
-                    for _ in range(3):
-                        wx = random.randint(inner.x + 5, max(inner.x + 6, inner.right - 15))
-                        wy = random.randint(inner.y + 2, max(inner.y + 3, inner.bottom - 3))
-                        line_len = random.randint(3, max(4, min(15, inner.width // 3)))
-                        pygame.draw.line(screen, (200, 200, 200), (wx, wy), (wx + line_len, wy), max(1, int(scale)))
+                # 粉笔字迹（固定一条，去循环）
+                if inner.width > 20 and inner.height > 8:
+                    pygame.draw.line(screen, (200, 200, 200),
+                                    (inner.x + 5, inner.y + inner.height//2),
+                                    (inner.x + inner.width//2, inner.y + inner.height//2), max(1, int(scale)))
             elif obs_type == 'bookshelf':
-                # 书架：多层隔板+书籍
+                # 书架：简单隔板+几本书（去循环）
                 pygame.draw.rect(screen, color, draw_rect)
-                shelf_h = max(4, draw_rect.height // 3)
-                for i in range(1, 3):
-                    pygame.draw.line(screen, (color[0]-20, color[1]-20, color[2]-20),
-                                    (draw_rect.x, draw_rect.y + shelf_h * i),
-                                    (draw_rect.right, draw_rect.y + shelf_h * i), max(1, int(2*scale)))
-                # 书籍
-                if draw_rect.width > 15 and shelf_h > 6:
-                    book_colors = [(180, 50, 50), (50, 80, 150), (180, 150, 50), (100, 50, 120), (50, 120, 80)]
-                    for row in range(3):
-                        bx = draw_rect.x + 3
-                        while bx < draw_rect.right - 5:
-                            bw = random.randint(3, min(8, max(3, (draw_rect.width - 10) // 4)))
-                            bc = random.choice(book_colors)
-                            pygame.draw.rect(screen, bc, (bx, draw_rect.y + row * shelf_h + 2, bw, max(2, shelf_h - 4)))
-                            bx += bw + 1
+                pygame.draw.line(screen, (color[0]-20, color[1]-20, color[2]-20),
+                                (draw_rect.x, draw_rect.centery),
+                                (draw_rect.right, draw_rect.centery), max(1, int(2*scale)))
+                if draw_rect.width > 15:
+                    pygame.draw.rect(screen, (150, 80, 80),
+                                    (draw_rect.x+3, draw_rect.y+3, max(3, draw_rect.width//4), max(2, draw_rect.height//3)))
+                    pygame.draw.rect(screen, (60, 90, 150),
+                                    (draw_rect.x+draw_rect.width//4+3, draw_rect.centery+3, max(3, draw_rect.width//4), max(2, draw_rect.height//3)))
             elif obs_type == 'locker':
-                # 储物柜：多格柜门
+                # 储物柜：简单柜门（去循环）
                 pygame.draw.rect(screen, color, draw_rect)
-                cols = 2 if draw_rect.width > 35 else 1
-                rows = 3 if draw_rect.height > 45 else 2
-                cw = max(4, draw_rect.width // cols)
-                rh = max(6, draw_rect.height // rows)
-                for c in range(cols):
-                    for r in range(rows):
-                        lx = draw_rect.x + c * cw + 1
-                        ly = draw_rect.y + r * rh + 1
-                        locker_rect = pygame.Rect(lx, ly, max(2, cw - 2), max(2, rh - 2))
-                        pygame.draw.rect(screen, (color[0]+15, color[1]+15, color[2]+15), locker_rect, max(1, int(1*scale)))
-                        # 门把手
-                        if cw > 8:
-                            pygame.draw.circle(screen, (200, 200, 100), 
-                                             (locker_rect.right - 3, locker_rect.centery), max(1, int(2*scale)))
+                pygame.draw.rect(screen, (color[0]+15, color[1]+15, color[2]+15), draw_rect, max(1, int(2*scale)))
+                pygame.draw.line(screen, (color[0]+15, color[1]+15, color[2]+15),
+                                (draw_rect.centerx, draw_rect.y), (draw_rect.centerx, draw_rect.bottom), max(1, int(scale)))
             elif obs_type == 'basketball_hoop':
                 # 篮球架：立柱+篮板+篮筐
                 pygame.draw.rect(screen, (80, 80, 80), 
@@ -808,12 +777,14 @@ class GameWorld:
                 pygame.draw.rect(screen, color, draw_rect)
                 pygame.draw.rect(screen, (color[0]-15, color[1]-15, color[2]-15), draw_rect, max(1, int(2*scale)))
 
-            # 半透明投影(用SRCALPHA surface正常alpha混合, 避免pygame.draw不支持alpha导致纯黑块)
+            # 底部投影（用SRCALPHA surface正常alpha混合, 避免pygame.draw不支持alpha导致纯黑块）
+            # 复用单一surface，避免每个障碍物重复创建
             shadow_rect = pygame.Rect(draw_rect.x + 3, draw_rect.bottom - max(2, int(3*scale)),
                                       max(1, draw_rect.width), max(3, int(5*scale)))
-            sh_surf = pygame.Surface((shadow_rect.width, shadow_rect.height), pygame.SRCALPHA)
-            sh_surf.fill((0, 0, 0, 70))
-            screen.blit(sh_surf, (shadow_rect.x, shadow_rect.y))
+            shadow_surf.scroll(0, 0)
+            shadow_surf.fill((0, 0, 0, 0))
+            pygame.draw.rect(shadow_surf, (0, 0, 0, 70), shadow_surf.get_rect())
+            screen.blit(shadow_surf, (shadow_rect.x, shadow_rect.y))
 
 
 class HordeManager:
@@ -1058,27 +1029,38 @@ class HordeManager:
             EnemyType.ZOMBIE_JUGGERNAUT,
         ]
 
-        final_pool = base_pool.copy()
-        if self.total_time >= 60.0 or self.current_scale >= 2:
-            final_pool.extend(mid_pool)
-        if self.total_time >= 120.0 or self.current_scale >= 3:
-            final_pool.extend(advanced_pool)
-        # 精英怪：中型以上加入
+        # 精英怪：中型以上加入（先判精英，权重随时间提升）
         if self.current_scale >= 2:
             elite_weight = 0.15 if self.current_scale == 2 else 0.25
             if random.random() < elite_weight:
                 return random.choice(elite_pool)
 
+        # === 严格按时间/章节解锁（前期只有普通僵尸）===
+        # 时间阈值（秒）；current_scale>=2 时提前解锁一档，加速节奏
+        t = self.total_time
+        boost = (self.current_scale >= 2)
+        unlock_pool = [EnemyType.ZOMBIE_NORMAL]
+        if t >= 30.0 or boost:
+            unlock_pool.append(EnemyType.ZOMBIE_FAST)
+        if t >= 60.0 or boost:
+            unlock_pool.extend([EnemyType.ZOMBIE_TANK, EnemyType.ZOMBIE_GHOUL])
+        if t >= 90.0 or boost:
+            unlock_pool.append(EnemyType.ZOMBIE_BERSERKER)
+            unlock_pool.extend(mid_pool)
+        if t >= 150.0 or self.current_scale >= 3:
+            unlock_pool.extend(advanced_pool)
+
         if self.horde_active:
-            return random.choice(final_pool)
+            return random.choice(unlock_pool)
         else:
-            return random.choice(base_pool)
+            # 非尸潮时间：同样按时间/章节解锁（不设精英概率）
+            return random.choice(unlock_pool)
 
     def _select_boss_type(self):
         """根据规模和模式选择Boss类型，标记疫苗Boss"""
-        # 巨型尸潮：高级Boss
+        # 巨型尸潮：高级Boss（含极强双形态王某）
         if self.current_scale >= self.SCALE_MASSIVE:
-            bosses = [EnemyType.BOSS_MUTANT, EnemyType.BOSS_QUEEN, EnemyType.BOSS_TITAN]
+            bosses = [EnemyType.BOSS_MUTANT, EnemyType.BOSS_QUEEN, EnemyType.BOSS_TITAN, EnemyType.BOSS_WANG]
             boss_type = random.choice(bosses)
         elif self.current_scale >= self.SCALE_LARGE:
             bosses = [EnemyType.BOSS_LONG, EnemyType.BOSS_XIANG, EnemyType.BOSS_MUTANT]

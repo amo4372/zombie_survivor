@@ -105,6 +105,9 @@ class Renderer:
             self._draw_update()
         elif state == GameState.UPDATE_NOTES:
             self._draw_update_notes()
+        elif state == GameState.RUNE_VIEW:
+            self._draw_playing()
+            self._draw_rune_view()
 
         pygame.display.flip()
 
@@ -1587,6 +1590,11 @@ class Renderer:
         # 绘制敌人
         for enemy in self.game.enemies:
             enemy.draw(self.screen, cam_x, cam_y, self.game.font, scale, self.game.assets)
+            # 技能前摇预警：释放带前摇的技能时显示警示（红色闪烁圈+危险标记）
+            if (getattr(enemy, 'boss_is_executing', False)
+                    or getattr(enemy, 'skill_windup', 0) > 0
+                    or getattr(enemy, 'skill_telegraph', 0) > 0):
+                self._draw_skill_warning(enemy, cam_x, cam_y, scale)
 
         # 绘制玩家
         player.draw(self.screen, cam_x, cam_y, self.game.font, scale)
@@ -2115,6 +2123,11 @@ class Renderer:
                 self.game.logger.info(f"暂停按钮 '{btn.text}' 被点击")
                 if btn.text == "继续":
                     self.game.state = GameState.PLAYING
+                elif btn.text == "符文":
+                    self.game.prev_state = GameState.PAUSED
+                    self.game.rune_view_scroll = 0
+                    self.game.rune_selected = None
+                    self.game.state = GameState.RUNE_VIEW
                 elif btn.text == "技能树":
                     self.game.prev_state = GameState.PAUSED
                     self.game.state = GameState.SKILL_TREE
@@ -2127,6 +2140,183 @@ class Renderer:
                 elif btn.text == "返回菜单":
                     self.game.state = GameState.MENU
             btn.draw(self.screen, self.game.font_large, self.game.scale)
+
+    def _draw_rune_view(self):
+        """符文查看界面：显示玩家拥有的符文，点击符文查看详情"""
+        g = self.game
+        scale = g.scale
+        sw, sh = g.scaled_width, g.scaled_height
+        overlay = pygame.Surface((sw, sh), pygame.SRCALPHA)
+        overlay.fill((*VOID_BLACK[:3], 215))
+        self.screen.blit(overlay, (0, 0))
+
+        title = g.font_title.render("我的符文", True, GOLD)
+        self.screen.blit(title, title.get_rect(center=(sw // 2, int(60 * scale))))
+
+        # 返回按钮
+        back_btn = pygame.Rect(int(30 * scale), int(25 * scale), int(120 * scale), int(40 * scale))
+        mouse_pos = pygame.mouse.get_pos()
+        mouse_pressed = pygame.mouse.get_pressed()
+        if back_btn.collidepoint(mouse_pos) and mouse_pressed[0]:
+            if getattr(g, '_rune_back_cooldown', 0) <= 0:
+                g._rune_back_cooldown = 0.3
+                g.state = GameState.PAUSED
+                g.rune_selected = None
+        pygame.draw.rect(self.screen, RED, back_btn, border_radius=6)
+        bt = g.font.render("返回", True, WHITE)
+        self.screen.blit(bt, bt.get_rect(center=back_btn.center))
+
+        if not hasattr(g, 'rune_manager') or not g.rune_manager or not g.rune_manager.runes:
+            empty = g.font.render("尚未获得任何符文", True, GRAY)
+            self.screen.blit(empty, empty.get_rect(center=(sw // 2, sh // 2)))
+            return
+
+        # 符文网格（可滚动）
+        from runes import RUNE_CONFIG, RARITY_NAMES, RARITY_COLORS
+        from config import RuneType
+        items = list(g.rune_manager.runes.items())
+        cell_w, cell_h = int(150 * scale), int(120 * scale)
+        gap = int(16 * scale)
+        cols = max(1, (sw - int(80 * scale)) // (cell_w + gap))
+        rows_per_screen = max(1, (sh - int(160 * scale)) // (cell_h + gap))
+        grid_top = int(110 * scale)
+        # 滚动
+        if hasattr(g, 'rune_view_scroll'):
+            # 滚轮滚动
+            scroll_total = max(0, (len(items) + cols - 1) // cols - rows_per_screen)
+            g.rune_view_scroll = max(0, min(scroll_total, g.rune_view_scroll))
+        clicked_idx = None
+        for idx, (rt, stacks) in enumerate(items):
+            row, col = divmod(idx, cols)
+            if row < g.rune_view_scroll:
+                continue
+            if row >= g.rune_view_scroll + rows_per_screen:
+                break
+            rx = int(50 * scale) + col * (cell_w + gap)
+            ry = grid_top + (row - g.rune_view_scroll) * (cell_h + gap)
+            cfg = RUNE_CONFIG[rt]
+            rect = pygame.Rect(rx, ry, cell_w, cell_h)
+            # 选中高亮
+            if g.rune_selected == rt:
+                pygame.draw.rect(self.screen, GOLD, rect.inflate(6, 6), border_radius=8)
+            pygame.draw.rect(self.screen, (40, 40, 45), rect, border_radius=8)
+            pygame.draw.rect(self.screen, cfg["color"], rect, 2, border_radius=8)
+            name = g.font.render(cfg["name"], True, cfg["color"])
+            self.screen.blit(name, name.get_rect(center=(rect.centerx, ry + int(22 * scale))))
+            lv = g.font_small.render(f"等级 {stacks}", True, WHITE)
+            self.screen.blit(lv, lv.get_rect(center=(rect.centerx, ry + int(48 * scale))))
+            rar = g.font_small.render(RARITY_NAMES.get(cfg["rarity"], "普通"), True, RARITY_COLORS.get(cfg["rarity"], GRAY))
+            self.screen.blit(rar, rar.get_rect(center=(rect.centerx, ry + int(70 * scale))))
+            if rect.collidepoint(mouse_pos) and mouse_pressed[0] and getattr(g, '_rune_click_cooldown', 0) <= 0:
+                clicked_idx = idx
+
+        # 点击符文 → 选中（查看详情）
+        if clicked_idx is not None:
+            g.rune_selected = items[clicked_idx][0]
+
+        # 详情面板（右侧或下方）
+        if g.rune_selected is not None and g.rune_selected in g.rune_manager.runes:
+            rt = g.rune_selected
+            cfg = RUNE_CONFIG[rt]
+            stacks = g.rune_manager.runes[rt]
+            # 关闭按钮
+            close_rect = pygame.Rect(int(sw - 50 * scale), int(160 * scale), int(36 * scale), int(36 * scale))
+            if close_rect.collidepoint(mouse_pos) and mouse_pressed[0] and getattr(g, '_rune_close_cooldown', 0) <= 0:
+                g.rune_selected = None
+            detail_w = int(420 * scale)
+            detail_h = int(300 * scale)
+            detail_rect = pygame.Rect((sw - detail_w) // 2, (sh - detail_h) // 2 + int(20 * scale), detail_w, detail_h)
+            panel = pygame.Surface((detail_w, detail_h), pygame.SRCALPHA)
+            panel.fill((25, 25, 30, 245))
+            self.screen.blit(panel, detail_rect.topleft)
+            pygame.draw.rect(self.screen, cfg["color"], detail_rect, 3, border_radius=10)
+            # 标题
+            dtitle = g.font_large.render(cfg["name"], True, cfg["color"])
+            self.screen.blit(dtitle, dtitle.get_rect(center=(detail_rect.centerx, detail_rect.y + int(35 * scale))))
+            # 稀有度+等级
+            dinfo = g.font.render(f"稀有度: {RARITY_NAMES.get(cfg['rarity'], '普通')}    等级: {stacks}", True, RARITY_COLORS.get(cfg["rarity"], GRAY))
+            self.screen.blit(dinfo, dinfo.get_rect(center=(detail_rect.centerx, detail_rect.y + int(70 * scale))))
+            # 描述（自动换行）
+            desc = cfg["description"]
+            words = desc
+            max_w = detail_w - int(40 * scale)
+            lines = []
+            cur = ""
+            for ch in words:
+                test = cur + ch
+                if g.font_small.size(test)[0] <= max_w:
+                    cur = test
+                else:
+                    lines.append(cur)
+                    cur = ch
+            if cur:
+                lines.append(cur)
+            y = detail_rect.y + int(105 * scale)
+            for line in lines:
+                lt = g.font_small.render(line, True, WHITE)
+                self.screen.blit(lt, (detail_rect.x + int(20 * scale), y))
+                y += int(24 * scale)
+            # 效果（等级相关）
+            effect = self._rune_level_effect_text(rt, stacks)
+            if effect:
+                ef = g.font_small.render(effect, True, LIME)
+                self.screen.blit(ef, (detail_rect.x + int(20 * scale), y + int(6 * scale)))
+
+        pygame.display.flip()
+
+    def _rune_level_effect_text(self, rt, stacks):
+        """返回符文当前等级对应的效果描述文本"""
+        from runes import RUNE_CONFIG
+        from config import RuneType
+        cfg = RUNE_CONFIG[rt]
+        if rt == RuneType.POWER:
+            return f"所有伤害 +{int(15 * stacks)}%"
+        if rt == RuneType.VITALITY:
+            return f"最大生命值 +{30 * stacks}"
+        if rt == RuneType.SWIFTNESS:
+            return f"移动速度 +{int(10 * stacks)}%"
+        if rt == RuneType.CRITICAL:
+            return f"暴击率 +{int(10 * stacks)}%"
+        if rt == RuneType.VAMPIRE:
+            return f"攻击回复 {int(5 * stacks)}% 生命"
+        if rt == RuneType.GUARDIAN:
+            return f"护甲 +{10 * stacks}"
+        if rt == RuneType.FRENZY:
+            return f"攻击速度 +{int(15 * stacks)}%"
+        if rt == RuneType.REGEN:
+            return f"每秒回复 {2 * stacks} 生命"
+        if rt == RuneType.SHADOW:
+            return f"暴击伤害 +{int(50 * stacks)}%"
+        if rt == RuneType.LUCK:
+            return f"掉落率 +{int(20 * stacks)}%"
+        if rt == RuneType.TITAN:
+            return f"体型 +{int(15 * stacks)}%  近战范围+20%  伤害+10%"
+        if rt == RuneType.FLAME:
+            return f"攻击灼烧敌人"
+        if rt == RuneType.FROST:
+            return f"攻击减速敌人"
+        if rt == RuneType.POISON:
+            return f"攻击使敌人中毒"
+        if rt == RuneType.THUNDER:
+            return f"攻击触发连锁闪电"
+        return ""
+
+    def _draw_skill_warning(self, enemy, cam_x, cam_y, scale):
+        """技能前摇警示：红色闪烁圈 + 头顶危险标记，便于玩家躲避"""
+        import time as _t
+        px = int((enemy.x - cam_x) * scale)
+        py = int((enemy.y - cam_y) * scale)
+        pulse = (math.sin(_t.time() * 8) + 1) / 2  # 0-1 闪烁
+        r = int((enemy.size + 14) * scale)
+        ring_w = max(2, int(3 * scale))
+        ring = pygame.Surface((r * 2 + 8, r * 2 + 8), pygame.SRCALPHA)
+        pygame.draw.circle(ring, (255, 40, 40, int(220 - 120 * pulse)), (r + 4, r + 4), r, ring_w)
+        self.screen.blit(ring, (px - r - 4, py - r - 4))
+        # 顶部警告文字
+        warn = self.game.font_large.render("!", True, (255, 60, 60))
+        self.screen.blit(warn, (px - warn.get_width() // 2, py - r - int(30 * scale)))
+        label = self.game.font_small.render("危险!", True, (255, 80, 80))
+        self.screen.blit(label, (px - label.get_width() // 2, py - r - int(50 * scale)))
 
     def _draw_game_over(self):
         overlay = pygame.Surface((self.game.scaled_width, self.game.scaled_height), pygame.SRCALPHA)

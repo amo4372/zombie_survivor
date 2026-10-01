@@ -179,6 +179,7 @@ class GameState(Enum):
     MOD_MANAGER = auto()  # 新增：Mod管理页面
     UPDATE = auto()  # 新增：自动更新页面
     UPDATE_NOTES = auto()  # 新增：更新说明/版本详情页面
+    RUNE_VIEW = auto()  # 新增：符文查看界面（玩家拥有符文+详情）
 
 
 class ControlMode(Enum):
@@ -214,6 +215,7 @@ class EnemyType(Enum):
     BOSS_MUTANT = auto()      # 变异体Boss - 高伤害连招
     BOSS_QUEEN = auto()       # 尸潮女王 - 召唤+控制
     BOSS_TITAN = auto()       # 泰坦 - 巨型坦克Boss
+    BOSS_WANG = auto()        # 王某 - 枪械+死神镰刀双形态，极强
     # === 精英怪 ===
     ELITE_BRUTE = auto()      # 精英蛮兵 - 高血量重击
     ELITE_ASSASSIN = auto()   # 精英刺客 - 高速高爆

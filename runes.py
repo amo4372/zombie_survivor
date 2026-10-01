@@ -151,8 +151,11 @@ class RuneManager:
         for rune_type, stacks in self.runes.items():
             config = RUNE_CONFIG[rune_type]
             # 根据符文类型计算属性加成
-            if stat_name == "damage_mult" and rune_type == RuneType.POWER:
-                total += 0.15 * stacks
+            if stat_name == "damage_mult":
+                if rune_type == RuneType.POWER:
+                    total += 0.15 * stacks
+                elif rune_type == RuneType.TITAN:
+                    total += 0.10 * stacks
             elif stat_name == "max_hp" and rune_type == RuneType.VITALITY:
                 total += 30 * stacks
             elif stat_name == "speed_mult" and rune_type == RuneType.SWIFTNESS:

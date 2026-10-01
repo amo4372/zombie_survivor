@@ -468,11 +468,15 @@ class Game:
         ]
         self.pause_buttons = [
             Button(cx, 200, 200, 50, "继续", color=GREEN),
-            Button(cx, 270, 200, 50, "技能树", color=GOLD),
-            Button(cx, 340, 200, 50, "设置", color=BLUE),
-            Button(cx, 410, 200, 50, "返回菜单", color=RED),
+            Button(cx, 270, 200, 50, "符文", color=GOLD),
+            Button(cx, 340, 200, 50, "技能树", color=BLUE),
+            Button(cx, 410, 200, 50, "设置", color=GRAY),
+            Button(cx, 480, 200, 50, "返回菜单", color=RED),
         ]
         self.settings_from_pause = False  # 标记设置是否从暂停菜单进入
+        # 符文查看界面状态
+        self.rune_view_scroll = 0
+        self.rune_selected = None  # 选中的符文类型(RuneType)，用于查看详情
         # 更新界面相关
         self.update_status_text = ""
         self.update_progress = 0.0
@@ -1799,19 +1803,21 @@ class Game:
                 self.turrets.remove(turret)
 
     def _skill_airstrike(self):
-        """空袭技能 - 根据等级累加效果
-        Lv1: 单点轰炸
-        Lv2: 飞机掠过，沿线连投5弹
-        Lv3: 飞机连投 + 燃烧区域
-        Lv4: 双机双向持续轰炸 + 燃烧
-        Lv5: 超级核爆：中心巨型爆炸 + 双机轰炸 + 燃烧 + EMP眩晕
+        """空袭技能 - 重写为长方形区域横扫轰炸（效果强）
+        Lv1: 小矩形区域密集轰炸
+        Lv2+: 大矩形区域横扫轰炸
+        Lv3+: +燃烧区域
+        Lv4+: 双机双向横扫
+        Lv5: 超级核爆中心 + 双机横扫 + 燃烧 + EMP
         """
         if self.config.control_mode == ControlMode.KEYBOARD:
             mouse_pos = pygame.mouse.get_pos()
             target_x = mouse_pos[0] / self.scale + self.camera.x
             target_y = mouse_pos[1] / self.scale + self.camera.y
+            direction = math.degrees(math.atan2(target_y - self.player.y, target_x - self.player.x))
         else:
-            angle_rad = math.radians(self.player.facing_angle)
+            direction = self.player.facing_angle
+            angle_rad = math.radians(direction)
             target_x = self.player.x + math.cos(angle_rad) * 500
             target_y = self.player.y + math.sin(angle_rad) * 500
 
@@ -1830,53 +1836,51 @@ class Game:
             effects.append("emp")
             effects.append("nuke")
 
-        if skill_level == 1:
-            # Lv1: 单点轰炸
-            self.floating_texts.append(FloatingText(
-                target_x, target_y - 50, "空袭来袭!", color=RED, lifetime=2.0
-            ))
-            self.airstrikes.append({"x": target_x, "y": target_y, "timer": 2.0, "warned": False, "effects": effects})
-        elif skill_level >= 2:
-            # Lv2+: 飞机掠过连投
-            label = "超级核爆!" if skill_level >= 5 else ("燃烧空袭!" if skill_level >= 3 else "空袭来袭!")
-            label_color = (255, 200, 0) if skill_level >= 5 else (FIRE_ORANGE if skill_level >= 3 else RED)
-            self.floating_texts.append(FloatingText(
-                target_x, target_y - 50, label, color=label_color, lifetime=2.5
-            ))
-            # 第一架飞机（随机角度）
-            self._create_plane_run(target_x, target_y, effects, bomb_count=5 if skill_level < 5 else 7)
-            # Lv4+: 第二架飞机（垂直角度，持续轰炸）
-            if skill_level >= 4:
-                self._create_plane_run(target_x, target_y, effects, bomb_count=5 if skill_level < 5 else 7, angle_offset=90)
-            # Lv5: 中心超级核爆（延迟1.5秒后引爆）
-            if skill_level >= 5:
-                self.airstrikes.append({
-                    "x": target_x, "y": target_y, "timer": 1.5, "warned": False,
-                    "effects": ["nuke", "fire", "emp"], "is_nuke": True
-                })
+        # 长方形区域参数：随等级扩大
+        length = 360 + skill_level * 70
+        width = 180 + skill_level * 50
+        label = "超级核爆!" if skill_level >= 5 else ("燃烧空袭!" if skill_level >= 3 else "空袭来袭!")
+        label_color = (255, 200, 0) if skill_level >= 5 else (FIRE_ORANGE if skill_level >= 3 else RED)
+        self.floating_texts.append(FloatingText(
+            target_x, target_y - 50, label, color=label_color, lifetime=2.5
+        ))
+        # 主飞机沿direction横扫矩形区域
+        self._create_plane_run(target_x, target_y, effects, direction=direction, length=length, width=width)
+        # Lv4+: 第二架垂直方向横扫
+        if skill_level >= 4:
+            self._create_plane_run(target_x, target_y, effects, direction=direction + 90, length=length * 0.7, width=width * 0.8)
+        # Lv5: 中心超级核爆（延迟1.5秒后引爆）
+        if skill_level >= 5:
+            self.airstrikes.append({
+                "x": target_x, "y": target_y, "timer": 1.5, "warned": False,
+                "effects": ["nuke", "fire", "emp"], "is_nuke": True
+            })
         return True
 
-    def _create_plane_run(self, target_x, target_y, effects, bomb_count=5, angle_offset=0):
-        """创建一个飞机连投空袭"""
-        import random as _rnd
-        # 飞机飞行角度（随机，可加偏移）
-        base_angle = _rnd.uniform(0, 360) + angle_offset
-        rad = math.radians(base_angle)
-        # 飞机从远处飞来
-        fly_dist = 800
+    def _create_plane_run(self, target_x, target_y, effects, direction=0, length=400, width=220, angle_offset=0):
+        """长方形区域横扫轰炸：飞机沿direction方向飞过，炸弹网格密铺整个长方形区域"""
+        rad = math.radians(direction + angle_offset)
+        perp = rad + math.pi / 2
+        # 飞机从远处沿direction飞来
+        fly_dist = 900
         plane_x = target_x - math.cos(rad) * fly_dist
         plane_y = target_y - math.sin(rad) * fly_dist
-        plane_speed = 600
+        plane_speed = 620
         plane_vx = math.cos(rad) * plane_speed
         plane_vy = math.sin(rad) * plane_speed
-        # 沿飞行方向排列炸弹
+        # 长方形区域网格炸弹（沿length列 × 垂直width行）
+        cols = max(3, int(length / 70))
+        rows = max(2, int(width / 70))
         bombs = []
-        line_length = 300
-        for i in range(bomb_count):
-            t = (i / max(1, bomb_count - 1)) - 0.5  # -0.5 到 0.5
-            bx = target_x + math.cos(rad) * t * line_length
-            by = target_y + math.sin(rad) * t * line_length
-            bombs.append({"x": bx, "y": by, "exploded": False})
+        for i in range(cols):
+            t = (i / max(1, cols - 1)) - 0.5
+            lx = target_x + math.cos(rad) * t * length
+            ly = target_y + math.sin(rad) * t * length
+            for j in range(rows):
+                wt = (j / max(1, rows - 1)) - 0.5
+                bx = lx + math.cos(perp) * wt * width
+                by = ly + math.sin(perp) * wt * width
+                bombs.append({"x": bx, "y": by, "exploded": False})
         self.airstrikes.append({
             "type": "plane_run",
             "phase": "incoming",
@@ -2848,6 +2852,10 @@ class Game:
         elif self.state == GameState.PAUSED:
             if key == pygame.K_ESCAPE:
                 self.state = GameState.PLAYING
+        elif self.state == GameState.RUNE_VIEW:
+            if key == pygame.K_ESCAPE:
+                self.state = GameState.PAUSED
+                self.rune_selected = None
         elif self.state == GameState.SETTINGS:
             if key == pygame.K_ESCAPE:
                 self.config.save()
@@ -3648,6 +3656,53 @@ class Game:
         self.player.lifesteal = self.player._rune_base_lifesteal + rm.get_bonus("lifesteal")
         self.player.armor = self.player._rune_base_armor + rm.get_bonus("armor")
         self.player.fire_rate_mult = self.player._rune_base_fire_rate + rm.get_bonus("fire_rate_mult")
+        # 泰坦符文：体型增大15%（渲染用，碰撞仍用原size）
+        titan_stacks = rm.get_stacks(RuneType.TITAN)
+        base_size = getattr(self.player, '_rune_base_size', self.player.size)
+        if not hasattr(self.player, '_rune_base_size'):
+            self.player._rune_base_size = self.player.size
+        self.player.render_size = int(base_size * (1.0 + 0.15 * titan_stacks))
+
+    def _apply_rune_elemental_on_hit(self, enemy, base_damage=1.0):
+        """玩家攻击命中敌人时应用元素符文效果（火焰/冰霜/毒素/雷电）"""
+        if not hasattr(self, 'rune_manager') or enemy is None or not getattr(enemy, 'alive', False):
+            return
+        try:
+            rm = self.rune_manager
+            if rm.has_elemental("fire"):
+                enemy.apply_buff(BuffType.BURN, duration=3.0)
+            if rm.has_elemental("frost"):
+                enemy.apply_buff(BuffType.SLOW, duration=2.0)
+            if rm.has_elemental("poison"):
+                enemy.apply_buff(BuffType.POISON, duration=5.0)
+            if rm.has_elemental("thunder"):
+                self._rune_thunder_chain(enemy, base_damage)
+        except Exception:
+            pass
+
+    def _rune_thunder_chain(self, enemy, base_damage):
+        """雷电符文：攻击命中时触发连锁闪电，跳跃到附近敌人（最多3次）"""
+        try:
+            stacks = self.rune_manager.get_stacks(RuneType.THUNDER)
+            hit = [enemy]
+            src = enemy
+            dmg = max(1.0, base_damage * (0.5 + 0.25 * stacks))
+            jumps = min(3, 1 + stacks)
+            for _ in range(jumps):
+                candidates = [e for e in self.enemies
+                              if e not in hit and getattr(e, 'alive', False)
+                              and math.hypot(e.x - src.x, e.y - src.y) < 220]
+                if not candidates:
+                    break
+                tgt = min(candidates, key=lambda e: math.hypot(e.x - src.x, e.y - src.y))
+                tgt.take_damage(dmg)
+                self.damage_numbers.append(DamageNumber(tgt.x, tgt.y, dmg, is_crit=False, damage_type="thunder"))
+                self.particles.spawn(tgt.x, tgt.y, YELLOW, 8, (2, 5), (-3, 3), (0.2, 0.4))
+                hit.append(tgt)
+                src = tgt
+                dmg *= 0.7
+        except Exception:
+            pass
 
     def _cycle_throwable(self):
         """切换到下一种有库存的投掷物"""
@@ -4102,6 +4157,7 @@ class Game:
             "target_x": throw_data["target_x"], "target_y": throw_data["target_y"],
             "damage": throw_data["damage"],
             "height": 0,  # 抛物线高度
+            "owner": throw_data.get("owner", "boss"),
         })
         self.assets.play_sound("grenade_throw")
 
@@ -4139,11 +4195,16 @@ class Game:
                 self.enemy_throwables.remove(g)
 
     def _detonate_enemy_throwable(self, g):
-        """怪物投掷物爆炸效果"""
+        """怪物投掷物爆炸效果
+        owner=="boss"：正常对玩家造成伤害（boss投掷技能）
+        owner=="enemy_minion"：投掷物伤害算玩家阵营——不伤玩家，反而只伤附近僵尸
+        """
         x, y = g["x"], g["y"]
         gtype = g["type"]
         damage = g["damage"]
-        
+        owner = g.get("owner", "boss")
+        friendly = (owner != "boss")  # 归属玩家阵营的投掷物
+
         if gtype == "fire":
             # 燃烧瓶：小范围燃烧区域
             self.assets.play_sound("fire_explosion")
@@ -4154,44 +4215,88 @@ class Game:
             self.fire_zones.append({
                 "x": x, "y": y, "radius": 80,
                 "timer": 5.0, "damage_timer": 0.0,
-                "from_enemy": True,
+                "from_enemy": friendly,  # friendly时玩家不被烧，只烧僵尸
             })
             # 直接伤害
-            player_dist = math.hypot(x - self.player.x, y - self.player.y)
-            if player_dist < 80:
-                self.player.take_damage(int(damage * 0.5), damage_type="fire")
-                self.player.buff_manager.add_buff(BuffType.BURN, duration=3.0)
-                
+            if friendly:
+                # 归属玩家：对附近僵尸造成伤害+燃烧
+                for e in self.enemies:
+                    if not getattr(e, 'alive', False):
+                        continue
+                    ed = math.hypot(e.x - x, e.y - y)
+                    if ed < 80:
+                        e.take_damage(int(damage * 0.5))
+                        e.apply_buff(BuffType.BURN, duration=3.0)
+                        self.damage_numbers.append(DamageNumber(e.x, e.y, int(damage * 0.5), damage_type="fire"))
+            else:
+                player_dist = math.hypot(x - self.player.x, y - self.player.y)
+                if player_dist < 80:
+                    self.player.take_damage(int(damage * 0.5), damage_type="fire")
+                    self.player.buff_manager.add_buff(BuffType.BURN, duration=3.0)
+
         elif gtype == "acid":
             # 酸液瓶：腐蚀+持续伤害
             self.assets.play_sound("poison_splash")
             self.particles.spawn_explosion(x, y, POISON_GREEN, 50)
-            player_dist = math.hypot(x - self.player.x, y - self.player.y)
-            if player_dist < 70:
-                self.player.take_damage(int(damage), damage_type="melee")
-                self.player.buff_manager.add_buff(BuffType.CORROSION, duration=5.0)
-                self.player.buff_manager.add_buff(BuffType.POISON, duration=4.0)
-                
+            if friendly:
+                for e in self.enemies:
+                    if not getattr(e, 'alive', False):
+                        continue
+                    ed = math.hypot(e.x - x, e.y - y)
+                    if ed < 70:
+                        e.take_damage(int(damage))
+                        e.apply_buff(BuffType.CORROSION, duration=5.0)
+                        e.apply_buff(BuffType.POISON, duration=4.0)
+                        self.damage_numbers.append(DamageNumber(e.x, e.y, int(damage), damage_type="acid"))
+            else:
+                player_dist = math.hypot(x - self.player.x, y - self.player.y)
+                if player_dist < 70:
+                    self.player.take_damage(int(damage), damage_type="melee")
+                    self.player.buff_manager.add_buff(BuffType.CORROSION, duration=5.0)
+                    self.player.buff_manager.add_buff(BuffType.POISON, duration=4.0)
+
         elif gtype == "curse":
             # 诅咒瓶：多种debuff
             self.assets.play_sound("curse_cast")
             self.particles.spawn_explosion(x, y, PURPLE, 40)
-            player_dist = math.hypot(x - self.player.x, y - self.player.y)
-            if player_dist < 70:
-                self.player.take_damage(int(damage * 0.7), damage_type="magic")
-                self.player.buff_manager.add_buff(BuffType.CURSE, duration=6.0)
-                self.player.buff_manager.add_buff(BuffType.WEAKEN, duration=5.0)
-                
+            if friendly:
+                for e in self.enemies:
+                    if not getattr(e, 'alive', False):
+                        continue
+                    ed = math.hypot(e.x - x, e.y - y)
+                    if ed < 70:
+                        e.take_damage(int(damage * 0.7))
+                        e.apply_buff(BuffType.CURSE, duration=6.0)
+                        e.apply_buff(BuffType.WEAKEN, duration=5.0)
+                        self.damage_numbers.append(DamageNumber(e.x, e.y, int(damage * 0.7), damage_type="magic"))
+            else:
+                player_dist = math.hypot(x - self.player.x, y - self.player.y)
+                if player_dist < 70:
+                    self.player.take_damage(int(damage * 0.7), damage_type="magic")
+                    self.player.buff_manager.add_buff(BuffType.CURSE, duration=6.0)
+                    self.player.buff_manager.add_buff(BuffType.WEAKEN, duration=5.0)
+
         else:  # rock
             # 石块：物理伤害+眩晕
             self.assets.play_sound("rock_impact")
             self.camera.shake(10, 0.6)
             self.particles.spawn_explosion(x, y, GRAY, 30)
-            player_dist = math.hypot(x - self.player.x, y - self.player.y)
-            if player_dist < 40:
-                self.player.take_damage(int(damage), damage_type="melee")
-                if random.random() < 0.4:
-                    self.player.buff_manager.add_buff(BuffType.STUN, duration=1.0)
+            if friendly:
+                for e in self.enemies:
+                    if not getattr(e, 'alive', False):
+                        continue
+                    ed = math.hypot(e.x - x, e.y - y)
+                    if ed < 40:
+                        e.take_damage(int(damage))
+                        if random.random() < 0.4:
+                            e.apply_buff(BuffType.STUN, duration=1.0)
+                        self.damage_numbers.append(DamageNumber(e.x, e.y, int(damage), damage_type="rock"))
+            else:
+                player_dist = math.hypot(x - self.player.x, y - self.player.y)
+                if player_dist < 40:
+                    self.player.take_damage(int(damage), damage_type="melee")
+                    if random.random() < 0.4:
+                        self.player.buff_manager.add_buff(BuffType.STUN, duration=1.0)
 
     def _spawn_horde_rewards(self):
         """尸潮过后根据规模刷新奖励"""
@@ -4277,10 +4382,11 @@ class Game:
                     if dist < zone["radius"]:
                         enemy.take_damage(15)
                         enemy.apply_buff(BuffType.BURN, duration=3.0)
-                # 玩家也会被烧
-                pdist = math.hypot(self.player.x - zone["x"], self.player.y - zone["y"])
-                if pdist < zone["radius"]:
-                    self.player.take_damage(5, damage_type="fire")
+                # 玩家也会被烧（from_enemy的敌方投掷物火区归属玩家阵营，不烧玩家）
+                if not zone.get("from_enemy"):
+                    pdist = math.hypot(self.player.x - zone["x"], self.player.y - zone["y"])
+                    if pdist < zone["radius"]:
+                        self.player.take_damage(5, damage_type="fire")
             if zone["timer"] <= 0:
                 self.fire_zones.remove(zone)
 
@@ -5261,6 +5367,58 @@ class Game:
                     self.enemy_projectiles.append(proj)
                 self.camera.shake(4, 0.2)
 
+            # ===== 王某技能（枪械+死神镰刀双形态）=====
+            elif result == "wang_gunfire":
+                # 枪械形态：3连发子弹朝玩家
+                for _ in range(3):
+                    base_ang = math.atan2(self.player.y - enemy.y, self.player.x - enemy.x)
+                    ang = base_ang + random.uniform(-0.12, 0.12)
+                    proj = Projectile(
+                        enemy.x, enemy.y,
+                        math.cos(ang) * 7, math.sin(ang) * 7,
+                        int(enemy.damage * 0.6), 420, FIRE_ORANGE, 4
+                    )
+                    self.enemy_projectiles.append(proj)
+                self.assets.play_sound("shoot_pistol")
+                self.particles.spawn(enemy.x, enemy.y, FIRE_ORANGE, 6, (3, 6), (-2, 2), (0.2, 0.5))
+
+            elif result == "wang_grenade":
+                # 枪榴弹：范围爆炸对玩家造成伤害+击退
+                self.camera.shake(12, 0.6)
+                self.assets.play_sound("explosion")
+                self.particles.spawn_explosion(enemy.x, enemy.y, FIRE_ORANGE, 60)
+                gdist = math.hypot(self.player.x - enemy.x, self.player.y - enemy.y)
+                if gdist < 170:
+                    self.player.take_damage(int(enemy.damage * 1.6), damage_type="explosion", attack_x=enemy.x, attack_y=enemy.y)
+                    if gdist > 0:
+                        self.player.x += (self.player.x - enemy.x) / gdist * 30
+                        self.player.y += (self.player.y - enemy.y) / gdist * 30
+
+            elif result == "wang_scythe_sweep":
+                # 死神镰刀：大范围横扫，玩家受伤+强击退
+                self.camera.shake(15, 0.7)
+                self.assets.play_sound("melee_swing")
+                self.particles.spawn_explosion(enemy.x, enemy.y, CRIMSON, 70)
+                sdist = math.hypot(self.player.x - enemy.x, self.player.y - enemy.y)
+                if sdist < 230:
+                    self.player.take_damage(int(enemy.damage * 1.8), damage_type="melee", attack_x=enemy.x, attack_y=enemy.y)
+                    if sdist > 0:
+                        self.player.x += (self.player.x - enemy.x) / sdist * 45
+                        self.player.y += (self.player.y - enemy.y) / sdist * 45
+
+            elif result == "wang_execution_scythe":
+                # 王某处决斩击：超高伤害AOE
+                self.camera.shake(20, 1.0)
+                self.assets.play_sound("melee_swing")
+                self.particles.spawn_explosion(enemy.x, enemy.y, CRIMSON, 90)
+                self.particles.spawn_explosion(enemy.x, enemy.y, BLOOD_RED, 60)
+                edist = math.hypot(self.player.x - enemy.x, self.player.y - enemy.y)
+                if edist < 220:
+                    self.player.take_damage(int(enemy.damage * 3.2), damage_type="aoe", attack_x=enemy.x, attack_y=enemy.y)
+                    if edist > 0:
+                        self.player.x += (self.player.x - enemy.x) / edist * 60
+                        self.player.y += (self.player.y - enemy.y) / edist * 60
+
             elif result == "boss_smoke":
                 # 向某烟雾弹：在玩家位置生成减速烟雾区域
                 if not hasattr(self, 'smoke_zones'):
@@ -5616,6 +5774,7 @@ class Game:
                         is_crit = random.random() < self.player.crit_chance
                         actual_damage = proj.damage * (self.player.crit_damage if is_crit else 1)
                         enemy.take_damage(actual_damage)
+                        self._apply_rune_elemental_on_hit(enemy, actual_damage)
                         self.damage_numbers.append(DamageNumber(enemy.x, enemy.y, actual_damage, is_crit=is_crit, damage_type="ranged"))
                         self.particles.spawn(enemy.x, enemy.y, PURPLE, 5, (2, 5), (-3, 3), (0.2, 0.5))
                         if not enemy.alive:
@@ -5629,6 +5788,9 @@ class Game:
                 if proj_rect.colliderect(enemy.get_rect()):
                     proj.hits.append(enemy)
                     proj.pierce -= 1
+
+                    # 应用元素符文效果（火焰/冰霜/毒素/雷电）
+                    self._apply_rune_elemental_on_hit(enemy, proj.damage)
 
                     # 爆炸弹击中敌人时触发爆炸 - 超增强效果
                     if proj.explosive:

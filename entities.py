@@ -1049,7 +1049,9 @@ class Player:
     def draw(self, screen, camera_x, camera_y, font, scale=1.0, assets=None):
         px = int((self.x - camera_x) * scale)
         py = int((self.y - camera_y) * scale)
-        s = max(2, int(self.size * scale))
+        # 用 render_size（泰坦符文体型增大用），碰撞仍用原 size
+        draw_size = getattr(self, 'render_size', self.size)
+        s = max(2, int(draw_size * scale))
 
         if self.invincible_timer > 0 and int(self.invincible_timer * 10) % 2 == 0:
             pass
@@ -1161,6 +1163,7 @@ class Enemy:
         self.boss_smoke_cd = 0.0          # 烟雾弹CD
         self.boss_teleport_cd = 0.0       # 闪现CD
         self.boss_grenade_cd = 0.0        # 手雷CD
+        self.skill_windup = 0.0           # 技能前摇计时（预警系统使用）
         self.boss_is_charging = False     # 是否正在冲锋
         self.boss_charge_timer = 0.0      # 冲锋持续时间
         self.boss_charge_dir = (0, 0)     # 冲锋方向
@@ -1259,6 +1262,13 @@ class Enemy:
                 "color": CHARCOAL, "exp": 1000, "score": 2000,
                 "is_boss": True, "name": "泰坦",
                 "is_titan": True, "stomp_damage": 120, "stomp_radius": 150,
+            },
+            EnemyType.BOSS_WANG: {
+                "hp": 5200, "speed": 1.6, "damage": 40, "size": 36,
+                "color": (70, 70, 80), "exp": 1200, "score": 2500,
+                "is_boss": True, "name": "王某",
+                "has_gunfire": True, "has_scythe": True,
+                "scythe_damage_mult": 3.0,
             },
             # === 精英怪 ===
             EnemyType.ELITE_BRUTE: {
@@ -1520,6 +1530,54 @@ class Enemy:
         if not any(new_rect_y.colliderect(obs['rect']) for obs in world.obstacles):
             self.y += move_dy
 
+    def _wang_behavior(self, dt, player_x, player_y, dist, player, hp_ratio, can_execution):
+        """王某：枪械+死神镰刀双形态（极强Boss）
+        血量>50%：枪械形态——远程连续射击弹幕 + 枪榴弹
+        血量<=50%：死神镰刀形态——高速突进 + 大范围镰刀横扫 + 处决斩击
+        返回: None / "wang_gunfire" / "wang_grenade" / "wang_scythe_sweep" / dict(子弹)
+        """
+        if hp_ratio > 0.5:
+            # ===== 枪械形态（远程压制）=====
+            # 连续射击弹幕（朝玩家方向3连发）
+            if dist > 150 and self.boss_shoot_cd <= 0 and random.random() < 0.04:
+                self.boss_shoot_cd = 1.2
+                self.skill_windup = 0.5
+                return "wang_gunfire"
+            # 枪榴弹（范围爆炸）
+            if self.boss_grenade_cd <= 0 and random.random() < 0.02:
+                self.boss_grenade_cd = 6.0
+                self.skill_windup = 0.8
+                return "wang_grenade"
+        else:
+            # ===== 死神镰刀形态（近战爆发）=====
+            # 处决斩击（低血量+近距离启动前摇）
+            if can_execution and dist < 200 and random.random() < 0.03:
+                self.boss_is_executing = True
+                self.boss_execution_windup = 1.2
+                self.boss_execution_cd = 12.0
+                return None
+            # 大范围镰刀横扫
+            if dist < 230 and self.boss_aoe_cd <= 0 and random.random() < 0.035:
+                self.boss_aoe_cd = 4.0
+                self.skill_windup = 0.6
+                return "wang_scythe_sweep"
+            # 高速突进斩
+            if dist > 120 and self.boss_dash_cd <= 0 and random.random() < 0.03:
+                self.is_dashing = True
+                self.dash_target_x = player_x
+                self.dash_target_y = player_y
+                self.dash_speed = 9.0
+                self.dash_timer = 0.4
+                self.boss_dash_cd = 3.0
+                return None
+        # 移动（镰刀形态移速提升）
+        move_speed = self.speed * (1.4 if hp_ratio <= 0.5 else 1.0)
+        bsm = getattr(self, '_buff_speed_mult', 1.0)
+        if dist > 0:
+            self.x += (player_x - self.x) / dist * move_speed * bsm * dt * 60
+            self.y += (player_y - self.y) / dist * move_speed * bsm * dt * 60
+        return None
+
     def _boss_behavior(self, dt, player_x, player_y, dist, player):
         """
         BOSS_LONG(龙某):近战盾Boss，血量低释放重劈处决
@@ -1557,6 +1615,9 @@ class Enemy:
             self.boss_teleport_cd -= dt
         if self.boss_grenade_cd > 0:
             self.boss_grenade_cd -= dt
+        # 技能前摇计时（预警用）
+        if self.skill_windup > 0:
+            self.skill_windup -= dt
 
         # ========= 狂暴冲锋处理 =========
         if self.boss_is_charging:
@@ -1585,6 +1646,8 @@ class Enemy:
                     return "boss_execution_queen"
                 elif self.enemy_type == EnemyType.BOSS_TITAN:
                     return "boss_execution_titan"
+                elif self.enemy_type == EnemyType.BOSS_WANG:
+                    return "wang_execution_scythe"
             return None
 
         # 冲刺移动逻辑
@@ -1603,6 +1666,10 @@ class Enemy:
         hp_ratio = self.hp / self.max_hp
         # 血量低于30%，可以释放处决大招，有冷却
         can_execution = (hp_ratio <= 0.30) and (self.boss_execution_cd <= 0)
+
+        # ========= 王某：枪械+死神镰刀双形态（极强Boss）=========
+        if self.enemy_type == EnemyType.BOSS_WANG:
+            return self._wang_behavior(dt, player_x, player_y, dist, player, hp_ratio, can_execution)
 
         if self.enemy_type == EnemyType.BOSS_LONG:
             # ----龙某：近战盾Boss----
@@ -2096,6 +2163,7 @@ class Enemy:
             "x": self.x, "y": self.y,
             "target_x": player_x, "target_y": player_y,
             "damage": self.damage * 1.5,
+            "owner": "boss" if getattr(self, "is_boss", False) else "enemy_minion",
         }
 
     def apply_buff(self, buff_type, duration=None, stacks=1):
@@ -2383,7 +2451,19 @@ class ExpOrb:
         self.x = x
         self.y = y
         self.value = value
-        self.size = 6
+        # 经验球按所含经验分级：大小与颜色随之变化
+        if value < 15:
+            self.size = 5
+            self.color = (150, 230, 150)   # 淡绿 - 小
+        elif value < 40:
+            self.size = 7
+            self.color = (80, 200, 80)     # 绿 - 中
+        elif value < 100:
+            self.size = 9
+            self.color = (60, 180, 220)    # 青 - 大
+        else:
+            self.size = 12
+            self.color = (235, 210, 90)    # 金 - 特大
         self.alive = True
         self.magnetized = False
         self.lifetime = 30.0
@@ -2410,10 +2490,11 @@ class ExpOrb:
         px = int((self.x - camera_x) * scale)
         py = int((self.y - camera_y) * scale)
         s = max(1, int(self.size * scale))
+        col = self.color
         # 发光效果
         glow_s = s + 3
         glow_surf = pygame.Surface((glow_s * 2, glow_s * 2), pygame.SRCALPHA)
-        pygame.draw.circle(glow_surf, (*CYAN[:3], 60), (glow_s, glow_s), glow_s)
+        pygame.draw.circle(glow_surf, (*col[:3], 60), (glow_s, glow_s), glow_s)
         screen.blit(glow_surf, (px - glow_s, py - glow_s))
-        pygame.draw.circle(screen, CYAN, (px, py), s)
+        pygame.draw.circle(screen, col, (px, py), s)
         pygame.draw.circle(screen, WHITE, (px, py), s, max(1, int(scale)))
