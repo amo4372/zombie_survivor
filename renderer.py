@@ -378,6 +378,14 @@ class Renderer:
         if max_scroll > 0:
             hint = self.game.font_small.render(f"↑↓滚动 {scroll_i + 1}/{len(rows)}", True, LIGHT_GRAY)
             self.screen.blit(hint, (wx + 12, wy + wh - 18))
+            # 滚动条（图鉴式）
+            bar_x = wx + ww - 10
+            bar_y = list_top
+            bar_h = list_h
+            thumb_h = max(18, int(bar_h * (visible / len(rows))))
+            thumb_y = bar_y + int((bar_h - thumb_h) * (scroll_i / max_scroll)) if max_scroll > 0 else bar_y
+            pygame.draw.rect(self.screen, (60, 60, 90), (bar_x, bar_y, 5, bar_h))
+            pygame.draw.rect(self.screen, (150, 150, 200), (bar_x, thumb_y, 5, thumb_h))
 
         # 武器操作按钮（独立大按钮，针对当前选中武器）
         sel_w_row = next((r for r in rows if r[0] == g.selected_weapon), None)
@@ -422,7 +430,11 @@ class Renderer:
         crows = g.get_character_shop_rows()
         c_row_h = int(78 * scale)
         c_visible = max(1, int((ch - header_h) // c_row_h))
-        crows_vis = crows[:c_visible]
+        c_max_scroll = max(0, len(crows) - c_visible)
+        c_scroll = max(0, int(g.equip_character_scroll))
+        c_scroll = min(c_scroll, c_max_scroll)
+        g.equip_character_scroll = c_scroll
+        crows_vis = crows[c_scroll: c_scroll + c_visible]
         for i, (cname, cprice, cowned, clevel, cdesc, cability, clocked) in enumerate(crows_vis):
             ry = cy + header_h + i * c_row_h
             rect = pygame.Rect(cx + 6, ry + 3, cw - 12, c_row_h - 10)
@@ -448,6 +460,17 @@ class Renderer:
                 g.selected_character = cname
             if rect.collidepoint(mouse_pos) and not is_sel:
                 pygame.draw.rect(self.screen, (75, 75, 100), rect, 2, border_radius=8)
+        if c_max_scroll > 0:
+            c_hint = self.game.font_small.render(f"↑↓滚动 {c_scroll + 1}/{len(crows)}", True, LIGHT_GRAY)
+            self.screen.blit(c_hint, (cx + 12, cy + ch - 18))
+            # 滚动条（图鉴式）
+            c_bar_x = cx + cw - 10
+            c_bar_y = cy + header_h
+            c_bar_h = ch - header_h
+            c_thumb_h = max(18, int(c_bar_h * (c_visible / len(crows))))
+            c_thumb_y = c_bar_y + int((c_bar_h - c_thumb_h) * (c_scroll / c_max_scroll)) if c_max_scroll > 0 else c_bar_y
+            pygame.draw.rect(self.screen, (60, 60, 90), (c_bar_x, c_bar_y, 5, c_bar_h))
+            pygame.draw.rect(self.screen, (150, 150, 200), (c_bar_x, c_thumb_y, 5, c_thumb_h))
 
         # 角色操作按钮（独立大按钮，针对当前选中角色）
         sel_c = g.selected_character or "幸存者"

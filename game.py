@@ -2699,10 +2699,15 @@ class Game:
                             self._update_notes_panel.handle_wheel(event.y)
                     elif self.state == GameState.EQUIP_SELECT:
                         try:
-                            n = len(self.get_weapon_shop_rows())
-                            visible = max(1, int((440 - 36) / (62 * self.scale)))
-                            maxs = max(0, n - visible)
-                            self.equip_weapon_scroll = max(0, min(maxs, int(self.equip_weapon_scroll) - event.y))
+                            mx, _ = pygame.mouse.get_pos()
+                            if mx < 640 * self.scale:
+                                n = len(self.get_weapon_shop_rows())
+                                visible = max(1, int((330 - 30) / (58 * self.scale)))
+                                self.equip_weapon_scroll = max(0, min(max(0, n - visible), int(self.equip_weapon_scroll) - event.y))
+                            else:
+                                nc = len(self.get_character_shop_rows())
+                                visiblec = max(1, int((330 - 30) / (78 * self.scale)))
+                                self.equip_character_scroll = max(0, min(max(0, nc - visiblec), int(self.equip_character_scroll) - event.y))
                         except Exception:
                             pass
                 elif event.type == pygame.FINGERDOWN:
@@ -2728,7 +2733,8 @@ class Game:
                     elif self.state == GameState.ACHIEVEMENTS:
                         self.menu_drag_start_offset = self.ach_scroll_offset
                     elif self.state == GameState.EQUIP_SELECT:
-                        self.menu_drag_start_offset = self.equip_weapon_scroll
+                        # 拖动起点：按落点栏位存储对应滚动值
+                        self.menu_drag_start_offset = self.equip_character_scroll if x >= 660 * self.scale else self.equip_weapon_scroll
                 elif event.type == pygame.FINGERMOTION:
                     x = event.x * self.scaled_width
                     y = event.y * self.scaled_height
@@ -2754,10 +2760,19 @@ class Game:
                             self.ach_scroll_offset = new_offset
                         elif self.state == GameState.EQUIP_SELECT:
                             try:
-                                n = len(self.get_weapon_shop_rows())
-                                visible = max(1, int((440 - 36) / (62 * self.scale)))
-                                maxs = max(0, n - visible)
-                                self.equip_weapon_scroll = max(0, min(maxs, int(new_offset)))
+                                # 拖动像素换算为行数（合理速度：拖动约一行高才滚一行）
+                                if x < 640 * self.scale:
+                                    row_h = 58 * self.scale
+                                    base = int(getattr(self, 'menu_drag_start_offset', self.equip_weapon_scroll))
+                                    n = len(self.get_weapon_shop_rows())
+                                    visible = max(1, int((330 - 30) / row_h))
+                                    self.equip_weapon_scroll = max(0, min(max(0, n - visible), base + int(dy / row_h)))
+                                else:
+                                    row_h = 78 * self.scale
+                                    base = int(getattr(self, 'menu_drag_start_offset', self.equip_character_scroll))
+                                    nc = len(self.get_character_shop_rows())
+                                    visiblec = max(1, int((330 - 30) / row_h))
+                                    self.equip_character_scroll = max(0, min(max(0, nc - visiblec), base + int(dy / row_h)))
                             except Exception:
                                 pass
                 elif event.type == pygame.FINGERUP:
