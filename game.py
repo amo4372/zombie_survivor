@@ -1267,10 +1267,15 @@ class Game:
         # 重置尸潮管理器
         self.horde_manager = HordeManager(GameMode.STORY, self.config.difficulty)
         # 玩家位置重置
-        self.player.x = 0
-        self.player.y = 0
-        # 恢复一些生命值
-        self.player.hp = min(self.player.max_hp, self.player.hp + self.player.max_hp * 0.3)
+        # 故事模式进入新地图：重置全部局内状态（技能/符文/经验/生命），保留初始武器与角色
+        self.player = Player(0, 0, start_weapon=self.selected_weapon, start_weapon_level=self.selected_weapon_level)
+        self.rune_buffs = {}  # 符文局内buff 重置
+        self.rune_manager = RuneManager()  # 符文局内层数重置（不跨局、不跨地图）
+        try:
+            self._apply_rune_bonuses()  # 无符文，恢复基础属性
+            self._apply_character_bonuses()  # 重新应用局外角色加成（保留角色）
+        except Exception:
+            pass
 
         logger.info(f"切换到地图: {self.map_config['name']}")
 
@@ -3660,32 +3665,19 @@ class Game:
             self.particles.spawn_explosion(self.player.x, self.player.y, PURPLE, 15)
 
     def _load_permanent_runes(self):
-        """从跨局存档加载永久符文(可升级)到本局符文管理器"""
+        """符文不跨局永久保存：本局从0开始，不加载跨局存档（符文本局获得/升级/重置）"""
         if not hasattr(self, 'rune_manager'):
             return
-        perm = {}
-        try:
-            if hasattr(self, 'records') and self.records is not None:
-                perm = self.records.data.get("permanent_runes", {}) or {}
-        except Exception:
-            perm = {}
-        self.rune_manager.load_permanent(perm)
+        # 符文改为局内：不再从跨局存档加载永久符文
+        self.rune_manager.load_permanent({})
 
     def _gain_rune(self, rune_type):
-        """获得/升级一枚符文：升级本局层数 + 同步跨局永久存档"""
+        """获得/升级一枚符文：仅升级本局层数（不跨局保存）"""
         if not hasattr(self, 'rune_manager'):
             return False
         if not self.rune_manager.upgrade_rune(rune_type):
             return False
-        # 同步跨局永久存档
-        try:
-            if hasattr(self, 'records') and self.records is not None:
-                self.records.data.setdefault("permanent_runes", {})
-                self.records.data["permanent_runes"][rune_type.name] = \
-                    self.rune_manager.get_stacks(rune_type)
-                self.records._save()
-        except Exception:
-            pass
+        # 符文不跨局：移除跨局永久存档同步
         return True
 
     def _apply_rune_bonuses(self):
@@ -6349,6 +6341,26 @@ class Game:
         self.selected_weapon_level = 1
         return "ok"
 
+    def get_weapon_upgrade_price(self, wt):
+        """当前武器升至下一级的费用（满级返回0）"""
+        try:
+            cur = self.records.get_weapon_level(wt.name)
+            if cur >= 5:
+                return 0
+            return max(0, int(WEAPON_PRICES.get(wt.name, 0) * 0.6 * (cur + 1)))
+        except Exception:
+            return 0
+
+    def get_character_upgrade_price(self, name):
+        """当前角色升至下一级的费用（满级返回0）"""
+        try:
+            cur = self.records.get_character_level(name)
+            if cur >= 5:
+                return 0
+            return max(0, int(CHARACTERS.get(name, {}).get("price", 0) * 0.6 * (cur + 1)))
+        except Exception:
+            return 0
+
     def upgrade_weapon_shop(self, wt):
         """局外升级武器（花费金币提升等级，最高5级）"""
         cur = self.records.get_weapon_level(wt.name)
@@ -6420,7 +6432,13 @@ class Game:
         return "ok"
 
     def equip_confirm(self):
-        """确认装备选择，开始游戏"""
+        """确认装备选择，开始游戏（选中项必须已解锁）"""
+        if self.selected_weapon and not self.records.is_weapon_owned(self.selected_weapon.name):
+            self.equip_hover = "请先解锁所选武器"
+            return
+        if self.selected_character and not self.records.is_character_owned(self.selected_character):
+            self.equip_hover = "请先解锁所选角色"
+            return
         self.start_game()
 
     def _apply_character_bonuses(self):
@@ -6505,16 +6523,26 @@ class Game:
             pass
 
     def _enemy_coin_reward(self, enemy):
+        # 基础金币（按敌人类别）
         if getattr(enemy, 'is_boss', False):
-            return 100
-        et = getattr(enemy, 'enemy_type', None)
-        name = getattr(et, 'name', str(et)).upper()
-        elite_types = {"ZOMBIE_TANK", "ZOMBIE_BERSERKER", "ZOMBIE_RANGED", "ZOMBIE_EXPLODER",
-                       "ZOMBIE_PHANTOM", "ZOMBIE_HEALER", "ZOMBIE_SHIELD", "ZOMBIE_SPLITTER",
-                       "ZOMBIE_WRAITH", "ZOMBIE_THROWER", "ZOMBIE_WANG"}
-        if name in elite_types:
-            return random.randint(6, 12)
-        return random.randint(1, 4)
+            base = 100
+        else:
+            et = getattr(enemy, 'enemy_type', None)
+            name = getattr(et, 'name', str(et)).upper()
+            elite_types = {"ZOMBIE_TANK", "ZOMBIE_BERSERKER", "ZOMBIE_RANGED", "ZOMBIE_EXPLODER",
+                           "ZOMBIE_PHANTOM", "ZOMBIE_HEALER", "ZOMBIE_SHIELD", "ZOMBIE_SPLITTER",
+                           "ZOMBIE_WRAITH", "ZOMBIE_THROWER", "ZOMBIE_WANG"}
+            if name in elite_types:
+                base = random.randint(6, 12)
+            else:
+                base = random.randint(1, 4)
+        # 金币结算根据难度进行加成（难度越高金币越多，鼓励挑战高难度）
+        try:
+            diff_cfg = DIFFICULTY_CONFIG.get(self.config.difficulty, {})
+            mult = diff_cfg.get("enemy_hp_mult", 1.0)
+        except Exception:
+            mult = 1.0
+        return max(1, int(base * mult))
 
     def _on_enemy_death(self, enemy):
         if getattr(enemy, '_death_processed', False):
