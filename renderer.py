@@ -477,7 +477,7 @@ class Renderer:
         sel_c_row = next((r for r in crows if r[0] == sel_c), None)
         c_op = None
         if sel_c_row:
-            _cname, _cprice, _cowned, _clevel, _clocked = sel_c_row[0], sel_c_row[1], sel_c_row[2], sel_c_row[3], sel_c_row[5]
+            _cname, _cprice, _cowned, _clevel, _clocked = sel_c_row[0], sel_c_row[1], sel_c_row[2], sel_c_row[3], sel_c_row[6]
             if _clocked:
                 c_op = ("disabled", f"未解锁: {_clocked}")
             elif not _cowned:
@@ -1386,10 +1386,17 @@ class Renderer:
             name_text = self.game.font_large.render(name, True, GOLD)
             self.screen.blit(name_text, (detail_x + 20, detail_y + 20))
 
+            # 图片预览（右上角，仅已解锁条目显示真实样子）
+            if is_unlocked:
+                self._draw_codex_item_preview(
+                    self.game.codex_selected, self.game.codex_tab,
+                    detail_x + detail_width - int(150 * scale), detail_y + int(18 * scale),
+                    int(130 * scale), int(130 * scale))
+
             # 描述
             desc_y = detail_y + 70
             desc_lines = self._wrap_text(description, detail_width - 40, self.game.font_small)
-            for line in desc_lines[:4]:
+            for line in desc_lines[:3]:
                 desc_text = self.game.font_small.render(line, True, LIGHT_GRAY)
                 self.screen.blit(desc_text, (detail_x + 20, desc_y))
                 desc_y += 25
@@ -1441,6 +1448,62 @@ class Renderer:
             self.game.codex_scroll = 0
             self.game.codex_selected = None
         back_btn.draw(self.screen, self.game.font_large, scale)
+
+    def _draw_codex_item_preview(self, entry_key, tab, x, y, w, h):
+        """图鉴条目图片预览：怪物用真实游戏贴图，武器程序化绘制"""
+        try:
+            from codex import THREAT_COLORS, RARITY_COLORS, MONSTER_CODEX
+            pygame.draw.rect(self.screen, (30, 30, 42), (x, y, w, h))
+            pygame.draw.rect(self.screen, (90, 90, 120), (x, y, w, h), 2)
+            if tab == "monster":
+                assets = self.game.assets
+                img_key = entry_key.lower()
+                if assets is not None and hasattr(assets, 'has_image') and assets.has_image(img_key):
+                    img = assets.get_image(img_key, w - 4, h - 4)
+                    self.screen.blit(img, (x + 2, y + 2))
+                else:
+                    # 程序化怪物剪影（按威胁等级配色）
+                    entry = MONSTER_CODEX.get(entry_key, {})
+                    col = THREAT_COLORS.get(entry.get('threat', ''), (150, 60, 60))
+                    cx, cy = x + w // 2, y + h // 2
+                    r = min(w, h) // 2 - 6
+                    pygame.draw.circle(self.screen, (30, 30, 40), (cx, cy), r + 6)
+                    pygame.draw.circle(self.screen, col, (cx, cy), r)
+                    pygame.draw.circle(self.screen, (255, 45, 45), (cx - 9, cy - 4), 5)
+                    pygame.draw.circle(self.screen, (255, 45, 45), (cx + 9, cy - 4), 5)
+            else:
+                self._paint_weapon_icon(entry_key, x, y, w, h)
+        except Exception:
+            pass
+
+    def _paint_weapon_icon(self, entry_key, x, y, w, h):
+        """程序化绘制武器图标（按武器类型画剪影）"""
+        cx, cy = x + w // 2, y + h // 2
+        key_u = entry_key.upper()
+        body = (75, 75, 88)
+        if key_u in ("KNIFE", "BAT", "CHAINSAW", "SCYTHE"):
+            if key_u == "KNIFE":
+                pygame.draw.polygon(self.screen, (200, 205, 215),
+                                    [(cx - 6, cy - 6), (cx + 26, cy - 6), (cx + 32, cy + 2), (cx - 10, cy + 2)])
+                pygame.draw.rect(self.screen, (130, 95, 60), (cx - 26, cy - 4, 24, 10))
+            elif key_u == "SCYTHE":
+                pygame.draw.arc(self.screen, (220, 225, 235), (cx - 30, cy - 26, 66, 56), 0, 3.3, 9)
+                pygame.draw.line(self.screen, (145, 115, 80), (cx + 28, cy + 2), (cx - 26, cy + 42), 8)
+                pygame.draw.circle(self.screen, (160, 130, 90), (cx + 28, cy + 2), 8)
+            elif key_u == "CHAINSAW":
+                pygame.draw.rect(self.screen, (120, 120, 132), (cx - 30, cy - 4, 60, 14))
+                for i in range(-26, 30, 9):
+                    pygame.draw.circle(self.screen, (90, 90, 100), (cx + i, cy + 3), 3)
+                pygame.draw.rect(self.screen, (150, 80, 60), (cx - 4, cy + 10, 24, 16))
+            else:
+                pygame.draw.line(self.screen, (150, 120, 70), (cx - 30, cy + 2), (cx + 30, cy + 2), 10)
+                pygame.draw.rect(self.screen, (120, 90, 60), (cx - 6, cy + 2, 22, 12))
+        else:
+            # 枪械：枪身+枪管+弹匣+瞄准
+            pygame.draw.rect(self.screen, body, (cx - 20, cy - 6, 54, 14))
+            pygame.draw.rect(self.screen, body, (cx + 28, cy - 3, 20, 8))
+            pygame.draw.rect(self.screen, (70, 70, 80), (cx - 16, cy + 8, 24, 14))
+            pygame.draw.rect(self.screen, (200, 60, 60), (cx - 30, cy - 3, 7, 7))
 
     def _draw_world_lore(self, mouse_pos, mouse_pressed):
         """渲染世界观图鉴"""
