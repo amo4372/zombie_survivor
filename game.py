@@ -2692,6 +2692,14 @@ class Game:
                     elif self.state == GameState.UPDATE_NOTES:
                         if hasattr(self, '_update_notes_panel') and self._update_notes_panel:
                             self._update_notes_panel.handle_wheel(event.y)
+                    elif self.state == GameState.EQUIP_SELECT:
+                        try:
+                            n = len(self.get_weapon_shop_rows())
+                            visible = max(1, int((440 - 36) / (62 * self.scale)))
+                            maxs = max(0, n - visible)
+                            self.equip_weapon_scroll = max(0, min(maxs, self.equip_weapon_scroll - event.y))
+                        except Exception:
+                            pass
                 elif event.type == pygame.FINGERDOWN:
                     x = event.x * self.scaled_width
                     y = event.y * self.scaled_height
@@ -2714,6 +2722,8 @@ class Game:
                         self.menu_drag_start_offset = self.mod_manager_scroll
                     elif self.state == GameState.ACHIEVEMENTS:
                         self.menu_drag_start_offset = self.ach_scroll_offset
+                    elif self.state == GameState.EQUIP_SELECT:
+                        self.menu_drag_start_offset = self.equip_weapon_scroll
                 elif event.type == pygame.FINGERMOTION:
                     x = event.x * self.scaled_width
                     y = event.y * self.scaled_height
@@ -2737,6 +2747,14 @@ class Game:
                             self.mod_manager_scroll = new_offset
                         elif self.state == GameState.ACHIEVEMENTS:
                             self.ach_scroll_offset = new_offset
+                        elif self.state == GameState.EQUIP_SELECT:
+                            try:
+                                n = len(self.get_weapon_shop_rows())
+                                visible = max(1, int((440 - 36) / (62 * self.scale)))
+                                maxs = max(0, n - visible)
+                                self.equip_weapon_scroll = max(0, min(maxs, new_offset))
+                            except Exception:
+                                pass
                 elif event.type == pygame.FINGERUP:
                     x = event.x * self.scaled_width
                     y = event.y * self.scaled_height
@@ -6526,6 +6544,13 @@ class Game:
             try:
                 self.records.mark_wang_defeated()
                 self._unlock_achievement("wang_slayer")
+                # 图鉴解锁王某
+                try:
+                    _cu = codex_unlock_manager.unlock_monster("ZOMBIE_WANG")
+                    if _cu:
+                        self._codex_unlock_toast(_cu, "王某")
+                except Exception:
+                    pass
                 self.floating_texts.append(FloatingText(
                     enemy.x, enemy.y - 60, "击败王某! 解锁死神镰刀", color=(180, 60, 220), lifetime=3.0))
             except Exception:
