@@ -896,7 +896,6 @@ class HordeManager:
 
     def _calculate_horde_scale(self):
         """根据波次和时间计算尸潮规模"""
-        import random
         wave = self.horde_count
         time_min = self.total_time / 60.0
 
@@ -987,7 +986,6 @@ class HordeManager:
         return max(self.min_horde_cooldown, cd)
 
     def should_spawn(self):
-        import random
         time_factor = min(2.2, 1.0 + self.total_time / 180.0)
 
         # 规模影响刷新速率
@@ -1071,7 +1069,6 @@ class HordeManager:
 
     def _select_boss_type(self):
         """根据规模和模式选择Boss类型，标记疫苗Boss"""
-        import random
         # 巨型尸潮：高级Boss
         if self.current_scale >= self.SCALE_MASSIVE:
             bosses = [EnemyType.BOSS_MUTANT, EnemyType.BOSS_QUEEN, EnemyType.BOSS_TITAN]

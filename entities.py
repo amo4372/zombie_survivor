@@ -2100,7 +2100,6 @@ class Enemy:
 
     def apply_buff(self, buff_type, duration=None, stacks=1):
         """应用buff，考虑控制抗性"""
-        import random
         from buff import BuffType
         # 控制类debuff列表
         control_debuffs = {

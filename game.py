@@ -4207,7 +4207,6 @@ class Game:
         """
         if not hasattr(entity, 'buff_manager') or not entity.buff_manager.buffs:
             return
-        import random
         # 实体尺寸（用于附着粒子的分布范围）
         ent_size = getattr(entity, 'size', 14)
         ent_radius = ent_size
@@ -4731,7 +4730,6 @@ class Game:
         _fear_buff = self.player.buff_manager.get_buff(BuffType.FEAR) if hasattr(self.player, 'buff_manager') else None
         if _fear_buff is not None and not _fear_buff.is_expired():
             if not hasattr(self, '_fear_rand_angle'):
-                import random
                 self._fear_rand_angle = random.uniform(0, math.pi * 2)
             if not hasattr(self, '_fear_phase'):
                 self._fear_phase = 0.0
