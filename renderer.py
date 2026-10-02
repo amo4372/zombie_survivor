@@ -83,6 +83,16 @@ class Renderer:
             self._draw_settings()
         elif state == GameState.HUD_EDIT:
             self._draw_hud_edit()
+        elif state == GameState.PLAY_SELECT:
+            self._draw_play_select()
+        elif state == GameState.MULTIPLAYER_SELECT:
+            self._draw_multiplayer_select()
+        elif state == GameState.NET_MULTIPLAYER:
+            self._draw_net_multiplayer()
+        elif state == GameState.NET_WAIT:
+            self._draw_net_wait()
+        elif state == GameState.NET_CLIENT_PLAY:
+            self._draw_net_client()
         elif state == GameState.TUTORIAL:
             self._draw_tutorial()
         elif state == GameState.PLAYING:
@@ -190,7 +200,7 @@ class Renderer:
                     if self.game.has_saved_game():
                         self.game.load_game_state()
                 elif i == 1:
-                    self.game.state = GameState.MODE_SELECT
+                    self.game.state = GameState.PLAY_SELECT
                 elif i == 2:
                     self.game.state = GameState.STORY_ARCHIVE
                     self.game.story_archive_scroll = 0
@@ -491,7 +501,8 @@ class Renderer:
         sh = self.game.scaled_height
         g = self.game
 
-        title = self.game.font_title.render("选择装备", True, WHITE)
+        title_txt = "玩家2 · 选择装备" if g.equip_p2_phase else "选择装备"
+        title = self.game.font_title.render(title_txt, True, WHITE)
         self.screen.blit(title, title.get_rect(center=(sw // 2, int(30 * scale))))
 
         # 金币余额
@@ -2110,6 +2121,239 @@ class Renderer:
                 self.game._apply_hud_layout()
             self.game.state = GameState.SETTINGS
 
+    def _draw_play_select(self):
+        """开始游戏 → 单人/多人 选择"""
+        self.screen.fill(VOID_BLACK)
+        scale = self.game.scale
+        sw = self.game.scaled_width
+        title = self.game.font_title.render("选择游戏方式", True, WHITE)
+        self.screen.blit(title, title.get_rect(center=(sw // 2, int(100 * scale))))
+        mouse_pos = pygame.mouse.get_pos()
+        mouse_pressed = pygame.mouse.get_pressed()
+        descs = ["独自面对尸潮，体验完整剧情", "与好友同乐：同屏双人或网络联机"]
+        for i, btn in enumerate(self.game.play_select_buttons):
+            if btn.update(mouse_pos, mouse_pressed, self.game.touch_events, scale):
+                if i == 0:
+                    self.game.multiplayer_mode = None
+                    self.game.state = GameState.MODE_SELECT
+                elif i == 1:
+                    self.game.state = GameState.MULTIPLAYER_SELECT
+                elif i == 2:
+                    self.game.state = GameState.MENU
+            btn.draw(self.screen, self.game.font_large, scale)
+            if i < 2:
+                d = self.game.font_small.render(descs[i], True, LIGHT_GRAY)
+                self.screen.blit(d, d.get_rect(center=(sw // 2, int((310 + i * 80) * scale))))
+
+    def _draw_multiplayer_select(self):
+        """多人游戏 → 同屏双人 / 网络联机 选择"""
+        self.screen.fill(VOID_BLACK)
+        scale = self.game.scale
+        sw = self.game.scaled_width
+        title = self.game.font_title.render("多人游戏", True, WHITE)
+        self.screen.blit(title, title.get_rect(center=(sw // 2, int(100 * scale))))
+        mouse_pos = pygame.mouse.get_pos()
+        mouse_pressed = pygame.mouse.get_pressed()
+        descs = ["同一屏幕，两个游戏画面，共享战场", "局域网直连：一台做主机，另一台加入"]
+        for i, btn in enumerate(self.game.multiplayer_select_buttons):
+            if btn.update(mouse_pos, mouse_pressed, self.game.touch_events, scale):
+                if i == 0:
+                    self.game.multiplayer_mode = "same_screen"
+                    self.game.state = GameState.DIFFICULTY_SELECT
+                elif i == 1:
+                    self.game.multiplayer_mode = "network"
+                    self.game.net_ip_input = "127.0.0.1"
+                    self.game.net_ip_focused = False
+                    self.game.state = GameState.NET_MULTIPLAYER
+                elif i == 2:
+                    self.game.state = GameState.PLAY_SELECT
+            btn.draw(self.screen, self.game.font_large, scale)
+            if i < 2:
+                d = self.game.font_small.render(descs[i], True, LIGHT_GRAY)
+                self.screen.blit(d, d.get_rect(center=(sw // 2, int((300 + i * 80) * scale))))
+
+    def _draw_net_multiplayer(self):
+        """网络联机：创建房间 / 加入房间（IP输入框）"""
+        self.screen.fill(VOID_BLACK)
+        scale = self.game.scale
+        sw = self.game.scaled_width
+        sh = self.game.scaled_height
+        title = self.game.font_title.render("网络联机", True, WHITE)
+        self.screen.blit(title, title.get_rect(center=(sw // 2, int(70 * scale))))
+        mouse_pos = pygame.mouse.get_pos()
+        mouse_pressed = pygame.mouse.get_pressed()
+        g = self.game
+        # 创建房间
+        host_r = pygame.Rect(int(sw // 2 - 150 * scale), int(150 * scale), int(300 * scale), int(55 * scale))
+        pygame.draw.rect(self.screen, (40, 90, 40), host_r, border_radius=10)
+        pygame.draw.rect(self.screen, GREEN, host_r, 2, border_radius=10)
+        ht = self.game.font.render("创建房间（主机）", True, WHITE)
+        self.screen.blit(ht, ht.get_rect(center=host_r.center))
+        # IP 输入框
+        ip_label = self.game.font.render("加入房间 - 主机IP:", True, LIGHT_GRAY)
+        self.screen.blit(ip_label, (int(sw // 2 - 150 * scale), int(270 * scale)))
+        ip_r = pygame.Rect(int(sw // 2 - 150 * scale), int(305 * scale), int(300 * scale), int(48 * scale))
+        border_col = (120, 220, 120) if g.net_ip_focused else (90, 90, 110)
+        pygame.draw.rect(self.screen, (25, 25, 35), ip_r, border_radius=8)
+        pygame.draw.rect(self.screen, border_col, ip_r, 2, border_radius=8)
+        ip_txt = self.game.font.render(g.net_ip_input + ("▏" if g.net_ip_focused else ""), True, WHITE)
+        self.screen.blit(ip_txt, (ip_r.x + 10, ip_r.y + 8))
+        # 加入按钮
+        join_r = pygame.Rect(int(sw // 2 - 150 * scale), int(370 * scale), int(300 * scale), int(55 * scale))
+        pygame.draw.rect(self.screen, (60, 90, 40), join_r, border_radius=10)
+        pygame.draw.rect(self.screen, GOLD, join_r, 2, border_radius=10)
+        jt = self.game.font.render("加入房间", True, WHITE)
+        self.screen.blit(jt, jt.get_rect(center=join_r.center))
+        # 返回
+        back_r = pygame.Rect(int(sw // 2 - 150 * scale), int(460 * scale), int(300 * scale), int(44 * scale))
+        pygame.draw.rect(self.screen, (60, 50, 50), back_r, border_radius=10)
+        pygame.draw.rect(self.screen, GRAY, back_r, 2, border_radius=10)
+        bt = self.game.font_small.render("返回", True, LIGHT_GRAY)
+        self.screen.blit(bt, bt.get_rect(center=back_r.center))
+        # 交互：点击聚焦输入框 / 按钮
+        clicked = None
+        for ev in g.touch_events:
+            if ev["type"] == "down":
+                clicked = ev["pos"]
+                break
+        if mouse_pressed[0]:
+            clicked = clicked or mouse_pos
+        if clicked:
+            if host_r.collidepoint(clicked):
+                g._net_start_host()
+            elif ip_r.collidepoint(clicked):
+                g.net_ip_focused = True
+                g.start_text_input()
+            elif join_r.collidepoint(clicked):
+                g.net_ip_focused = False
+                g.stop_text_input()
+                g._net_join()
+            elif back_r.collidepoint(clicked):
+                g.net_ip_focused = False
+                g.stop_text_input()
+                g.state = GameState.MULTIPLAYER_SELECT
+
+    def _draw_net_wait(self):
+        """网络等待：主机等待客户端 / 客户端连接中"""
+        self.screen.fill(VOID_BLACK)
+        scale = self.game.scale
+        sw = self.game.scaled_width
+        g = self.game
+        mouse_pos = pygame.mouse.get_pos()
+        mouse_pressed = pygame.mouse.get_pressed()
+        if g.net_role == "host":
+            title = self.game.font_title.render("等待玩家加入...", True, WHITE)
+            self.screen.blit(title, title.get_rect(center=(sw // 2, int(120 * scale))))
+            host_ip = g._get_local_ip()
+            info = self.game.font.render(f"主机IP: {host_ip}    端口: {g.net_port}", True, GOLD)
+            self.screen.blit(info, info.get_rect(center=(sw // 2, int(200 * scale))))
+            status = "已连接！点击开始游戏" if (g.net_host and g.net_host.connected) else "等待客户端连接..."
+            col = GREEN if (g.net_host and g.net_host.connected) else LIGHT_GRAY
+            st = self.game.font.render(status, True, col)
+            self.screen.blit(st, st.get_rect(center=(sw // 2, int(260 * scale))))
+            # 开始按钮（客户端已连接时可用）
+            start_r = pygame.Rect(int(sw // 2 - 150 * scale), int(330 * scale), int(300 * scale), int(55 * scale))
+            can_start = bool(g.net_host and g.net_host.connected)
+            pygame.draw.rect(self.screen, (40, 90, 40) if can_start else (50, 50, 55), start_r, border_radius=10)
+            pygame.draw.rect(self.screen, GREEN if can_start else GRAY, start_r, 2, border_radius=10)
+            stxt = self.game.font.render("开始游戏", True, WHITE)
+            self.screen.blit(stxt, stxt.get_rect(center=start_r.center))
+            # 取消
+            cancel_r = pygame.Rect(int(sw // 2 - 150 * scale), int(410 * scale), int(300 * scale), int(44 * scale))
+            pygame.draw.rect(self.screen, (60, 50, 50), cancel_r, border_radius=10)
+            pygame.draw.rect(self.screen, GRAY, cancel_r, 2, border_radius=10)
+            ct = self.game.font_small.render("取消", True, LIGHT_GRAY)
+            self.screen.blit(ct, ct.get_rect(center=cancel_r.center))
+            if mouse_pressed[0]:
+                if can_start and start_r.collidepoint(mouse_pos):
+                    g._net_host_start_game()
+                elif cancel_r.collidepoint(mouse_pos):
+                    g._net_stop()
+        else:
+            title = self.game.font_title.render("连接中...", True, WHITE)
+            self.screen.blit(title, title.get_rect(center=(sw // 2, int(120 * scale))))
+            if g.net_client and g.net_client.connected:
+                status = "已连接！等待主机开始游戏..."
+                col = GREEN
+            elif g.net_client and g.net_client.error:
+                status = f"连接失败: {g.net_client.error}"
+                col = CRIMSON
+            else:
+                status = f"正在连接 {g.net_ip_input}:{g.net_port} ..."
+                col = LIGHT_GRAY
+            st = self.game.font.render(status, True, col)
+            self.screen.blit(st, st.get_rect(center=(sw // 2, int(220 * scale))))
+            cancel_r = pygame.Rect(int(sw // 2 - 150 * scale), int(330 * scale), int(300 * scale), int(44 * scale))
+            pygame.draw.rect(self.screen, (60, 50, 50), cancel_r, border_radius=10)
+            pygame.draw.rect(self.screen, GRAY, cancel_r, 2, border_radius=10)
+            ct = self.game.font_small.render("取消", True, LIGHT_GRAY)
+            self.screen.blit(ct, ct.get_rect(center=cancel_r.center))
+            if mouse_pressed[0] and cancel_r.collidepoint(mouse_pos):
+                g._net_stop()
+            # 客户端收到 started 快照 → 进入客户端游玩
+            if g.net_client and g.net_client.get_snapshot().get("started"):
+                g.state = GameState.NET_CLIENT_PLAY
+
+    def _draw_net_client(self):
+        """网络客户端游玩：渲染主机广播的世界快照"""
+        self.screen.fill(VOID_BLACK)
+        g = self.game
+        scale = g.scale
+        sw = g.scaled_width
+        sh = g.scaled_height
+        snap = g.net_client.get_snapshot() if g.net_client else {}
+        players = snap.get("players", [])
+        me = players[1] if len(players) > 1 else (players[0] if players else None)
+        cam_x = (me["x"] if me else 0) - sw / (2.0 * scale)
+        cam_y = (me["y"] if me else 0) - sh / (2.0 * scale)
+        # 背景网格（轻量）
+        grid = int(80 * scale)
+        ox, oy = int(-cam_x * scale) % grid, int(-cam_y * scale) % grid
+        for gx in range(ox, sw, grid):
+            pygame.draw.line(self.screen, (22, 26, 22), (gx, 0), (gx, sh))
+        for gy in range(oy, sh, grid):
+            pygame.draw.line(self.screen, (22, 26, 22), (0, gy), (sw, gy))
+        # 敌人
+        for e in snap.get("enemies", []):
+            px = int((e["x"] - cam_x) * scale)
+            py = int((e["y"] - cam_y) * scale)
+            if px < -60 or py < -60 or px > sw + 60 or py > sh + 60:
+                continue
+            r = max(4, int(e.get("size", 12) * scale * 0.45))
+            pygame.draw.circle(self.screen, (110, 50, 50), (px, py), r)
+            pygame.draw.circle(self.screen, (150, 70, 70), (px, py), r, 2)
+        # 投射物
+        for p in snap.get("projectiles", []):
+            px = int((p["x"] - cam_x) * scale)
+            py = int((p["y"] - cam_y) * scale)
+            if px < -40 or py < -40 or px > sw + 40 or py > sh + 40:
+                continue
+            col = tuple(p.get("color", (255, 255, 255))[:3])
+            pygame.draw.circle(self.screen, col, (px, py), max(3, int(p.get("size", 6) * scale * 0.6)))
+        # 玩家
+        labels = ["P1", "P2"]
+        cols = [GREEN, CYAN]
+        for idx, p in enumerate(players):
+            px = int((p["x"] - cam_x) * scale)
+            py = int((p["y"] - cam_y) * scale)
+            r = max(8, int(16 * scale))
+            pygame.draw.circle(self.screen, cols[idx], (px, py), r)
+            pygame.draw.circle(self.screen, WHITE, (px, py), r, 2)
+            tag = g.font_small.render(labels[idx], True, cols[idx])
+            self.screen.blit(tag, (px - tag.get_width() // 2, py - r - int(14 * scale)))
+        # HUD：时间与状态
+        tl = max(0, int(snap.get("time_left", 0)))
+        time_txt = g.font.render(f"网络联机  {tl // 60:02d}:{tl % 60:02d}", True, WHITE)
+        self.screen.blit(time_txt, time_txt.get_rect(midtop=(sw // 2, int(10 * scale))))
+        conn_txt = g.font_small.render("连接主机中...", True, LIGHT_GRAY)
+        self.screen.blit(conn_txt, conn_txt.get_rect(midbottom=(sw // 2, sh - int(6 * scale))))
+        # 客户端输入控件（触控模式）
+        if g.config.control_mode == ControlMode.TOUCH:
+            g.client_joystick.draw(self.screen, scale)
+            g.client_aim.draw(self.screen, g.font, scale)
+            g.client_shoot.draw(self.screen, g.font, scale)
+            g.client_skill.draw(self.screen, g.font, scale)
+
     def _draw_tutorial(self):
         self.screen.fill(VOID_BLACK)
         scale = self.game.scale
@@ -2164,12 +2408,94 @@ class Renderer:
     def _draw_playing(self):
         if not self.game.world or not self.game.player:
             return
+        if self.game.is_multiplayer_active():
+            self._draw_playing_split()
+            return
+        self._draw_playing_core(self.game.player, self.game.camera)
+        self._draw_hud()
+
+    def _draw_playing_split(self):
+        """同屏双人：左右分屏，各玩家一个视口"""
+        orig_screen = self.screen
+        sw = self.game.scaled_width
+        sh = self.game.scaled_height
+        half = sw // 2
+        pairs = [(self.game.player, self.game.camera, "P1"), (self.game.player2, self.game.camera2, "P2")]
+        for idx, (player, camera, label) in enumerate(pairs):
+            if player is None or camera is None:
+                continue
+            rect = pygame.Rect(idx * half, 0, half, sh)
+            self.screen = orig_screen.subsurface(rect)
+            self._draw_playing_core(player, camera)
+            self.screen = orig_screen
+            # 分屏 HUD
+            self._draw_hud_split(player, label, rect)
+        # 中线与标签
+        pygame.draw.line(orig_screen, (120, 90, 140), (half, 0), (half, sh), max(2, int(2 * self.game.scale)))
+        for idx, label in enumerate(["P1", "P2"]):
+            tag = self.game.font_small.render(label, True, GOLD)
+            orig_screen.blit(tag, (idx * half + 8, 6))
+        self.screen = orig_screen
+
+    def _draw_hud_split(self, player, label, rect):
+        """双人分屏 HUD：血量/经验/技能/触控控件（画在主屏对应半区）"""
+        g = self.game
+        scale = g.scale
+        half_w = rect.width
+        # 血量
+        hp_pct = max(0, player.hp) / max(1, player.max_hp)
+        bar_w = int(half_w * 0.6)
+        bar_h = int(14 * scale)
+        bx = rect.x + int(half_w * 0.2)
+        by = rect.y + int(26 * scale)
+        pygame.draw.rect(self.screen, (40, 40, 40), (bx, by, bar_w, bar_h))
+        pygame.draw.rect(self.screen, (220, 60, 60), (bx, by, int(bar_w * hp_pct), bar_h))
+        pygame.draw.rect(self.screen, (200, 200, 200), (bx, by, bar_w, bar_h), 1)
+        hp_txt = g.font_small.render(f"{max(0,int(player.hp))}/{player.max_hp}", True, WHITE)
+        self.screen.blit(hp_txt, (bx, by - int(16 * scale)))
+        # 当前武器
+        w = player.get_current_weapon() if hasattr(player, 'get_current_weapon') else None
+        if w:
+            wname = getattr(w, 'display_name', None) or getattr(w, 'name', '?')
+            w_txt = g.font_small.render(f"{wname}", True, GOLD)
+            self.screen.blit(w_txt, (bx, rect.y + int(44 * scale)))
+        # 触控控件（仅触控模式）——控件逻辑坐标本身即左/右半屏，直接画在主屏
+        if g.config.control_mode == ControlMode.TOUCH and not g.is_network_client_render():
+            if label == "P1":
+                self._draw_touch_controls_split(g, left=True)
+            else:
+                self._draw_touch_controls_split(g, left=False)
+
+    def _draw_touch_controls_split(self, g, left):
+        """把触控控件画进对应半屏（left=True 用 P1 控件；否则 P2 控件，坐标无需平移）"""
+        scale = g.scale
+        if left:
+            g.joystick.draw(self.screen, scale)
+            g.aim_button.draw(self.screen, g.font, scale)
+            g.skill_selector.draw(self.screen, g.font, scale=scale)
+            g.skill_caster.draw(self.screen, g.font, scale=scale)
+            g.throwable_switch_btn.draw(self.screen, g.font, scale)
+            g.throwable_caster.draw(self.screen, g.font, scale=scale)
+            for name, b in g.touch_buttons.items():
+                if name in ("shoot", "pause", "sprint"):
+                    b.draw(self.screen, g.font, scale)
+        else:
+            c2 = g.p2_controls
+            c2["joystick"].draw(self.screen, scale)
+            c2["aim"].draw(self.screen, g.font, scale)
+            c2["skill_selector"].draw(self.screen, g.font, scale=scale)
+            c2["skill_caster"].draw(self.screen, g.font, scale=scale)
+            c2["throwable_switch"].draw(self.screen, g.font, scale)
+            c2["throwable_caster"].draw(self.screen, g.font, scale=scale)
+            for name, b in c2.items():
+                if name in ("shoot", "pause", "sprint"):
+                    b.draw(self.screen, g.font, scale)
+
+    def _draw_playing_core(self, player, camera):
+        if not self.game.world or not player:
+            return
 
         scale = self.game.scale
-        camera = self.game.camera
-        player = self.game.player
-
-        # 计算带抖动的相机偏移
         shake_x = camera.shake_x
         shake_y = camera.shake_y
         cam_x = camera.x - shake_x
@@ -2238,7 +2564,7 @@ class Renderer:
         # 绘制敌人
         for enemy in self.game.enemies:
             enemy.draw(self.screen, cam_x, cam_y, self.game.font, scale, self.game.assets,
-                       getattr(self.game.player, 'x', None), getattr(self.game.player, 'y', None))
+                       getattr(player, 'x', None), getattr(player, 'y', None))
             # 技能前摇预警：释放带前摇的技能时显示警示（红色闪烁圈+危险标记）
             if (getattr(enemy, 'boss_is_executing', False)
                     or getattr(enemy, 'skill_windup', 0) > 0
@@ -2378,14 +2704,11 @@ class Renderer:
         # 绘制枪口闪光
         self._draw_muzzle_flash()
 
-        # 绘制HUD
-        self._draw_hud()
-
-        # 动态光照层（在世界/实体/HUD之后，触控控件之前）
+        # 动态光照层（在世界/实体之后，HUD之前）
         if hasattr(self.game, 'lighting') and self.game.state == GameState.PLAYING:
             self.game.lighting.render(
-                self.screen, self.game.camera.x, self.game.camera.y, self.game.scale,
-                player=self.game.player,
+                self.screen, camera.x, camera.y, self.game.scale,
+                player=player,
                 enemies=self.game.enemies,
                 projectiles=getattr(self.game, 'projectiles', []),
             )

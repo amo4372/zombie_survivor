@@ -594,6 +594,11 @@ class Player:
         self.riot_gear_cooldown = 0
         self.riot_gear_equip_cooldown = 30.0
 
+        # 加特林专属技能·过热倾泻 buff（射速暴增+弹药无限）
+        self.overdrive_timer = 0
+        self.overdrive_mult = 2.0
+        self.overdrive_burn = False
+
         # 钢铁意志特效
         self.steel_will_active = False
         self.steel_will_flash_timer = 0

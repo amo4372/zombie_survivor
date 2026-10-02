@@ -11,6 +11,7 @@ import os
 import traceback
 import datetime
 import time
+import socket
 
 from config import *
 from assets import AssetManager, SOUND_MAP, MUSIC_MAP, MAP_MUSIC_MAP
@@ -334,6 +335,30 @@ class Game:
         self.key_g_held = False
         self.mouse_angle = 0.0
 
+        # ===== 多人模式（v2.0）=====
+        self.multiplayer_mode = None      # None / "same_screen" / "network"
+        self.player2 = None               # 双人模式的第二位玩家
+        self.camera2 = None               # 双人模式第二摄像机
+        self.equip_p2_phase = False       # 多人模式装备选择阶段（False=P1 / True=P2）
+        self.selected_weapon_p1 = None
+        self.selected_char_p1 = None
+        self.selected_weapon_p1_level = 1
+        self.selected_weapon_p2 = None
+        self.selected_char_p2 = None
+        self.selected_weapon_p2_level = 1
+        self.net_role = None              # None / "host" / "client"
+        self.net_host = None
+        self.net_client = None
+        self.net_port = 26000
+        self.net_ip_input = "127.0.0.1"
+        self.net_ip_focused = False
+        self.net_started = False
+        # 同屏双人 P2 键控输入状态
+        self.p2_input = {"mx": 0.0, "my": 0.0, "shoot": False, "skill": False,
+                         "throw": False, "sprint": False}
+        self.p2_controls = None
+        self._p2_finger_ids = set()
+
         self.menu_buttons = []
         self.settings_buttons = []
         self.pause_buttons = []
@@ -485,6 +510,418 @@ class Game:
         self._setup_touch_controls()
         logger.info("HUD布局已重置为默认")
 
+    # ===== 多人模式：P2 控件与玩家 =====
+    def _setup_multiplayer_controls(self):
+        """同屏双人：P1 控件移到左半屏，新建 P2 控件（右半屏）"""
+        # P1 控件重定位（左半屏 0-640 逻辑坐标）
+        self.joystick = VirtualJoystick(140, BASE_HEIGHT - 120, 70)
+        self.aim_button = AimButton(490, BASE_HEIGHT - 145, 62)
+        self.touch_buttons["shoot"] = TouchButton(490, BASE_HEIGHT - 145, 62, "射击", RED)
+        self.touch_buttons["pause"] = TouchButton(60, 55, 38, "II", GRAY)
+        self.touch_buttons["sprint"] = TouchButton(240, BASE_HEIGHT - 130, 40, "疾跑", AMBER)
+        self.skill_selector = SkillSelector(480, BASE_HEIGHT - 320, 42)
+        self.skill_caster = SkillCaster(550, BASE_HEIGHT - 145, 52)
+        self.throwable_switch_btn = TouchButton(380, BASE_HEIGHT - 320, 42, "投掷", ORANGE)
+        self.throwable_caster = SkillCaster(430, BASE_HEIGHT - 145, 48)
+        self._apply_hud_layout()  # 布局保存仍对 P1 生效（双人默认左半屏）
+        # P2 控件（右半屏 640-1280 逻辑坐标）
+        self.p2_controls = {
+            "joystick": VirtualJoystick(640 + 140, BASE_HEIGHT - 120, 70),
+            "aim": AimButton(640 + 490, BASE_HEIGHT - 145, 62),
+            "shoot": TouchButton(640 + 490, BASE_HEIGHT - 145, 62, "射击", RED),
+            "pause": TouchButton(640 + 60, 55, 38, "II", GRAY),
+            "sprint": TouchButton(640 + 240, BASE_HEIGHT - 130, 40, "疾跑", AMBER),
+            "skill_selector": SkillSelector(640 + 480, BASE_HEIGHT - 320, 42),
+            "skill_caster": SkillCaster(640 + 550, BASE_HEIGHT - 145, 52),
+            "throwable_switch": TouchButton(640 + 380, BASE_HEIGHT - 320, 42, "投掷", ORANGE),
+            "throwable_caster": SkillCaster(640 + 430, BASE_HEIGHT - 145, 48),
+        }
+        self.p2_selected_skill = None
+        self.p2_selected_throwable = "incendiary"
+        self.p2_fire_held = False
+        self._p2_finger_ids = set()  # P2 触控手指（右半屏）
+        logger.info("同屏双人控件初始化完成")
+
+    def _apply_character_bonuses2(self):
+        """应用玩家2的局外角色加成"""
+        cfg = CHARACTERS.get(getattr(self, 'selected_character2', None))
+        if not cfg or not self.player2:
+            return
+        p = self.player2
+        lvl = self.records.get_character_level(getattr(self, 'selected_character2'))
+        scale_lvl = 1 + (lvl - 1) * 0.2
+        hb = int(cfg.get("hp_bonus", 0) * scale_lvl)
+        if hb:
+            p.max_hp += hb
+            p.hp = min(p.hp + hb, p.max_hp)
+        p.base_speed += cfg.get("speed_bonus", 0) * scale_lvl
+        p.speed = p.base_speed
+        p.damage_multiplier *= (1 + cfg.get("damage_bonus", 0))
+        p.crit_bonus_add += cfg.get("crit_bonus", 0)
+        p.health_regen += cfg.get("regen", 0) * scale_lvl
+        p.dmg_reduce += cfg.get("dmg_reduce", 0)
+        p.char_name = getattr(self, 'selected_character2')
+
+    def is_multiplayer_active(self):
+        """是否处于双人/联机游玩中"""
+        return bool(self.player2 is not None)
+
+    def is_network_client_render(self):
+        """是否为网络客户端游玩渲染（快照渲染，无本地世界）"""
+        return self.multiplayer_mode == "network" and self.net_role == "client" and self.state == GameState.NET_CLIENT_PLAY
+
+    def _setup_client_controls(self):
+        """网络客户端输入控件（全屏布局，单人同款）"""
+        from ui import VirtualJoystick, AimButton, TouchButton
+        self.client_joystick = VirtualJoystick(120, BASE_HEIGHT - 120, 70)
+        self.client_aim = AimButton(780, BASE_HEIGHT - 145, 62)
+        self.client_shoot = TouchButton(780, BASE_HEIGHT - 145, 62, "射击", RED)
+        self.client_skill = TouchButton(580, BASE_HEIGHT - 320, 42, "技能", BLUE)
+        self._client_finger_ids = set()
+
+    def _update_net_client(self, dt):
+        """网络客户端：采集本地输入发送给主机，检测断开"""
+        if not self.net_client:
+            self.state = GameState.NET_MULTIPLAYER
+            return
+        snap = self.net_client.get_snapshot()
+        keys = pygame.key.get_pressed()
+        mx = (1 if keys[pygame.K_d] else 0) - (1 if keys[pygame.K_a] else 0)
+        my = (1 if keys[pygame.K_s] else 0) - (1 if keys[pygame.K_w] else 0)
+        shoot = bool(keys[pygame.K_SPACE])
+        skill = bool(keys[pygame.K_e])
+        if self.config.control_mode == ControlMode.TOUCH:
+            for _tev in self.touch_events:
+                if _tev["type"] == "down":
+                    self._client_finger_ids.add(_tev["id"])
+                elif _tev["type"] == "up":
+                    self._client_finger_ids.discard(_tev["id"])
+            self.client_joystick.handle_touch(self.touch_events, self.scale, self._client_finger_ids)
+            self.client_aim.handle_touch(self.touch_events, self.scale)
+            self.client_shoot.handle_touch(self.touch_events, self.scale)
+            self.client_skill.handle_touch(self.touch_events, self.scale)
+            if self.client_joystick.active:
+                dx, dy = self.client_joystick.get_direction()
+                if dx or dy:
+                    mx, my = dx, dy
+            if self.client_aim.is_shooting:
+                shoot = True
+            if self.client_skill.just_released:
+                skill = True
+        # 发送输入帧
+        self.net_client.send_input({
+            "mx": float(mx), "my": float(my),
+            "shoot": bool(shoot), "skill": bool(skill),
+            "throw": False, "sprint": False,
+        })
+        # 主机断开 → 返回联机界面
+        if not self.net_client.connected:
+            self.floating_texts.append(FloatingText(0, 0, "与主机断开连接", color=CRIMSON, lifetime=2.0))
+            self._net_stop()
+            self.state = GameState.NET_MULTIPLAYER
+
+    def _net_send_snapshot(self):
+        """主机：每帧广播世界快照给客户端"""
+        if not self.net_host or not self.net_host.connected or not self.net_started:
+            return
+        try:
+            projs = []
+            for p in self.projectiles[:50]:
+                col = getattr(p, 'color', (255, 255, 255))
+                try:
+                    col = tuple(col)[:3]
+                except Exception:
+                    col = (255, 255, 255)
+                projs.append({"x": p.x, "y": p.y, "size": getattr(p, 'size', 6), "color": list(col)})
+            enems = []
+            for e in self.enemies[:80]:
+                enems.append({"x": e.x, "y": e.y, "hp": getattr(e, 'hp', 0),
+                              "size": getattr(e, 'size', getattr(e, 'radius', 12))})
+            snap = {
+                "started": True,
+                "time_left": getattr(self, 'time_left', 0),
+                "wave": getattr(self, 'wave_count', 0) if hasattr(self, 'wave_count') else 0,
+                "players": [
+                    {"x": self.player.x, "y": self.player.y, "hp": self.player.hp,
+                     "max_hp": self.player.max_hp, "alive": self.player.alive},
+                    {"x": self.player2.x if self.player2 else self.player.x,
+                     "y": self.player2.y if self.player2 else self.player.y,
+                     "hp": self.player2.hp if self.player2 else 0,
+                     "max_hp": self.player2.max_hp if self.player2 else 1,
+                     "alive": bool(self.player2 and self.player2.alive)},
+                ],
+                "enemies": enems,
+                "projectiles": projs,
+            }
+            self.net_host.send_snapshot({"type": "snapshot", "data": snap})
+        except Exception as e:
+            logger.warning(f"快照发送失败: {e}")
+
+    def _get_p2_local_input(self):
+        """同屏双人：P2 键控输入（方向键+J/K/L）"""
+        keys = pygame.key.get_pressed()
+        mx = (1 if keys[pygame.K_RIGHT] else 0) - (1 if keys[pygame.K_LEFT] else 0)
+        my = (1 if keys[pygame.K_DOWN] else 0) - (1 if keys[pygame.K_UP] else 0)
+        shoot = bool(keys[pygame.K_j] or keys[pygame.K_k])
+        skill = bool(keys[pygame.K_u])
+        throw = bool(keys[pygame.K_o])
+        sprint = bool(keys[pygame.K_LSHIFT])
+        return mx, my, shoot, skill, throw, sprint
+
+    def _update_player2(self, dt):
+        """更新第二位玩家：移动/射击/技能/投掷/拾取（同屏键控或网络输入）"""
+        p2 = self.player2
+        if not p2 or not getattr(p2, "alive", True):
+            return
+        # ===== 输入来源 =====
+        if self.multiplayer_mode == "network" and self.net_host:
+            ci = self.net_host.get_input()
+            mx = float(ci.get("mx", 0))
+            my = float(ci.get("my", 0))
+            shoot = bool(ci.get("shoot", False))
+            skill = bool(ci.get("skill", False))
+            throw = bool(ci.get("throw", False))
+            sprint = bool(ci.get("sprint", False))
+        else:
+            # 触控模式：先把触摸事件分发给 P2 控件（右半屏）
+            if self.config.control_mode == ControlMode.TOUCH and self.p2_controls:
+                for _tev in self.touch_events:
+                    if _tev["type"] == "down":
+                        x, y = _tev["pos"]
+                        if x >= self.scaled_width // 2:
+                            self._p2_finger_ids.add(_tev["id"])
+                    elif _tev["type"] == "up":
+                        self._p2_finger_ids.discard(_tev["id"])
+                self.p2_controls["joystick"].handle_touch(self.touch_events, self.scale, self._p2_finger_ids)
+                self.p2_controls["aim"].handle_touch(self.touch_events, self.scale)
+                for name in ("shoot", "sprint", "skill_selector", "skill_caster", "throwable_switch", "throwable_caster"):
+                    self.p2_controls[name].handle_touch(self.touch_events, self.scale)
+            mx, my, shoot, skill, throw, sprint = self._get_p2_local_input()
+            # 触控模式：P2 控件输入（右半屏）
+            if self.config.control_mode == ControlMode.TOUCH and self.p2_controls:
+                joystick2 = self.p2_controls["joystick"]
+                if joystick2.active:
+                    dx, dy = joystick2.get_direction()
+                    if dx or dy:
+                        mx, my = dx, dy
+                aim2 = self.p2_controls["aim"]
+                if aim2.is_shooting:
+                    shoot = True
+                if aim2.is_aiming:
+                    pass
+                if self.p2_controls["sprint"].pressed:
+                    sprint = True
+                if self.p2_controls["skill_caster"].just_released:
+                    skill = True
+                if self.p2_controls["throwable_caster"].just_released:
+                    throw = True
+                # P2 技能切换（短按）
+                if self.p2_controls["skill_selector"].just_released:
+                    sts = p2.skill_tree.get_unlocked_active_skills()
+                    if sts:
+                        if self.p2_selected_skill not in sts:
+                            self.p2_selected_skill = sts[0]
+                        else:
+                            idx = sts.index(self.p2_selected_skill)
+                            self.p2_selected_skill = sts[(idx + 1) % len(sts)]
+                        skill_obj = p2.skill_tree.get_skill(self.p2_selected_skill)
+                        self.floating_texts.append(FloatingText(
+                            p2.x, p2.y - 40,
+                            f"P2技能: {skill_obj.name if skill_obj else '?'}", color=GOLD, lifetime=1.5))
+        # ===== 瞄准角度：触控摇杆 / 最近敌人 / 保持原朝向 =====
+        angle = p2.facing_angle
+        if self.config.control_mode == ControlMode.TOUCH and self.p2_controls:
+            a2 = self.p2_controls["aim"]
+            if a2.active and (a2.knob_offset_x or a2.knob_offset_y):
+                angle = math.degrees(math.atan2(a2.knob_offset_y, a2.knob_offset_x))
+            else:
+                angle = self._p2_auto_aim_angle(p2)
+        else:
+            angle = self._p2_auto_aim_angle(p2)
+        # ===== 移动 =====
+        if mx != 0 or my != 0:
+            p2.update(dt, mx, my, angle, self.world, sprinting=sprint)
+        else:
+            p2.update(dt, 0, 0, angle, self.world, sprinting=sprint)
+        p2.facing_angle = angle
+        # ===== 射击 =====
+        if shoot and p2.can_act():
+            weapon = p2.get_current_weapon()
+            if weapon.can_fire():
+                projs = weapon.fire(
+                    p2.x, p2.y, math.radians(angle),
+                    p2.damage_mult * p2.buff_manager.get_damage_mult() * p2.damage_multiplier,
+                    p2.speed_mult, player=p2)
+                self.projectiles.extend(projs)
+                self.assets.play_sound_random(["shoot_pistol", "melee_swing"])
+        # ===== 技能 =====
+        if skill:
+            st = self.p2_selected_skill
+            if st is None:
+                sts = p2.skill_tree.get_unlocked_active_skills()
+                if sts:
+                    st = sts[0]
+            if st:
+                self._use_skill_p2(st)
+        # ===== 投掷 =====
+        if throw:
+            self._throw_p2()
+        # ===== 拾取 =====
+        self._pickup_for_player(p2)
+        # ===== 受击数字/死亡 =====
+        for dmg, dtype in getattr(p2, 'buff_damage_events', []):
+            if dmg > 0:
+                self.damage_numbers.append(DamageNumber(
+                    p2.x + random.uniform(-15, 15), p2.y - 20, dmg, damage_type=dtype))
+
+    def _p2_auto_aim_angle(self, p2):
+        """P2 自动瞄准：朝向最近敌人"""
+        best = None
+        best_d = 1e9
+        for e in self.enemies:
+            if not getattr(e, 'alive', True):
+                continue
+            d = (e.x - p2.x) ** 2 + (e.y - p2.y) ** 2
+            if d < best_d:
+                best_d = d
+                best = e
+        if best is not None:
+            return math.degrees(math.atan2(best.y - p2.y, best.x - p2.x))
+        return p2.facing_angle
+
+    def _use_skill_p2(self, skill_type):
+        """玩家2使用技能（P2 精简实现，覆盖常用主动技与传说专属技）"""
+        p2 = self.player2
+        if not p2:
+            return
+        if skill_type in p2.active_skills:
+            self.floating_texts.append(FloatingText(p2.x, p2.y - 40, "冷却中...", color=GRAY, lifetime=1.0))
+            return
+        cd = 10.0 * p2.cooldown_mult
+        # 简易执行
+        ok = False
+        if skill_type == SkillType.DASH:
+            ok = True
+            p2.invincible_timer = max(p2.invincible_timer, 0.3)
+            p2.x += math.cos(math.radians(p2.facing_angle)) * 120
+            p2.y += math.sin(math.radians(p2.facing_angle)) * 120
+            cd = 5.0
+        elif skill_type == SkillType.GRENADE:
+            ok = True
+            self._spawn_grenade(p2.x, p2.y, p2.facing_angle, p2)
+            cd = 8.0
+        elif skill_type == SkillType.SHOCKWAVE:
+            ok = True
+            for e in self.enemies:
+                if not getattr(e, 'alive', True): continue
+                if math.hypot(e.x - p2.x, e.y - p2.y) <= 200:
+                    e.take_damage(60 * p2.damage_multiplier, damage_type="aoe")
+                    e.knockdown_timer = 0.8
+            self.slash_arcs.append(SlashArc(p2.x, p2.y, 0, 200, (255, 220, 100), lifetime=0.4, kind="scythe",
+                                            start_radius=150, end_angle_offset=3.0))
+            cd = 12.0
+        elif skill_type == SkillType.ICE_NOVA:
+            ok = True
+            from buff import BuffType
+            for e in self.enemies:
+                if not getattr(e, 'alive', True): continue
+                if math.hypot(e.x - p2.x, e.y - p2.y) <= 240:
+                    e.buff_manager.add_buff(BuffType.FROST, duration=3.0)
+                    e.take_damage(40 * p2.damage_multiplier, damage_type="aoe")
+            cd = 20.0
+        elif skill_type == SkillType.SCYTHE_DANCE:
+            ok = self._skill_p2_scythe_dance(p2)
+            cd = 30.0
+        elif skill_type == SkillType.MINIGUN_OVERDRIVE:
+            p2.overdrive_timer = 5.0
+            p2.overdrive_mult = 3.0
+            ok = True
+            cd = 25.0
+        elif skill_type == SkillType.RAILGUN_ANNIHILATION:
+            ok = True
+            dmg = 300 * p2.damage_multiplier
+            proj = Projectile(p2.x, p2.y, math.cos(math.radians(p2.facing_angle)) * 3,
+                              math.sin(math.radians(p2.facing_angle)) * 3, dmg, 1200, (140, 200, 245), 15,
+                              pierce=99, explosive=True, explosion_radius=90,
+                              is_laser=True, laser_width=50, laser_duration=0.85)
+            self.projectiles.append(proj)
+            cd = 35.0
+        else:
+            self.floating_texts.append(FloatingText(p2.x, p2.y - 40, "该技能暂不支持双人", color=GRAY, lifetime=1.2))
+            return
+        if ok:
+            p2.active_skills[skill_type] = cd
+            self.floating_texts.append(FloatingText(p2.x, p2.y - 45, "技能释放!", color=GOLD, lifetime=1.5))
+
+    def _skill_p2_scythe_dance(self, p2):
+        """P2 死神镰刀专属技能"""
+        radius = 320
+        dmg = 240 * p2.damage_multiplier * p2.buff_manager.get_damage_mult()
+        for e in list(self.enemies):
+            if not getattr(e, 'alive', True): continue
+            if math.hypot(e.x - p2.x, e.y - p2.y) <= radius:
+                e.take_damage(dmg, damage_type="aoe")
+        for i in range(5):
+            ang = (math.pi * 2 / 5) * i
+            self.slash_arcs.append(SlashArc(p2.x, p2.y, ang, radius * 0.8, (190, 80, 230), lifetime=0.55,
+                                            kind="scythe", start_radius=radius * 0.5, end_angle_offset=3.0))
+        self.sweep_rings.append({"x": p2.x, "y": p2.y, "r": radius * 0.3, "max_r": radius,
+                                 "color": (190, 80, 230), "width": 10, "life": 0.5, "max_life": 0.5})
+        return True
+
+    def _spawn_grenade(self, x, y, angle_deg, player):
+        """生成手雷（P2 用）"""
+        ang = math.radians(angle_deg)
+        proj = Projectile(x, y, math.cos(ang) * 12, math.sin(ang) * 12,
+                          250 * player.damage_multiplier, 400, ORANGE, 6,
+                          explosive=True, explosion_radius=180, gravity=0.1)
+        self.projectiles.append(proj)
+
+    def _throw_p2(self):
+        """P2 投掷物释放（简化：燃烧弹）"""
+        p2 = self.player2
+        if not p2:
+            return
+        ang = math.radians(p2.facing_angle)
+        proj = Projectile(p2.x, p2.y, math.cos(ang) * 10, math.sin(ang) * 10,
+                          30, 300, (255, 100, 0), 6, is_flame=True)
+        self.projectiles.append(proj)
+        self.assets.play_sound("grenade_throw")
+
+    def _pickup_for_player(self, player):
+        """玩家拾取掉落物（world.items）"""
+        items = getattr(getattr(self, 'world', None), 'items', None)
+        if not items:
+            return
+        for drop in list(items):
+            d = math.hypot(drop.x - player.x, drop.y - player.y)
+            if d <= getattr(player, 'pickup_range', 50):
+                self._collect_drop(drop, player)
+
+    def _collect_drop(self, drop, player):
+        """拾取掉落物（玩家参数化版）"""
+        try:
+            from codex import PICKABLE_TEXTS
+            from config import ItemType
+            if drop.item_type == ItemType.HEALTH_PACK:
+                player.heal(30)
+                self.floating_texts.append(FloatingText(drop.x, drop.y - 20, "+30HP", color=GREEN, lifetime=1.2))
+            elif drop.item_type == ItemType.AMMO_BOX:
+                for w in player.weapons:
+                    if hasattr(w, 'current_ammo') and w.current_ammo != "∞":
+                        w.current_ammo = min(w.max_ammo, w.current_ammo + 15)
+            elif drop.item_type == ItemType.SPEED_BOOST:
+                player.speed = player.base_speed * 1.5
+                self.floating_texts.append(FloatingText(drop.x, drop.y - 20, "加速!", color=AMBER, lifetime=1.2))
+            elif drop.item_type == ItemType.EXP_BOOST:
+                pass
+            if drop.alive:
+                drop.alive = False
+            if drop in list(getattr(getattr(self, 'world', None), 'items', [])):
+                self.world.items.remove(drop)
+        except Exception:
+            pass
+
     def _setup_menus(self):
         cx = BASE_WIDTH // 2 - 100
         self.menu_buttons = [
@@ -507,6 +944,24 @@ class Game:
             Button(cx, 330, 220, 55, "无尽模式", color=CRIMSON),
             Button(cx, 410, 220, 55, "限时模式", color=BLUE),
             Button(cx, 500, 200, 45, "返回", color=RED),
+        ]
+        # 开始游戏分流：单人 / 多人
+        self.play_select_buttons = [
+            Button(cx, 250, 220, 55, "单人游戏", color=GREEN),
+            Button(cx, 330, 220, 55, "多人游戏", color=CYAN),
+            Button(cx, 420, 200, 45, "返回", color=RED),
+        ]
+        # 多人游戏：同屏双人 / 网络联机
+        self.multiplayer_select_buttons = [
+            Button(cx, 240, 240, 55, "同屏双人", color=GOLD),
+            Button(cx, 320, 240, 55, "网络联机", color=BLUE),
+            Button(cx, 420, 200, 45, "返回", color=RED),
+        ]
+        # 网络联机：创建房间 / 加入房间
+        self.net_mp_buttons = [
+            Button(cx, 240, 240, 55, "创建房间(主机)", color=GREEN),
+            Button(cx, 320, 240, 55, "加入房间(客户端)", color=GOLD),
+            Button(cx, 420, 200, 45, "返回", color=RED),
         ]
         # 剧情资料库相关
         self.story_archive_scroll = 0
@@ -1079,6 +1534,13 @@ class Game:
             logger.info(f"世界创建完成，地图: {self.map_config['name']}")
 
             self.player = Player(0, 0, start_weapon=self.selected_weapon, start_weapon_level=self.selected_weapon_level)
+            # 双人模式：P1 实际武器/角色来自第一轮选择
+            if self.multiplayer_mode in ("same_screen", "network"):
+                if getattr(self, 'selected_weapon_p1', None):
+                    self.player = Player(0, 0, start_weapon=self.selected_weapon_p1,
+                                         start_weapon_level=self.selected_weapon_level)
+                if getattr(self, 'selected_char_p1', None):
+                    self.selected_character = self.selected_char_p1
             # 加载跨局永久符文(可升级)到本局符文管理器
             self._load_permanent_runes()
             # 应用符文属性加成（需在玩家初始化后）
@@ -1118,6 +1580,27 @@ class Game:
             self.last_boss_death_pos = None
             self.camera = Camera(BASE_WIDTH, BASE_HEIGHT)
             self.camera.shake_enabled = self.config.screen_shake
+            # ===== 多人模式：创建第二位玩家 + 第二摄像机 =====
+            if self.multiplayer_mode in ("same_screen", "network"):
+                p1_w = getattr(self, 'selected_weapon_p1', None) or self.selected_weapon
+                p2_w = getattr(self, 'selected_weapon_p2', None) or self.selected_weapon
+                p2_char = getattr(self, 'selected_char_p2', None)
+                try:
+                    self.player2 = Player(self.player.x + 60, self.player.y, start_weapon=p2_w,
+                                          start_weapon_level=getattr(self, 'selected_weapon_p2_level', 1))
+                    if p2_char:
+                        self.selected_character2 = p2_char
+                        self._apply_character_bonuses2()
+                except Exception as e:
+                    logger.warning(f"创建玩家2失败: {e}")
+                    self.player2 = None
+                self.camera2 = Camera(BASE_WIDTH, BASE_HEIGHT)
+                self.camera2.shake_enabled = self.config.screen_shake
+                self._setup_multiplayer_controls()
+            else:
+                self.player2 = None
+                self.camera2 = None
+                self.p2_controls = None
             self.particles = ParticleSystem()
             self.lifesteal_flash = 0.0  # 吸血屏幕效果强度(0-1)
             # 屏幕血渍系统（持久化，受伤时添加，随时间淡出流淌）
@@ -1494,18 +1977,45 @@ class Game:
             self.session.set_ending(self.ending_type)
 
     # ========== 技能系统 ==========
+    # 传说级武器 → 专属技能映射（持有对应武器自动解锁，等级随武器等级成长）
+    LEGENDARY_WEAPON_SKILLS = {
+        "SCYTHE": SkillType.SCYTHE_DANCE,
+        "MINIGUN": SkillType.MINIGUN_OVERDRIVE,
+        "RAILGUN": SkillType.RAILGUN_ANNIHILATION,
+    }
+
+    def _sync_legendary_skill_level(self):
+        """传说专属技能等级与当前武器等级同步"""
+        if not self.player:
+            return None
+        try:
+            w = self.player.get_current_weapon()
+            ls = self.LEGENDARY_WEAPON_SKILLS.get(w.weapon_type.name)
+            if ls:
+                sk = self.player.skill_tree.get_skill(ls)
+                if sk:
+                    sk.current_level = min(sk.max_level, max(1, int(getattr(w, 'level', 1))))
+                    return ls
+        except Exception:
+            pass
+        return None
+
     def _get_unlocked_skills(self):
-        """获取已解锁的主动技能列表"""
+        """获取已解锁的主动技能列表（基础 + 传说武器专属）"""
         if not self.player:
             return [SkillType.GRENADE]
-        return self.player.skill_tree.get_unlocked_active_skills()
+        skills = list(self.player.skill_tree.get_unlocked_active_skills())
+        ls = self._sync_legendary_skill_level()
+        if ls and ls not in skills:
+            skills.append(ls)
+        return skills
 
     def _get_unlocked_skill_objects(self):
         """获取已解锁的主动技能对象列表（用于轮盘显示）"""
         if not self.player:
             return []
-        skill_types = self.player.skill_tree.get_unlocked_active_skills()
-        return [self.player.skill_tree.get_skill(st) for st in skill_types if self.player.skill_tree.get_skill(st)]
+        unlocked = self._get_unlocked_skills()
+        return [self.player.skill_tree.get_skill(st) for st in unlocked if self.player.skill_tree.get_skill(st)]
 
     def _get_skill_max_distance(self, skill_type):
         """获取技能的最大瞄准距离"""
@@ -1533,6 +2043,7 @@ class Game:
             return False
         if not self.player.can_act():
             return False
+        self._sync_legendary_skill_level()  # 传说专属技能等级与武器同步
 
         skill = self.player.skill_tree.get_skill(skill_type)
         if not skill or skill.current_level == 0:
@@ -1570,6 +2081,9 @@ class Game:
             SkillType.SHOCKWAVE: 12.0,
             SkillType.WAR_CRY: 25.0,
             SkillType.PURIFY: 35.0,
+            SkillType.SCYTHE_DANCE: 30.0,
+            SkillType.MINIGUN_OVERDRIVE: 25.0,
+            SkillType.RAILGUN_ANNIHILATION: 35.0,
         }
         cd = cooldowns.get(skill_type, 10.0) * self.player.cooldown_mult
 
@@ -1599,6 +2113,7 @@ class Game:
             return False
         if not self.player.can_act():
             return False
+        self._sync_legendary_skill_level()  # 传说专属技能等级与武器同步
 
         skill = self.player.skill_tree.get_skill(skill_type)
         if not skill or skill.current_level == 0:
@@ -1717,6 +2232,12 @@ class Game:
             return self._skill_war_cry()
         elif skill_type == SkillType.PURIFY:
             return self._skill_purify()
+        elif skill_type == SkillType.SCYTHE_DANCE:
+            return self._skill_scythe_dance()
+        elif skill_type == SkillType.MINIGUN_OVERDRIVE:
+            return self._skill_minigun_overdrive()
+        elif skill_type == SkillType.RAILGUN_ANNIHILATION:
+            return self._skill_railgun_annihilation()
         return False
 
     def _skill_dash(self):
@@ -2549,6 +3070,89 @@ class Game:
         self.assets.play_sound("pickup_item")
         return True
 
+    # ========== 传说级武器专属技能 ==========
+    def _legendary_skill_level(self, skill_type):
+        """读取传说专属技能当前等级（与武器等级同步）"""
+        try:
+            sk = self.player.skill_tree.get_skill(skill_type)
+            if sk:
+                return max(1, min(sk.max_level, sk.current_level))
+        except Exception:
+            pass
+        return 1
+
+    def _skill_scythe_dance(self):
+        """死神镰刀专属·死亡轮回：360°满月斩风暴，多段收割周围所有敌人"""
+        lv = self._legendary_skill_level(SkillType.SCYTHE_DANCE)
+        seg = {1: 3, 2: 4, 3: 5, 4: 6, 5: 8}[lv]
+        radius = {1: 300, 2: 320, 3: 340, 4: 360, 5: 400}[lv]
+        dmg = 60 * seg
+        dmg *= (self.player.damage_multiplier *
+                self.player.buff_manager.get_damage_mult() *
+                getattr(self.player, 'damage_mult', 1.0))
+        # 对范围内所有敌人造成多段收割伤害
+        for e in list(self.enemies):
+            if not getattr(e, 'alive', True):
+                continue
+            if math.hypot(e.x - self.player.x, e.y - self.player.y) <= radius:
+                e.take_damage(dmg, damage_type="aoe")
+        # 特效：满月紫刃 × seg 道 + 双层扩散环 + 屏幕震动
+        for i in range(seg):
+            ang = (math.pi * 2 / seg) * i + random.uniform(-0.12, 0.12)
+            self.slash_arcs.append(SlashArc(
+                self.player.x, self.player.y, ang, radius * 0.85,
+                (190, 80, 230), lifetime=0.6, kind="scythe",
+                start_radius=radius * 0.5, end_angle_offset=3.0))
+        for rr, tt in ((radius, 0.55), (radius * 0.65, 0.7)):
+            self.sweep_rings.append({
+                "x": self.player.x, "y": self.player.y,
+                "r": rr * 0.3, "max_r": rr, "color": (190, 80, 230),
+                "width": max(5, int(rr * 0.05)), "life": tt, "max_life": tt,
+            })
+        self.camera.shake(14, 0.5)
+        self.particles.spawn(self.player.x, self.player.y, (200, 110, 245), 40, (2, 7), (-6, 6), (0.3, 0.9))
+        self.assets.play_sound_random(["melee_swing", "scythe_sweep", "shoot_pistol"])
+        self.floating_texts.append(FloatingText(
+            self.player.x, self.player.y - 55, "死亡轮回！", color=(210, 130, 250), lifetime=1.6))
+        return True
+
+    def _skill_minigun_overdrive(self):
+        """加特林专属·过热倾泻：射速暴增 + 弹药无限"""
+        lv = self._legendary_skill_level(SkillType.MINIGUN_OVERDRIVE)
+        dur = {1: 3.0, 2: 4.0, 3: 5.0, 4: 6.0, 5: 8.0}[lv]
+        mult = {1: 2.5, 2: 3.0, 3: 3.5, 4: 4.0, 5: 4.5}[lv]
+        self.player.overdrive_timer = dur
+        self.player.overdrive_mult = mult
+        self.player.overdrive_burn = (lv >= 4)
+        self.floating_texts.append(FloatingText(
+            self.player.x, self.player.y - 55, f"过热倾泻 ×{mult:.1f}！", color=(255, 160, 60), lifetime=1.6))
+        self.particles.spawn(self.player.x, self.player.y, (255, 170, 60), 30, (2, 6), (-5, 5), (0.2, 0.7))
+        self.assets.play_sound("minigun")
+        return True
+
+    def _skill_railgun_annihilation(self):
+        """轨道炮专属·湮灭射线：超粗贯穿激光 + 命中爆炸"""
+        lv = self._legendary_skill_level(SkillType.RAILGUN_ANNIHILATION)
+        width = {1: 40, 2: 40, 3: 55, 4: 70, 5: 85}[lv]
+        dmg = 300
+        dmg *= (self.player.damage_multiplier *
+                self.player.buff_manager.get_damage_mult() *
+                getattr(self.player, 'damage_mult', 1.0))
+        angle = math.radians(self.player.facing_angle)
+        proj = Projectile(
+            self.player.x, self.player.y,
+            math.cos(angle) * 3, math.sin(angle) * 3,
+            dmg, 1200, (140, 200, 245), 15, pierce=99,
+            explosive=True, explosion_radius=90 + 30 * (lv >= 3),
+            is_laser=True, laser_width=width, laser_duration=0.85)
+        self.projectiles.append(proj)
+        self.camera.shake(20, 0.7)
+        self.particles.spawn(self.player.x, self.player.y, (160, 210, 255), 30, (2, 8), (-8, 8), (0.3, 1.0))
+        self.assets.play_sound_random(["railgun", "shoot_pistol"])
+        self.floating_texts.append(FloatingText(
+            self.player.x, self.player.y - 55, "湮灭射线！", color=(170, 220, 255), lifetime=1.6))
+        return True
+
     def _reset_touch_controls(self):
         """重置所有触控控件状态（状态切换时调用，防止摇杆卡死）"""
         try:
@@ -2983,8 +3587,29 @@ class Game:
         return mouse_pos, mouse_pressed
 
     # ================= 开发者测试模式 =================
+    def _handle_net_ip_keyboard(self, events):
+        """网络联机界面 IP 输入框：聚焦时接受系统输入法输入"""
+        for ev in events:
+            if ev.type == pygame.TEXTINPUT:
+                if len(self.net_ip_input) < 30:
+                    self.net_ip_input += ev.text
+            elif ev.type == pygame.KEYDOWN:
+                if ev.key == pygame.K_RETURN:
+                    self.net_ip_focused = False
+                    self.stop_text_input()
+                    self._net_join()
+                elif ev.key == pygame.K_BACKSPACE:
+                    self.net_ip_input = self.net_ip_input[:-1]
+                elif ev.key == pygame.K_ESCAPE:
+                    self.net_ip_focused = False
+                    self.stop_text_input()
+
     def _handle_dev_keys(self, events):
         """处理开发者密码输入与局内调试面板开关（键盘）"""
+        # 网络联机 IP 输入框：聚焦时优先接受系统输入法输入
+        if self.state == GameState.NET_MULTIPLAYER and self.net_ip_focused:
+            self._handle_net_ip_keyboard(events)
+            return
         if self.dev_input_active:
             for ev in events:
                 # SDL_IME 系统输入法：TEXTINPUT 是最终合成字符事件（含中文候选），
@@ -4971,9 +5596,14 @@ class Game:
 
         if self.state == GameState.PLAYING:
             self._update_playing(dt)
+            # 主机广播世界快照给客户端
+            if self.multiplayer_mode == "network" and self.net_role == "host" and self.net_started:
+                self._net_send_snapshot()
             # 开发者调试面板
             if self.dev_mode and self.dev_panel_open:
                 self._update_dev_panel(pygame.mouse.get_pos(), pygame.mouse.get_pressed(), self.touch_events, self.scale)
+        elif self.state == GameState.NET_CLIENT_PLAY:
+            self._update_net_client(dt)
         elif self.state == GameState.DIALOGUE:
             self.dialogue.update(dt)
         elif self.state == GameState.SKILL_SELECT:
@@ -5285,6 +5915,16 @@ class Game:
         self.player.speed_mult = orig_speed_mult
         # 盾牌冲撞更新（移动+碰撞伤害）
         self._update_charge(dt)
+        # 过热倾泻：计时 + 射速加成（冷却额外递减）+ 灼烧枪口特效
+        if getattr(self.player, 'overdrive_timer', 0) > 0:
+            self.player.overdrive_timer -= dt
+            if self.player.overdrive_timer <= 0:
+                self.player.overdrive_timer = 0
+                self.player.overdrive_burn = False
+            _ow = self.player.get_current_weapon()
+            if _ow and _ow.cooldown_timer > 0:
+                _ow.cooldown_timer -= (getattr(self.player, 'overdrive_mult', 2.0) - 1.0) * dt
+            self.particles.spawn(self.player.x, self.player.y, (255, 160, 60), 2, (1, 3), (-2, 2), (0.1, 0.4))
         # 显示玩家受到的buff伤害数字
         for dmg, dtype in getattr(self.player, 'buff_damage_events', []):
             if dmg > 0:
@@ -5365,6 +6005,9 @@ class Game:
         if auto_shoot and self.player.can_act() and not self.player.riot_gear.equipped and self.riot_anim_state != "equipping":
             weapon = self.player.get_current_weapon()
             if weapon.can_fire():
+                # 过热倾泻buff：无限弹药
+                if getattr(self.player, 'overdrive_timer', 0) > 0 and hasattr(weapon, 'current_ammo') and weapon.current_ammo != "∞":
+                    weapon.current_ammo = min(weapon.max_ammo, weapon.current_ammo + 1)
                 # 符文伤害加成
                 rune_dmg_mult = 1.0 + getattr(self, 'rune_buffs', {}).get("damage", 0)
                 trigger_hook(HOOK_PLAYER_FIRE, weapon, self.player)
@@ -5374,6 +6017,10 @@ class Game:
                     player=self.player
                 )
                 self.projectiles.extend(proj_list)
+                # 过热倾泻灼烧：子弹附带火焰
+                if getattr(self.player, 'overdrive_burn', False):
+                    for _p in proj_list:
+                        _p.is_flame = True
                 
                 # 近战武器攻击处理
                 if getattr(weapon, "melee_attack_triggered", False):
@@ -5484,8 +6131,16 @@ class Game:
 
         # 更新敌人
         for enemy in self.enemies[:]:
-            # 选择最近的玩家作为目标
-            target_x, target_y, target_obj = self.player.x, self.player.y, self.player
+            # 选择最近的玩家作为目标（双人模式支持多目标）
+            if self.player2:
+                d1 = (enemy.x - self.player.x) ** 2 + (enemy.y - self.player.y) ** 2
+                d2 = (enemy.x - self.player2.x) ** 2 + (enemy.y - self.player2.y) ** 2
+                if d2 < d1:
+                    target_x, target_y, target_obj = self.player2.x, self.player2.y, self.player2
+                else:
+                    target_x, target_y, target_obj = self.player.x, self.player.y, self.player
+            else:
+                target_x, target_y, target_obj = self.player.x, self.player.y, self.player
             try:
                 trigger_hook(HOOK_ENEMY_UPDATE, enemy, dt)
             except Exception:
@@ -6422,8 +7077,12 @@ class Game:
 
         # 摄像机跟随
         self.camera.follow(self.player.x, self.player.y, dt)
+        if self.player2:
+            if self.camera2:
+                self.camera2.follow(self.player2.x, self.player2.y, dt)
+            self._update_player2(dt)
 
-        if self.player.hp <= 0:
+        if self.player.hp <= 0 or (self.player2 and self.player2.hp <= 0):
             # 单人模式：正常游戏结束
             if self.session:
                 self.session.set_died(True)
@@ -6741,7 +7400,87 @@ class Game:
         if self.selected_character and not self.records.is_character_owned(self.selected_character):
             self.equip_hover = "请先解锁所选角色"
             return
+        # ===== 多人模式：P1/P2 两轮选择 =====
+        if self.multiplayer_mode in ("same_screen", "network"):
+            if not self.equip_p2_phase:
+                self.selected_weapon_p1 = self.selected_weapon
+                self.selected_char_p1 = self.selected_character
+                self.selected_weapon_p1_level = self.selected_weapon_level
+                self.equip_p2_phase = True
+                self.selected_weapon = None
+                self.selected_character = None
+                self.selected_weapon_level = 1
+                self.equip_hover = "轮到玩家2选择装备"
+                self.equip_tab_weapon = True
+                return
+            self.selected_weapon_p2 = self.selected_weapon
+            self.selected_char_p2 = self.selected_character
+            self.selected_weapon_p2_level = self.selected_weapon_level
+            self.equip_p2_phase = False
         self.start_game()
+
+    # ===== 网络联机 =====
+    def _get_local_ip(self):
+        """获取本机局域网IP"""
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            return ip
+        except Exception:
+            return "127.0.0.1"
+
+    def _net_start_host(self):
+        """启动主机监听"""
+        from net import NetHost
+        self._net_stop()
+        self.net_role = "host"
+        self.net_host = NetHost(self.net_port)
+        if self.net_host.start():
+            self.state = GameState.NET_WAIT
+            self.floating_texts = []
+        else:
+            self.net_role = None
+            self.net_host = None
+
+    def _net_join(self):
+        """以客户端身份连接主机"""
+        from net import NetClient
+        self._net_stop()
+        self.net_role = "client"
+        ip = (self.net_ip_input or "127.0.0.1").strip()
+        self.net_client = NetClient(ip, self.net_port)
+        ok = self.net_client.start()
+        if not ok:
+            self.net_role = None
+            self.net_client = None
+            self.state = GameState.NET_MULTIPLAYER
+            return
+        self.state = GameState.NET_WAIT
+
+    def _net_stop(self):
+        """停止网络会话（返回联机界面）"""
+        if self.net_host:
+            self.net_host.stop()
+            self.net_host = None
+        if self.net_client:
+            self.net_client.stop()
+            self.net_client = None
+        self.net_role = None
+        self.net_started = False
+        self.state = GameState.NET_MULTIPLAYER
+
+    def _net_host_start_game(self):
+        """主机：客户端已连接，进入装备选择（P1/P2），完成后开始双人网络游戏"""
+        if not self.net_host or not self.net_host.connected:
+            return
+        self.multiplayer_mode = "network"
+        self.net_started = True
+        self.equip_p2_phase = False
+        self.selected_weapon = None
+        self.selected_character = None
+        self.state = GameState.EQUIP_SELECT
 
     def _apply_character_bonuses(self):
         """应用局外角色特殊能力加成（按角色等级缩放）"""

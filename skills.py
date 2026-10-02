@@ -10,7 +10,8 @@ class Skill:
                  icon_color=WHITE, requires=None, is_active=False,
                  level_descriptions=None, effect_key=None, effect_per_level=None,
                  weight=1.0, base_damage=0, damage_per_level=0,
-                 base_radius=0, radius_per_level=0, max_level_bonus=None):
+                 base_radius=0, radius_per_level=0, max_level_bonus=None,
+                 is_legendary=False):
         self.skill_type = skill_type
         self.name = name
         self.description = description
@@ -19,6 +20,7 @@ class Skill:
         self.icon_color = icon_color
         self.requires = requires or []
         self.is_active = is_active
+        self.is_legendary = is_legendary
         # 等级词条：{等级: 描述}，高等级技能显示不同词条
         self.level_descriptions = level_descriptions or {}
         # 效果属性键（用于属性详情显示）
@@ -428,6 +430,22 @@ class SkillTree:
                                       3: "狂热：装备时体力+75，回复+12/s", 4: "暴走：装备时体力+100，回复+16/s",
                                       5: "极限：装备时体力+125，回复+20/s"},
                   effect_key="stamina", effect_per_level=25),
+            # === 传说级武器专属技能（不出现在技能卡池，持有对应武器自动解锁，等级=武器等级）===
+            Skill(SkillType.SCYTHE_DANCE, "死亡轮回", "死神镰刀专属：360°满月斩风暴，对周围所有敌人造成多段收割伤害", 5,
+                  icon_color=(190, 80, 230), requires=[], is_active=True, is_legendary=True,
+                  level_descriptions={1: "死亡轮回·初醒：3段收割，范围300", 2: "死亡轮回·侵蚀：4段收割，范围320",
+                                      3: "死亡轮回·深渊：5段收割，范围340", 4: "死亡轮回·终焉：6段收割，范围360",
+                                      5: "死亡轮回·神陨：8段收割，范围400，每段附带吸血"}),
+            Skill(SkillType.MINIGUN_OVERDRIVE, "过热倾泻", "加特林专属：过热爆发，射速暴增3倍且弹药无限，持续6秒", 5,
+                  icon_color=(235, 120, 50), requires=[], is_active=True, is_legendary=True,
+                  level_descriptions={1: "过热·预热：射速×2.5，无限弹3秒", 2: "过热·燃烧：射速×3，无限弹4秒",
+                                      3: "过热·沸腾：射速×3.5，无限弹5秒", 4: "过热·熔毁：射速×4，无限弹6秒，子弹附带灼烧",
+                                      5: "过热·湮灭：射速×4.5，无限弹8秒，子弹灼烧+暴击+50%"}),
+            Skill(SkillType.RAILGUN_ANNIHILATION, "湮灭射线", "轨道炮专属：蓄能后轰出超粗贯穿射线，命中处剧烈爆炸", 5,
+                  icon_color=(140, 200, 245), requires=[], is_active=True, is_legendary=True,
+                  level_descriptions={1: "湮灭·穿透：宽40激光，贯穿一切", 2: "湮灭·迸裂：激光命中处爆炸",
+                                      3: "湮灭·超载：宽55激光，爆炸范围+40%", 4: "湮灭·坍缩：宽70激光，命中区域灼烧",
+                                      5: "湮灭·末日：宽85激光，贯穿+爆炸+灼烧+短暂黑洞"}),
         ]
 
     def get_skill(self, skill_type):
@@ -455,6 +473,8 @@ class SkillTree:
         """获取当前可升级的技能列表"""
         available = []
         for skill in self.skills:
+            if getattr(skill, "is_legendary", False):
+                continue  # 传说专属技能不出现在技能卡池（等级随武器等级成长）
             if not skill.is_maxed() and skill.can_upgrade(self.skills):
                 available.append(skill)
         return available

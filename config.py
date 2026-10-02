@@ -182,6 +182,11 @@ class GameState(Enum):
     RUNE_VIEW = auto()  # 新增：符文查看界面（玩家拥有符文+详情）
     EQUIP_SELECT = auto()  # 新增：局外装备选择（武器+角色，开始游戏前）
     HUD_EDIT = auto()  # 新增：HUD触控按钮自定义布局编辑
+    PLAY_SELECT = auto()  # 新增：开始游戏 → 单人/多人选择
+    MULTIPLAYER_SELECT = auto()  # 新增：多人 → 同屏双人/网络联机选择
+    NET_MULTIPLAYER = auto()  # 新增：网络联机（创建/加入房间）
+    NET_WAIT = auto()  # 新增：网络等待（主机等待客户端/客户端连接中）
+    NET_CLIENT_PLAY = auto()  # 新增：客户端游玩（渲染主机快照）
 
 
 class ControlMode(Enum):
@@ -712,6 +717,10 @@ class SkillType(Enum):
     PURIFY = auto()            # 净化 - 清除debuff并短暂无敌
     ELEMENTAL_MASTERY = auto() # 元素精通 - 增强debuff效果
     ADRENALINE = auto()        # 肾上腺素 - 装备防爆套装时体力上限和回复提升
+    # 传说级武器专属技能（持有对应武器自动解锁，等级随武器等级成长）
+    SCYTHE_DANCE = auto()      # 死神镰刀·死亡轮回 - 360°满月斩收割周围一切
+    MINIGUN_OVERDRIVE = auto() # 加特林·过热倾泻 - 射速暴增+弹药无限
+    RAILGUN_ANNIHILATION = auto() # 轨道炮·湮灭射线 - 超粗贯穿射线+爆炸
 
 
 # ==================== 局外商店：武器价格（金币） ====================
