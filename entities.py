@@ -957,6 +957,9 @@ class Player:
             pass
 
     def take_damage(self, damage, damage_type="melee", from_front=False, attack_x=None, attack_y=None):
+        # 开发者模式：无敌
+        if getattr(self, 'dev_god', False):
+            return 0
         # 角色受伤减免（如铁壁）
         dmg_reduce = getattr(self, 'dmg_reduce', 0.0)
         if dmg_reduce > 0:
@@ -1261,40 +1264,40 @@ class Enemy:
                 "is_phantom": True, "invisible_duration": 2.0, "visible_duration": 3.0
             },
             EnemyType.BOSS_LONG: {
-                "hp": 3000, "speed": 1.5, "damage": 50, "size": 35,
+                "hp": 6000, "speed": 1.5, "damage": 75, "size": 35,
                 "color": BLOOD_RED, "exp": 500, "score": 1000,
                 "is_boss": True, "name": "龙某"
             },
             EnemyType.BOSS_XIANG: {
-                "hp": 2500, "speed": 1.8, "damage": 30, "size": 32,
+                "hp": 5000, "speed": 1.8, "damage": 55, "size": 32,
                 "color": RUST, "exp": 500, "score": 1000,
                 "is_boss": True, "name": "向某"
             },
             # === 新Boss ===
             EnemyType.BOSS_MUTANT: {
-                "hp": 4000, "speed": 2.2, "damage": 45, "size": 38,
+                "hp": 8000, "speed": 2.2, "damage": 70, "size": 38,
                 "color": BLOOD_RED, "exp": 800, "score": 1500,
                 "is_boss": True, "name": "变异体-深渊",
-                "has_combo": True, "combo_damage_mult": 2.5,
+                "has_combo": True, "combo_damage_mult": 3.0,
             },
             EnemyType.BOSS_QUEEN: {
-                "hp": 3500, "speed": 1.3, "damage": 25, "size": 40,
+                "hp": 7000, "speed": 1.3, "damage": 45, "size": 40,
                 "color": PURPLE, "exp": 800, "score": 1500,
                 "is_boss": True, "name": "尸潮女王",
                 "summons_minions": True, "summon_interval": 8.0,
             },
             EnemyType.BOSS_TITAN: {
-                "hp": 6000, "speed": 0.9, "damage": 70, "size": 50,
+                "hp": 12000, "speed": 0.9, "damage": 110, "size": 50,
                 "color": CHARCOAL, "exp": 1000, "score": 2000,
                 "is_boss": True, "name": "泰坦",
-                "is_titan": True, "stomp_damage": 120, "stomp_radius": 150,
+                "is_titan": True, "stomp_damage": 200, "stomp_radius": 150,
             },
             EnemyType.BOSS_WANG: {
-                "hp": 5200, "speed": 1.6, "damage": 40, "size": 36,
+                "hp": 10000, "speed": 1.6, "damage": 70, "size": 36,
                 "color": (70, 70, 80), "exp": 1200, "score": 2500,
                 "is_boss": True, "name": "王某",
                 "has_gunfire": True, "has_scythe": True,
-                "scythe_damage_mult": 3.0,
+                "scythe_damage_mult": 3.6,
             },
             # === 精英怪 ===
             EnemyType.ELITE_BRUTE: {
@@ -1683,6 +1686,12 @@ class Enemy:
         # ========= 处决前摇处理 =========
         if self.boss_is_executing:
             self.boss_execution_windup -= dt
+            # 处决前摇期间Boss缓慢追踪玩家，避免处决落空
+            if self.boss_execution_windup > 0:
+                _dd = math.hypot(player_x - self.x, player_y - self.y)
+                if _dd > 0:
+                    self.x += (player_x - self.x) / _dd * self.speed * 1.7 * dt * 60
+                    self.y += (player_y - self.y) / _dd * self.speed * 1.7 * dt * 60
             if self.boss_execution_windup <= 0:
                 self.boss_is_executing = False
                 # 根据boss类型返回处决攻击标记

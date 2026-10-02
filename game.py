@@ -306,6 +306,19 @@ class Game:
         self.touch_stuck_timeout = 4.0   # 手指静默多少秒后强制释放（防事件彻底丢失卡死，可调）
         self._setup_touch_controls()
 
+        # ===== 开发者测试模式（不公开，主菜单连点版本号+密码进入）=====
+        self.dev_mode = False            # 是否已进入开发者模式
+        self.dev_click_count = 0         # 主菜单版本号连点计数
+        self.dev_click_timer = 0.0       # 连点窗口计时
+        self.dev_input_active = False    # 密码输入框是否激活
+        self.dev_input_str = ""          # 已输入密码
+        self.dev_panel_open = False      # 局内调试面板开关
+        self.dev_god = False             # 无敌
+        self.dev_time_scale = 1.0        # 时间倍率（局内已支持，见 run()）
+        self.dev_buttons = []            # 局内调试面板按钮
+        self._DEV_PASSWORD = "dev4372"   # 开发者密码
+        self.update_status_text = ""     # 主菜单提示文本
+
         #键鼠相关【新版：Tab/R只有短按；G支持短按快放 / 长按瞄准】
         self.key_g_press_start = 0.0
         self.key_g_long_threshold = 0.4
@@ -2563,6 +2576,9 @@ class Game:
         mouse_pos = pygame.mouse.get_pos()
         mouse_pressed = pygame.mouse.get_pressed()
 
+        # 开发者模式：密码输入 / 局内面板开关
+        self._handle_dev_keys(all_events)
+
         # 技能卡选择界面
         if self.state == GameState.SKILL_SELECT:
             for event in all_events:
@@ -2891,6 +2907,115 @@ class Game:
                 logger.debug(f"手指抬起: ({x:.0f}, {y:.0f}), id={event.finger_id}")
 
         return mouse_pos, mouse_pressed
+
+    # ================= 开发者测试模式 =================
+    def _handle_dev_keys(self, events):
+        """处理开发者密码输入与局内调试面板开关（键盘）"""
+        if self.dev_input_active:
+            for ev in events:
+                if ev.type == pygame.KEYDOWN:
+                    if ev.key == pygame.K_RETURN:
+                        if self.dev_input_str == self._DEV_PASSWORD:
+                            self.dev_mode = True
+                            self.dev_input_active = False
+                            self.dev_input_str = ""
+                            self.update_status_text = "开发者模式已开启！局内按 T 键打开调试面板"
+                        else:
+                            self.dev_input_active = False
+                            self.dev_input_str = ""
+                            self.update_status_text = "密码错误，请重试（连点版本号重新输入）"
+                    elif ev.key == pygame.K_BACKSPACE:
+                        self.dev_input_str = self.dev_input_str[:-1]
+                    elif ev.unicode and ev.unicode.isprintable():
+                        if len(self.dev_input_str) < 16:
+                            self.dev_input_str += ev.unicode
+            return
+        for ev in events:
+            if ev.type == pygame.KEYDOWN and ev.key == pygame.K_t:
+                if self.state == GameState.PLAYING and self.dev_mode:
+                    self.dev_panel_open = not self.dev_panel_open
+                    self._rebuild_dev_buttons()
+
+    def _rebuild_dev_buttons(self):
+        """重建局内调试面板按钮（依据当前 dev 状态）"""
+        # Button 已在 game.py 顶部 from ui import 导入
+        self.dev_buttons = [
+            Button(0, 0, 150, 36, f"无敌:{'开' if self.dev_god else '关'}", color=(60, 60, 220)),
+            Button(0, 0, 150, 36, f"倍率:x{self.dev_time_scale}", color=(40, 140, 80)),
+            Button(0, 0, 150, 36, "生成Boss", color=(180, 60, 60)),
+            Button(0, 0, 150, 36, "生成精英", color=(120, 80, 160)),
+            Button(0, 0, 150, 36, "生成小怪", color=(90, 130, 80)),
+            Button(0, 0, 150, 36, "清空敌人", color=(120, 120, 130)),
+            Button(0, 0, 150, 36, "+5000金币", color=(200, 170, 60)),
+            Button(0, 0, 150, 36, "+5000经验", color=(90, 160, 200)),
+            Button(0, 0, 150, 36, "满血满弹", color=(60, 200, 120)),
+            Button(0, 0, 150, 36, "关闭面板", color=(130, 60, 60)),
+        ]
+
+    def _update_dev_panel(self, mouse_pos, mouse_pressed, touch_events, scale):
+        """局内调试面板：按钮点击检测与功能执行"""
+        if not (self.dev_mode and self.dev_panel_open):
+            return
+        from config import EnemyType
+        bx, by = self.scaled_width - 190, 90
+        for idx, btn in enumerate(self.dev_buttons):
+            btn.base_x = bx
+            btn.base_y = by + idx * 42
+            if btn.update(mouse_pos, mouse_pressed, touch_events, scale):
+                self._dev_action(idx)
+
+    def _dev_action(self, idx):
+        """执行调试面板按钮动作"""
+        if idx == 0:
+            self.dev_god = not self.dev_god
+            if self.player:
+                self.player.dev_god = self.dev_god
+            self._rebuild_dev_buttons()
+        elif idx == 1:
+            self.dev_time_scale = {1.0: 2.0, 2.0: 4.0, 4.0: 0.5, 0.5: 1.0}.get(self.dev_time_scale, 1.0)
+            self._rebuild_dev_buttons()
+        elif idx == 2:
+            from config import EnemyType as _ET
+            bs = [_ET.BOSS_LONG, _ET.BOSS_XIANG, _ET.BOSS_MUTANT, _ET.BOSS_QUEEN, _ET.BOSS_TITAN, _ET.BOSS_WANG]
+            import random as _r
+            et = _r.choice(bs)
+            e = Enemy(self.player.x + _r.randint(-100, 100), self.player.y + _r.randint(-100, 100), et, 1, self.difficulty)
+            self.enemies.append(e)
+            self.floating_texts.append(FloatingText(e.x, e.y, f"生成 {getattr(e,'name','')}", color=(255, 80, 80), lifetime=2.0))
+        elif idx == 3:
+            import random as _r
+            from config import EnemyType as _ET
+            ets = [_ET.ELITE_BRUTE, _ET.ELITE_ASSASSIN, _ET.ELITE_SORCERER, _ET.ELITE_GUARDIAN]
+            for _ in range(5):
+                e = Enemy(self.player.x + _r.randint(-150, 150), self.player.y + _r.randint(-150, 150), _r.choice(ets), 1, self.difficulty)
+                self.enemies.append(e)
+        elif idx == 4:
+            import random as _r
+            from config import EnemyType as _ET
+            ets = [_ET.ZOMBIE_NORMAL, _ET.ZOMBIE_FAST, _ET.ZOMBIE_CRAWLER, _ET.ZOMBIE_RANGED]
+            for _ in range(12):
+                e = Enemy(self.player.x + _r.randint(-200, 200), self.player.y + _r.randint(-200, 200), _r.choice(ets), 1, self.difficulty)
+                self.enemies.append(e)
+        elif idx == 5:
+            self.enemies.clear()
+            self.floating_texts.append(FloatingText(self.player.x, self.player.y - 40, "已清空敌人", color=(200, 200, 210), lifetime=1.5))
+        elif idx == 6:
+            try:
+                self.records.add_coins(5000)
+            except Exception:
+                pass
+            self.floating_texts.append(FloatingText(self.player.x, self.player.y - 40, "+5000金币", color=(255, 215, 0), lifetime=1.5))
+        elif idx == 7:
+            self.player.gain_exp(5000)
+            self.floating_texts.append(FloatingText(self.player.x, self.player.y - 40, "+5000经验", color=(90, 200, 240), lifetime=1.5))
+        elif idx == 8:
+            self.player.hp = self.player.max_hp
+            for w in self.player.weapons:
+                if hasattr(w, 'current_ammo') and w.current_ammo != "Inf":
+                    w.current_ammo = w.max_ammo
+            self.floating_texts.append(FloatingText(self.player.x, self.player.y - 40, "已回复满", color=(60, 220, 120), lifetime=1.5))
+        elif idx == 9:
+            self.dev_panel_open = False
 
     def _handle_keydown(self, key):
         import time
@@ -4732,6 +4857,9 @@ class Game:
 
         if self.state == GameState.PLAYING:
             self._update_playing(dt)
+            # 开发者调试面板
+            if self.dev_mode and self.dev_panel_open:
+                self._update_dev_panel(pygame.mouse.get_pos(), pygame.mouse.get_pressed(), self.touch_events, self.scale)
         elif self.state == GameState.DIALOGUE:
             self.dialogue.update(dt)
         elif self.state == GameState.SKILL_SELECT:
@@ -5286,8 +5414,8 @@ class Game:
             # ========== Boss行为返回处理 ==========
             if result == "boss_aoe":
                 # 龙某 AOE地面震荡攻击
-                aoe_radius = 130
-                aoe_damage = int(enemy.damage * 0.85)
+                aoe_radius = 190
+                aoe_damage = int(enemy.damage * 1.4)
                 dist_to_player = math.hypot(self.player.x - enemy.x, self.player.y - enemy.y)
                 if dist_to_player <= aoe_radius:
                     self.player.take_damage(aoe_damage, damage_type="aoe", attack_x=enemy.x, attack_y=enemy.y)
@@ -5295,39 +5423,39 @@ class Game:
 
             elif result == "boss_execution_slash":
                 # --------龙某【处决重劈】--------
-                exec_radius = 160
-                exec_dmg = int(enemy.damage * 2.2)
+                exec_radius = 230
+                exec_dmg = int(enemy.damage * 3.2)
                 dist_pl = math.hypot(self.player.x - enemy.x, self.player.y - enemy.y)
                 if dist_pl <= exec_radius:
                     self.player.take_damage(exec_dmg, damage_type="aoe", attack_x=enemy.x, attack_y=enemy.y)
-                self.camera.shake(int(14),0.7)
+                self.camera.shake(int(18),0.9)
                 self.particles.spawn_explosion(enemy.x, enemy.y, CRIMSON,60)
 
             elif result == "boss_execution_salvo":
                 # --------向某【处决霰弹爆发】近距离多段伤害--------
                 dist_pl = math.hypot(self.player.x - enemy.x, self.player.y - enemy.y)
-                pellet_count =8
-                pellet_dmg = int(enemy.damage*0.45)
+                pellet_count =12
+                pellet_dmg = int(enemy.damage*0.6)
                 for _ in range(pellet_count):
-                    if dist_pl <180:
+                    if dist_pl <230:
                         self.player.take_damage(pellet_dmg, damage_type="melee", attack_x=enemy.x, attack_y=enemy.y)
-                self.camera.shake(int(12),0.65)
+                self.camera.shake(int(16),0.8)
                 self.particles.spawn_explosion(enemy.x, enemy.y, ORANGE,55)
 
             elif result == "boss_execution_mutant":
                 # --------变异体【毁灭连招终结】超高伤害AOE--------
-                exec_radius = 180
-                exec_dmg = int(enemy.damage * 3.0)
+                exec_radius = 240
+                exec_dmg = int(enemy.damage * 3.6)
                 dist_pl = math.hypot(self.player.x - enemy.x, self.player.y - enemy.y)
                 if dist_pl <= exec_radius:
                     self.player.take_damage(exec_dmg, damage_type="aoe", attack_x=enemy.x, attack_y=enemy.y)
-                self.camera.shake(18, 0.8)
+                self.camera.shake(22, 0.9)
                 self.particles.spawn_explosion(enemy.x, enemy.y, BLOOD_RED, 70)
                 self.particles.spawn_explosion(enemy.x, enemy.y, CRIMSON, 40)
 
             elif result == "boss_execution_queen":
                 # --------尸潮女王【虫群吞噬】召唤大量小怪+持续伤害--------
-                for _ in range(6):
+                for _ in range(10):
                     angle = random.uniform(0, math.pi * 2)
                     spawn_x = enemy.x + math.cos(angle) * 100
                     spawn_y = enemy.y + math.sin(angle) * 100
@@ -5339,26 +5467,26 @@ class Game:
                             self._codex_unlock_toast(_cu, minion.enemy_type.name if hasattr(minion, "enemy_type") else minion.type.name)
                     except Exception:
                         pass
-                self.player.buff_manager.add_buff(BuffType.POISON, 8.0)
-                self.camera.shake(10, 0.5)
+                self.player.buff_manager.add_buff(BuffType.POISON, 10.0)
+                self.camera.shake(12, 0.6)
                 self.particles.spawn_explosion(enemy.x, enemy.y, PURPLE, 60)
 
             elif result == "boss_execution_titan":
                 # --------泰坦【泰坦之怒】超大范围地震--------
-                exec_radius = 250
-                exec_dmg = int(enemy.damage * 2.0)
+                exec_radius = 320
+                exec_dmg = int(enemy.damage * 3.0)
                 dist_pl = math.hypot(self.player.x - enemy.x, self.player.y - enemy.y)
                 if dist_pl <= exec_radius:
                     self.player.take_damage(exec_dmg, damage_type="aoe", attack_x=enemy.x, attack_y=enemy.y)
-                self.camera.shake(25, 1.0)
+                self.camera.shake(30, 1.2)
                 self.particles.spawn_explosion(enemy.x, enemy.y, GRAY, 80)
                 self.particles.spawn_explosion(enemy.x, enemy.y, CHARCOAL, 50)
 
             # === 新增Boss技能处理 ===
             elif result == "boss_ground_slam":
                 # 龙某地震波：大范围环形AOE
-                slam_radius = 220
-                slam_dmg = int(enemy.damage * 1.2)
+                slam_radius = 280
+                slam_dmg = int(enemy.damage * 1.8)
                 dist_pl = math.hypot(self.player.x - enemy.x, self.player.y - enemy.y)
                 if dist_pl <= slam_radius:
                     self.player.take_damage(slam_dmg, damage_type="aoe", attack_x=enemy.x, attack_y=enemy.y)
@@ -5406,27 +5534,27 @@ class Game:
                 self.floating_texts.append(FloatingText(enemy.x, enemy.y - 30, "护盾再生!", color=GREEN, lifetime=1.5))
 
             elif result == "boss_barrage":
-                # 向某弹幕扫射：环形12发子弹
-                for i in range(12):
-                    angle = i * math.pi * 2 / 12
+                # 向某弹幕扫射：环形16发子弹
+                for i in range(16):
+                    angle = i * math.pi * 2 / 16
                     proj = Projectile(
                         enemy.x, enemy.y,
                         math.cos(angle) * 6, math.sin(angle) * 6,
-                        int(enemy.damage * 0.5), 400, PURPLE, 4
+                        int(enemy.damage * 0.7), 420, PURPLE, 4
                     )
                     self.enemy_projectiles.append(proj)
                 self.camera.shake(4, 0.2)
 
             # ===== 王某技能（枪械+死神镰刀双形态）=====
             elif result == "wang_gunfire":
-                # 枪械形态：3连发子弹朝玩家
-                for _ in range(3):
+                # 枪械形态：4连发子弹朝玩家
+                for _ in range(4):
                     base_ang = math.atan2(self.player.y - enemy.y, self.player.x - enemy.x)
                     ang = base_ang + random.uniform(-0.12, 0.12)
                     proj = Projectile(
                         enemy.x, enemy.y,
                         math.cos(ang) * 7, math.sin(ang) * 7,
-                        int(enemy.damage * 0.6), 420, FIRE_ORANGE, 4
+                        int(enemy.damage * 0.8), 440, FIRE_ORANGE, 4
                     )
                     self.enemy_projectiles.append(proj)
                 self.assets.play_sound("shoot_pistol")
@@ -5438,11 +5566,11 @@ class Game:
                 self.assets.play_sound("explosion")
                 self.particles.spawn_explosion(enemy.x, enemy.y, FIRE_ORANGE, 60)
                 gdist = math.hypot(self.player.x - enemy.x, self.player.y - enemy.y)
-                if gdist < 170:
-                    self.player.take_damage(int(enemy.damage * 1.6), damage_type="explosion", attack_x=enemy.x, attack_y=enemy.y)
+                if gdist < 230:
+                    self.player.take_damage(int(enemy.damage * 2.2), damage_type="explosion", attack_x=enemy.x, attack_y=enemy.y)
                     if gdist > 0:
-                        self.player.x += (self.player.x - enemy.x) / gdist * 30
-                        self.player.y += (self.player.y - enemy.y) / gdist * 30
+                        self.player.x += (self.player.x - enemy.x) / gdist * 40
+                        self.player.y += (self.player.y - enemy.y) / gdist * 40
 
             elif result == "wang_scythe_sweep":
                 # 死神镰刀：大范围横扫，玩家受伤+强击退
@@ -5450,11 +5578,11 @@ class Game:
                 self.assets.play_sound("melee_swing")
                 self.particles.spawn_explosion(enemy.x, enemy.y, CRIMSON, 70)
                 sdist = math.hypot(self.player.x - enemy.x, self.player.y - enemy.y)
-                if sdist < 230:
-                    self.player.take_damage(int(enemy.damage * 1.8), damage_type="melee", attack_x=enemy.x, attack_y=enemy.y)
+                if sdist < 290:
+                    self.player.take_damage(int(enemy.damage * 2.4), damage_type="melee", attack_x=enemy.x, attack_y=enemy.y)
                     if sdist > 0:
-                        self.player.x += (self.player.x - enemy.x) / sdist * 45
-                        self.player.y += (self.player.y - enemy.y) / sdist * 45
+                        self.player.x += (self.player.x - enemy.x) / sdist * 55
+                        self.player.y += (self.player.y - enemy.y) / sdist * 55
 
             elif result == "wang_execution_scythe":
                 # 王某处决斩击：超高伤害AOE
@@ -5463,11 +5591,11 @@ class Game:
                 self.particles.spawn_explosion(enemy.x, enemy.y, CRIMSON, 90)
                 self.particles.spawn_explosion(enemy.x, enemy.y, BLOOD_RED, 60)
                 edist = math.hypot(self.player.x - enemy.x, self.player.y - enemy.y)
-                if edist < 220:
-                    self.player.take_damage(int(enemy.damage * 3.2), damage_type="aoe", attack_x=enemy.x, attack_y=enemy.y)
+                if edist < 280:
+                    self.player.take_damage(int(enemy.damage * 4.0), damage_type="aoe", attack_x=enemy.x, attack_y=enemy.y)
                     if edist > 0:
-                        self.player.x += (self.player.x - enemy.x) / edist * 60
-                        self.player.y += (self.player.y - enemy.y) / edist * 60
+                        self.player.x += (self.player.x - enemy.x) / edist * 80
+                        self.player.y += (self.player.y - enemy.y) / edist * 80
 
             elif result == "boss_smoke":
                 # 向某烟雾弹：在玩家位置生成减速烟雾区域
@@ -6617,6 +6745,8 @@ class Game:
         if getattr(enemy, "is_boss", False):
             self.assets.play_sound("boss_death")
             self.last_boss_death_pos = (enemy.x, enemy.y)
+            # 击杀Boss获得宝箱奖励（奖励随难度与游戏时间变化）
+            self._grant_boss_chest(enemy)
         else:
             self.assets.play_sound_random(["zombie_death", "zombie_groan"])
         self.particles.spawn_blood(enemy.x, enemy.y, 15)
@@ -6718,6 +6848,63 @@ class Game:
                 self.boss_kills["xiang"] += 1
 
         self.enemies.remove(enemy)
+
+    def _grant_boss_chest(self, enemy):
+        """击杀Boss掉落宝箱奖励：金币/经验/治疗/符文/弹药，奖励随难度与游戏时间变化"""
+        # 难度倍率
+        diff_mult = {"简单": 0.8, "普通": 1.0, "困难": 1.4, "噩梦": 2.0}.get(getattr(self, 'difficulty', '普通'), 1.0)
+        # 游戏时间（秒）
+        elapsed = 0.0
+        hm = getattr(self, 'horde_manager', None)
+        if hm is not None:
+            elapsed = getattr(hm, 'total_time', 0.0)
+        time_bonus = 1.0 + min(1.5, elapsed / 600.0)  # 随时间增长，最多+150%
+        mult = diff_mult * time_bonus
+        if self.session:
+            self.session.add_chest_opened()
+        rewards = []
+        # 金币（随难度与时间）
+        coin = int((120 + elapsed * 0.2) * mult)
+        try:
+            self.records.add_coins(coin)
+        except Exception:
+            pass
+        rewards.append(f"+{coin}金币")
+        # 大量经验
+        exp = int((400 + elapsed * 0.4) * mult)
+        self.player.gain_exp(exp)
+        rewards.append(f"+{exp}经验")
+        # 治疗
+        heal = int(60 * diff_mult)
+        self.player.heal(heal)
+        rewards.append(f"+{heal}HP")
+        # 符文（击杀Boss保底出一个）
+        luck = self.rune_manager.get_bonus("drop_rate_mult") if hasattr(self, 'rune_manager') else 0
+        rune_type = random_rune(luck_bonus=luck + 0.3)
+        if hasattr(self, 'rune_manager') and self._gain_rune(rune_type):
+            rewards.append(f"符文: {RUNE_CONFIG[rune_type]['name']}")
+            self._apply_rune_bonuses()
+        else:
+            rewards.append("符文(已满)")
+        # 弹药补满
+        for weapon in self.player.weapons:
+            if hasattr(weapon, 'current_ammo') and weapon.current_ammo != "Inf":
+                weapon.current_ammo = weapon.max_ammo
+        # 计分
+        score_gain = int(800 * diff_mult)
+        if self.session:
+            self.session.add_score(score_gain)
+        self.player.score += score_gain
+        # 特效与提示
+        particles = getattr(self, 'particles', None)
+        flt = getattr(self, 'floating_texts', None)
+        self.assets.play_sound("pickup_treasure")
+        if particles is not None:
+            particles.spawn_explosion(enemy.x, enemy.y, (255, 215, 0), 40)
+            particles.spawn(enemy.x, enemy.y, (255, 255, 200), 25)
+        reward_text = "击杀奖励: " + ", ".join(rewards[:4])
+        if flt is not None:
+            flt.append(FloatingText(enemy.x, enemy.y - 60, reward_text, color=(255, 215, 0), lifetime=4.0))
 
     def draw(self):
         self.renderer.render()

@@ -67,6 +67,8 @@ class Renderer:
             self._draw_tutorial()
         elif state == GameState.PLAYING:
             self._draw_playing()
+            if getattr(self.game, 'dev_mode', False) and getattr(self.game, 'dev_panel_open', False):
+                self._draw_dev_panel()
         elif state == GameState.PAUSED:
             self._draw_playing()
             self._draw_pause()
@@ -207,8 +209,132 @@ class Renderer:
                     self.game._open_update_notes()
             btn.draw(self.screen, self.game.font_large, scale)
 
+        # 开发者模式入口：版本号连点5次弹出密码框
+        dev_rect = pygame.Rect(10, self.game.scaled_height - 34, 300, 30)
+        dev_hit = False
+        for te in self.game.touch_events:
+            if te["type"] == "down" and dev_rect.collidepoint(te["pos"]):
+                dev_hit = True
+        if dev_rect.collidepoint(mouse_pos) and mouse_pressed[0]:
+            dev_hit = True
+        if dev_hit:
+            self.game.dev_click_count += 1
+            self.game.dev_click_timer = 2.0
+            if self.game.dev_click_count >= 5:
+                self.game.dev_click_count = 0
+                if not self.game.dev_mode:
+                    self.game.dev_input_active = True
+                    self.game.dev_input_str = ""
+                    self.game.update_status_text = "输入开发者密码（连点版本号取消）"
+        if self.game.dev_click_timer > 0:
+            self.game.dev_click_timer -= (1.0 / 60.0)
+            if self.game.dev_click_timer <= 0:
+                self.game.dev_click_count = 0
+
         version = self.game.font_small.render(f"v{getattr(self.game, 'current_version_str', '1.0.0')} - 黑暗尸潮", True, GRAY)
         self.screen.blit(version, (10, self.game.scaled_height - 30))
+        if self.game.dev_mode:
+            dev_tag = self.game.font_small.render("[开发者模式:ON]", True, (60, 220, 60))
+            self.screen.blit(dev_tag, (300, self.game.scaled_height - 30))
+
+        # 开发者密码输入框
+        if self.game.dev_input_active:
+            self._draw_dev_password()
+
+    def _draw_dev_password(self):
+        """绘制开发者密码输入框 + 触控字符键盘（双端兼容）"""
+        g = self.game
+        scale = g.scale
+        sw = g.scaled_width
+        sh = g.scaled_height
+        # 半透明遮罩
+        ov = pygame.Surface((sw, sh), pygame.SRCALPHA)
+        ov.fill((0, 0, 0, 180))
+        self.screen.blit(ov, (0, 0))
+        # 输入框
+        box_w, box_h = int(420 * scale), int(50 * scale)
+        box_x = sw // 2 - box_w // 2
+        box_y = int(120 * scale)
+        pygame.draw.rect(self.screen, (40, 40, 52), (box_x, box_y, box_w, box_h), border_radius=6)
+        pygame.draw.rect(self.screen, (100, 100, 130), (box_x, box_y, box_w, box_h), 2, border_radius=6)
+        title = g.font.render("开发者密码", True, (240, 220, 120))
+        self.screen.blit(title, (sw // 2 - title.get_width() // 2, int(70 * scale)))
+        show = g.dev_input_str + ("▌" if (g.dev_input_str or True) else "")
+        pw_txt = g.font.render("*" * len(g.dev_input_str) + "▌", True, (255, 255, 255))
+        self.screen.blit(pw_txt, (box_x + 20, box_y + box_h // 2 - pw_txt.get_height() // 2))
+        hint = g.font_small.render("（PC直接键盘输入，回车确认；触屏点击下方字符）", True, GRAY)
+        self.screen.blit(hint, (sw // 2 - hint.get_width() // 2, box_y + box_h + 8))
+        status = g.font_small.render(g.update_status_text or "", True, (255, 180, 120))
+        self.screen.blit(status, (sw // 2 - status.get_width() // 2, box_y + box_h + 44))
+
+        # 字符键盘（字母a-z三行 + 数字 + 退格/清空/确认）
+        from ui import Button
+        mouse_pos = pygame.mouse.get_pos()
+        mouse_pressed = pygame.mouse.get_pressed()
+        rows = ["abcdefghijklm", "nopqrstuvwxyz", "0123456789"]
+        bw, bh = int(44 * scale), int(42 * scale)
+        y0 = int(210 * scale)
+        for r, row in enumerate(rows):
+            x0 = sw // 2 - (len(row) * (bw + 6)) // 2
+            for j, ch in enumerate(row):
+                rect = pygame.Rect(x0 + j * (bw + 6), y0 + r * (bh + 6), bw, bh)
+                hover = rect.collidepoint(mouse_pos)
+                pygame.draw.rect(self.screen, (60, 60, 80) if not hover else (90, 90, 110), rect, border_radius=5)
+                pygame.draw.rect(self.screen, (120, 120, 150), rect, 1, border_radius=5)
+                txt = g.font.render(ch, True, (240, 240, 245))
+                self.screen.blit(txt, (rect.centerx - txt.get_width() // 2, rect.centery - txt.get_height() // 2))
+                if rect.collidepoint(mouse_pos) and mouse_pressed[0]:
+                    g.dev_input_str += ch
+                for te in g.touch_events:
+                    if te["type"] == "up" and rect.collidepoint(te["pos"]):
+                        g.dev_input_str += ch
+        # 操作行：退格 / 确认
+        ops = [("退格", lambda: setattr(g, 'dev_input_str', g.dev_input_str[:-1])), ("确认", None)]
+        ox0 = sw // 2 - (2 * (bw + 6)) // 2 - bw // 2
+        oy = y0 + 3 * (bh + 6)
+        for k, (label, _fn) in enumerate(ops):
+            rect = pygame.Rect(ox0 + k * (bw + 6) * 1.5, oy, int(bw * 1.4), bh)
+            hover = rect.collidepoint(mouse_pos)
+            pygame.draw.rect(self.screen, (110, 70, 70) if label == "退格" else (60, 130, 70), rect, border_radius=5)
+            pygame.draw.rect(self.screen, (160, 160, 180), rect, 1, border_radius=5)
+            txt = g.font.render(label, True, (255, 255, 255))
+            self.screen.blit(txt, (rect.centerx - txt.get_width() // 2, rect.centery - txt.get_height() // 2))
+            if rect.collidepoint(mouse_pos) and mouse_pressed[0]:
+                if label == "退格":
+                    g.dev_input_str = g.dev_input_str[:-1]
+            for te in g.touch_events:
+                if te["type"] == "up" and rect.collidepoint(te["pos"]):
+                    if label == "退格":
+                        g.dev_input_str = g.dev_input_str[:-1]
+                    else:
+                        if g.dev_input_str == g._DEV_PASSWORD:
+                            g.dev_mode = True
+                            g.dev_input_active = False
+                            g.dev_input_str = ""
+                            g.update_status_text = "开发者模式已开启！局内按 T 键打开调试面板"
+                        else:
+                            g.dev_input_active = False
+                            g.dev_input_str = ""
+                            g.update_status_text = "密码错误，请重试（连点版本号重新输入）"
+
+    def _draw_dev_panel(self):
+        """绘制局内开发者调试面板"""
+        g = self.game
+        scale = g.scale
+        sw = g.scaled_width
+        ov = pygame.Surface((sw, g.scaled_height), pygame.SRCALPHA)
+        ov.fill((0, 0, 0, 120))
+        self.screen.blit(ov, (0, 0))
+        head = g.font.render("开发者调试面板", True, (60, 220, 60))
+        self.screen.blit(head, (sw - 210, 40))
+        tip = g.font_small.render("T 键 关闭面板 · 无敌/倍率等", True, (200, 200, 210))
+        self.screen.blit(tip, (sw - 250, 66))
+        bx, by = sw - 190, 90
+        for btn in g.dev_buttons:
+            btn.base_x = bx
+            btn.base_y = by
+            btn.draw(self.screen, g.font_large, scale)
+            by += 42
 
     def _draw_mode_select(self):
         """模式选择界面"""
