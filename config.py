@@ -181,6 +181,7 @@ class GameState(Enum):
     UPDATE_NOTES = auto()  # 新增：更新说明/版本详情页面
     RUNE_VIEW = auto()  # 新增：符文查看界面（玩家拥有符文+详情）
     EQUIP_SELECT = auto()  # 新增：局外装备选择（武器+角色，开始游戏前）
+    HUD_EDIT = auto()  # 新增：HUD触控按钮自定义布局编辑
 
 
 class ControlMode(Enum):

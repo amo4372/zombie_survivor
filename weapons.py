@@ -12,7 +12,7 @@ class Projectile:
                  pierce=1, explosive=False, explosion_radius=0, is_flame=False,
                  is_plasma=False, is_chain=False, is_rail=False, gravity=0,
                  is_laser=False, laser_width=0, laser_duration=0, laser_angle=0,
-                 is_scythe_throw=False):
+                 is_scythe_throw=False, is_scythe_slash=False):
         self.x = x
         self.y = y
         self.vx = vx
@@ -37,6 +37,7 @@ class Projectile:
         self.laser_angle = laser_angle
         self.gravity = gravity
         self.is_scythe_throw = is_scythe_throw
+        self.is_scythe_slash = is_scythe_slash
         self.lifetime = 3.0 if is_flame else (laser_duration if is_laser else 10.0)
         self.alive = True
         self.should_explode = False
@@ -166,6 +167,40 @@ class Projectile:
             pygame.draw.circle(screen, (*self.color[:3], 200), (px, py), s + 2)
             pygame.draw.circle(screen, WHITE, (px, py), s)
             pygame.draw.circle(screen, CYAN, (px, py), s - 2)
+        elif self.is_scythe_slash:
+            # ===== 死神剑气：大型月牙紫刃，旋转流光，局内炸裂帅 =====
+            import math as _m
+            _dir = _m.atan2(self.vy, self.vx)
+            _spin = _m.radians((pygame.time.get_ticks() / 9.0) % 360)
+            _a = _dir + _m.sin(_spin) * 0.55  # 月牙随飞行轻微摆动旋转
+            _r = max(16, int(self.size * 1.9 * scale))  # 大剑气
+            # 紫光晕
+            _glow = _r + 12
+            _g = pygame.Surface((_glow * 2, _glow * 2), pygame.SRCALPHA)
+            pygame.draw.circle(_g, (170, 50, 215, 50), (_glow, _glow), _glow)
+            pygame.draw.circle(_g, (200, 100, 240, 30), (_glow, _glow), _glow - 4)
+            screen.blit(_g, (int(px - _glow), int(py - _glow)))
+            # 月牙外侧大刃（深紫）
+            pygame.draw.arc(screen, (120, 40, 190),
+                            (px - _r, py - _r, _r * 2, _r * 2),
+                            _a - 2.0, _a + 1.2, max(5, int(8 * scale)))
+            # 月牙主刃（亮紫）
+            pygame.draw.arc(screen, (196, 110, 245),
+                            (px - _r, py - _r, _r * 2, _r * 2),
+                            _a - 1.8, _a + 1.0, max(4, int(6 * scale)))
+            # 内刃月牙（白亮高光，形成月牙开口）
+            _ir = _r - 6
+            pygame.draw.arc(screen, (255, 220, 255),
+                            (px - _ir, py - _ir, _ir * 2, _ir * 2),
+                            _a - 1.55, _a + 0.75, max(2, int(3 * scale)))
+            # 刃尖拖尾（运动方向反侧流光）
+            _tx = px - _m.cos(_dir) * _r * 1.35
+            _ty = py - _m.sin(_dir) * _r * 1.35
+            pygame.draw.line(screen, (150, 60, 210, 160), (px, py), (int(_tx), int(_ty)), max(2, int(4 * scale)))
+            pygame.draw.line(screen, (216, 130, 250, 120), (px, py), (int(_tx), int(_ty)), max(1, int(2 * scale)))
+            # 中心亮点
+            pygame.draw.circle(screen, WHITE, (px, py), max(2, int(3 * scale)))
+            pygame.draw.circle(screen, (235, 190, 255), (px, py), max(1, int(2 * scale)))
         elif self.is_scythe_throw:
             # ===== 死神镰刀抛掷：旋转镰刀（紫刃+长柄），局内清晰可见 =====
             import math as _m
@@ -338,12 +373,12 @@ class Weapon:
                 "ammo": "∞", "reload": 0, "is_melee": True, "move_slow": 0.5
             },
             WeaponType.SCYTHE: {
-                "name": "死神镰刀", "damage": 45, "fire_rate": 0.5,
-                "range": 80, "speed": 0, "spread": 0, "pierce": 3,
-                "color": (180, 60, 220), "projectile_size": 0, "shake": 4,
-                "desc": "死神之镰：近战挥砍，换弹时朝面朝方向扔出并返回",
-                "ammo": "∞", "reload": 1.4, "is_melee": True, "is_scythe": True,
-                "throw_range": 320, "throw_damage": 55, "throw_speed": 13
+                "name": "死神镰刀", "damage": 42, "fire_rate": 0.34,
+                "range": 480, "speed": 11, "spread": 0, "pierce": 4,
+                "color": (180, 60, 220), "projectile_size": 16, "shake": 4,
+                "desc": "死神之镰：连续挥砍8道大剑气；挥尽后换弹期间释放圆形横扫",
+                "ammo": 8, "reload": 1.15, "is_melee": False, "is_scythe": True,
+                "sweep_radius": 210, "sweep_damage": 85
             },
             # ========== 手枪扩展 ==========
             WeaponType.REVOLVER: {
@@ -565,7 +600,9 @@ class Weapon:
                 getattr(self, "is_laser", False),
                 getattr(self, "laser_width", 0),
                 getattr(self, "laser_duration", 0),
-                spread_angle if getattr(self, "is_laser", False) else 0
+                spread_angle if getattr(self, "is_laser", False) else 0,
+                False,
+                bool(getattr(self, "is_scythe", False))
             )
             projectiles.append(proj)
         return projectiles
@@ -609,9 +646,25 @@ def render_weapon_icon(weapon_type):
 
     # ===== 近战专属 =====
     if name == "SCYTHE":
-        pygame.draw.arc(surf, (225, 230, 240), (cx - 30, cy - 26, 66, 56), 0, 3.3, 9)
-        pygame.draw.line(surf, (150, 120, 82), (cx + 28, cy + 2), (cx - 26, cy + 42), 8)
-        pygame.draw.circle(surf, (165, 135, 92), (cx + 28, cy + 2), 8)
+        # 死神镰刀图标：紫光晕 + 双层月牙刃 + 符文柄（建模升级）
+        glow = pygame.Surface((120, 120), pygame.SRCALPHA)
+        pygame.draw.circle(glow, (170, 50, 215, 70), (60, 60), 46)
+        pygame.draw.circle(glow, (210, 120, 245, 45), (60, 60), 36)
+        surf.blit(glow, (cx - 60, cy - 60))
+        # 月牙大刃（双层紫弧 + 白亮刃）
+        pygame.draw.arc(surf, (110, 35, 180), (cx - 34, cy - 30, 72, 62), 0, 3.3, 10)
+        pygame.draw.arc(surf, (190, 105, 240), (cx - 30, cy - 27, 64, 56), 0.15, 3.1, 7)
+        pygame.draw.arc(surf, (250, 215, 255), (cx - 27, cy - 24, 58, 50), 0.3, 2.9, 3)
+        # 符文柄（斜向下）
+        pygame.draw.line(surf, (120, 92, 62), (cx + 30, cy + 4), (cx - 24, cy + 40), 9)
+        pygame.draw.line(surf, (168, 136, 92), (cx + 30, cy + 4), (cx - 24, cy + 40), 5)
+        # 柄端银骷髅环 + 紫水晶
+        pygame.draw.circle(surf, (175, 180, 195), (cx + 30, cy + 4), 9)
+        pygame.draw.circle(surf, (60, 60, 70), (cx + 30, cy + 4), 6)
+        pygame.draw.circle(surf, (205, 120, 245), (cx + 33, cy + 2), 3)
+        # 刃根紫水晶
+        pygame.draw.circle(surf, (216, 130, 250), (cx - 20, cy - 8), 5)
+        pygame.draw.circle(surf, (255, 220, 255), (cx - 21, cy - 9), 2)
         return surf
     if name == "KNIFE":
         pygame.draw.polygon(surf, (205, 210, 220),

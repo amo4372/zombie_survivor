@@ -81,6 +81,8 @@ class Renderer:
             self._draw_menu()
         elif state == GameState.SETTINGS:
             self._draw_settings()
+        elif state == GameState.HUD_EDIT:
+            self._draw_hud_edit()
         elif state == GameState.TUTORIAL:
             self._draw_tutorial()
         elif state == GameState.PLAYING:
@@ -1896,7 +1898,7 @@ class Renderer:
         mouse_pressed = pygame.mouse.get_pressed()
 
         for i, btn in enumerate(self.game.settings_buttons):
-            btn.base_y = (140 + i * 55)
+            btn.base_y = (140 + i * 50)
             if i == 0:
                 btn.text = f"音效音量: {int(self.game.config.sound_volume * 100)}%"
             elif i == 1:
@@ -1958,6 +1960,11 @@ class Renderer:
                     if self.game.config.enable_logging:
                         self.game.logger.info("日志记录已开启")
                 elif i == 9:
+                    # 进入HUD自定义布局编辑
+                    self.game.state = GameState.HUD_EDIT
+                    self.game.hud_edit_dirty = False
+                    self.game.hud_edit_drag = None
+                elif i == 10:
                     self.game.config.save()
                     if getattr(self.game, 'settings_from_pause', False):
                         self.game.settings_from_pause = False
@@ -1966,6 +1973,142 @@ class Renderer:
                         self.game.state = GameState.MENU
 
             btn.draw(self.screen, self.game.font_large, scale)
+
+    def _draw_hud_edit(self):
+        """HUD触控按钮自定义布局编辑界面：拖动按钮调整位置"""
+        scale = self.game.scale
+        sw = self.game.scaled_width
+        sh = self.game.scaled_height
+        # 半透明暗底
+        overlay = pygame.Surface((sw, sh), pygame.SRCALPHA)
+        overlay.fill((10, 10, 20, 200))
+        self.screen.blit(overlay, (0, 0))
+
+        title = self.game.font_title.render("HUD按钮布局", True, WHITE)
+        title_rect = title.get_rect(center=(sw // 2, int(58 * scale)))
+        self.screen.blit(title, title_rect)
+        tip = self.game.font.render("拖动按钮调整位置（触控/鼠标），松手放下", True, (200, 200, 220))
+        self.screen.blit(tip, tip.get_rect(center=(sw // 2, int(100 * scale))))
+
+        # 可编辑控件元数据：(键名, 中文名, 控件, 半径, 标签方位) —— shoot 排在 aim 前，重叠时优先选中可操作按钮
+        items = [
+            ("joystick", "移动摇杆", self.game.joystick, 70, "above"),
+            ("shoot", "射击", self.game.touch_buttons.get("shoot"), 62, "above"),
+            ("aim", "瞄准", self.game.aim_button, 62, "below"),
+            ("pause", "暂停", self.game.touch_buttons.get("pause"), 38, "above"),
+            ("sprint", "疾跑", self.game.touch_buttons.get("sprint"), 40, "above"),
+            ("skill_selector", "技能切换", self.game.skill_selector, 42, "above"),
+            ("skill_caster", "技能释放", self.game.skill_caster, 52, "above"),
+            ("throwable_switch", "投掷切换", self.game.throwable_switch_btn, 42, "above"),
+            ("throwable_caster", "投掷释放", self.game.throwable_caster, 48, "above"),
+        ]
+        mouse_pos = pygame.mouse.get_pos()
+        mouse_pressed = pygame.mouse.get_pressed()
+        touches = self.game.touch_events or []
+
+        # 拖拽状态：game.hud_edit_drag = {"key":..., "touch_id":...}
+        drag = getattr(self.game, "hud_edit_drag", None)
+
+        def _rect_for(ctrl, radius):
+            r = int(radius * scale)
+            bx = int(ctrl.base_x * scale)
+            by = int(ctrl.base_y * scale)
+            return pygame.Rect(bx - r - 12, by - r - 12, (r + 12) * 2, (r + 12) * 2), (bx, by), r
+
+        def _find_ctrl(key):
+            for k, label, ctrl, radius, side in items:
+                if k == key:
+                    return ctrl
+            return None
+
+        # 1) 触控事件处理（down 选中 / move 跟随 / up 放下）
+        for e in touches:
+            if e["type"] == "down":
+                for key, label, ctrl, radius, side in items:
+                    if ctrl is None:
+                        continue
+                    rect, (bx, by), r = _rect_for(ctrl, radius)
+                    if rect.collidepoint(e["pos"]):
+                        self.game.hud_edit_drag = {"key": key, "touch_id": e.get("id")}
+                        break
+            elif e["type"] == "move":
+                _drag = getattr(self.game, "hud_edit_drag", None)
+                if _drag and (_drag.get("touch_id") is None or _drag["touch_id"] == e.get("id")):
+                    ctrl = _find_ctrl(_drag["key"])
+                    if ctrl is not None:
+                        ctrl.base_x = max(0, min(BASE_WIDTH, int(e["pos"][0] / scale)))
+                        ctrl.base_y = max(0, min(BASE_HEIGHT, int(e["pos"][1] / scale)))
+                        self.game.hud_edit_dirty = True
+            elif e["type"] == "up":
+                _drag = getattr(self.game, "hud_edit_drag", None)
+                if _drag and (_drag.get("touch_id") is None or _drag["touch_id"] == e.get("id")):
+                    self.game.hud_edit_drag = None
+
+        # 2) 鼠标拖动
+        drag = getattr(self.game, "hud_edit_drag", None)
+        if drag and drag.get("touch_id") is None:
+            if mouse_pressed[0]:
+                ctrl = _find_ctrl(drag["key"])
+                if ctrl is not None:
+                    ctrl.base_x = max(0, min(BASE_WIDTH, int(mouse_pos[0] / scale)))
+                    ctrl.base_y = max(0, min(BASE_HEIGHT, int(mouse_pos[1] / scale)))
+                    self.game.hud_edit_dirty = True
+            else:
+                self.game.hud_edit_drag = None
+        elif not drag and mouse_pressed[0]:
+            for key, label, ctrl, radius, side in items:
+                if ctrl is None:
+                    continue
+                rect, (bx, by), r = _rect_for(ctrl, radius)
+                if rect.collidepoint(mouse_pos):
+                    self.game.hud_edit_drag = {"key": key, "touch_id": None}
+                    break
+
+        # 3) 绘制控件（半透明框 + 名称）
+        for key, label, ctrl, radius, side in items:
+            if ctrl is None:
+                continue
+            rect, (bx, by), r = _rect_for(ctrl, radius)
+            is_drag = bool(drag and drag["key"] == key)
+            col = (180, 60, 220) if is_drag else (70, 140, 220)
+            cell = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
+            pygame.draw.circle(cell, (*col, 90), (rect.w // 2, rect.h // 2), r + 6, 3)
+            pygame.draw.circle(cell, (255, 255, 255, 120), (rect.w // 2, rect.h // 2), r - 6, 1)
+            self.screen.blit(cell, (rect.x, rect.y))
+            pygame.draw.line(self.screen, (255, 255, 255), (bx - 6, by), (bx + 6, by), 1)
+            pygame.draw.line(self.screen, (255, 255, 255), (bx, by - 6), (bx, by + 6), 1)
+            lbl = self.game.font.render(label, True, (230, 230, 245))
+            lbl_y = by - r - 22
+            if side == "below" or lbl_y < int(20 * scale):
+                lbl_y = by + r + 22
+            self.screen.blit(lbl, lbl.get_rect(center=(bx, lbl_y)))
+
+        # 4) 底部操作按钮：保存 / 重置 / 返回
+        by0 = int(sh - int(70 * scale))
+        save_r = pygame.Rect(int(sw // 2 - 250 * scale), by0, int(160 * scale), int(50 * scale))
+        reset_r = pygame.Rect(int(sw // 2 - 80 * scale), by0, int(160 * scale), int(50 * scale))
+        back_r = pygame.Rect(int(sw // 2 + 90 * scale), by0, int(160 * scale), int(50 * scale))
+        for rect, txt, col in [
+            (save_r, "保存布局", (80, 200, 120)),
+            (reset_r, "重置默认", (220, 170, 80)),
+            (back_r, "返回", (220, 90, 90)),
+        ]:
+            pygame.draw.rect(self.screen, (*col, 160), rect, border_radius=8)
+            pygame.draw.rect(self.screen, (255, 255, 255), rect, 2, border_radius=8)
+            lbl = self.game.font_large.render(txt, True, WHITE)
+            self.screen.blit(lbl, lbl.get_rect(center=rect.center))
+        if self._clicked(save_r, mouse_pos, mouse_pressed, touches, "hud_save"):
+            self.game._save_hud_layout()
+            self.game.hud_edit_dirty = False
+        if self._clicked(reset_r, mouse_pos, mouse_pressed, touches, "hud_reset"):
+            self.game._reset_hud_layout()
+            self.game.hud_edit_dirty = False
+        if self._clicked(back_r, mouse_pos, mouse_pressed, touches, "hud_back"):
+            if getattr(self.game, "hud_edit_dirty", False):
+                # 未保存返回：恢复为已保存布局（或默认）
+                self.game._setup_touch_controls()
+                self.game._apply_hud_layout()
+            self.game.state = GameState.SETTINGS
 
     def _draw_tutorial(self):
         self.screen.fill(VOID_BLACK)
@@ -2207,6 +2350,21 @@ class Renderer:
         # 绘制刀光弧斩特效（死神镰刀/枪械曳光）
         for sa in getattr(self.game, 'slash_arcs', []):
             sa.draw(self.screen, cam_x, cam_y, scale)
+
+        # 绘制圆形横扫扩散环（死神镰刀换弹横扫）
+        for sr in getattr(self.game, 'sweep_rings', []):
+            prog = 1.0 - (sr["life"] / sr["max_life"])
+            cr = int((sr["r"] + (sr["max_r"] - sr["r"]) * prog) * scale)
+            cxp = int((sr["x"] - cam_x) * scale)
+            cyp = int((sr["y"] - cam_y) * scale)
+            alpha = int(180 * (1.0 - prog))
+            ring_surf = pygame.Surface((cr * 2 + 12, cr * 2 + 12), pygame.SRCALPHA)
+            cc = cr + 6
+            col = sr["color"]
+            pygame.draw.circle(ring_surf, (*col[:3], alpha // 2), (cc, cc), cr + 3, sr["width"] + 2)
+            pygame.draw.circle(ring_surf, (*col[:3], alpha), (cc, cc), cr, sr["width"])
+            pygame.draw.circle(ring_surf, (240, 190, 255, alpha), (cc, cc), cr - 3, max(1, sr["width"] // 3))
+            self.screen.blit(ring_surf, (cxp - cc, cyp - cc))
 
         # 绘制创伤效果（屏幕边缘血溅）
         self._draw_trauma_effect()

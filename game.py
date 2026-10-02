@@ -104,6 +104,7 @@ class Config:
         self.render_buff_effects = True  # 是否渲染buff等额外效果
         self.graphics_quality = "balanced"  # performance / balanced / quality
         self.enable_logging = True      # 游戏日志开关（用户可选）
+        self.hud_layout = {}  # HUD触控按钮自定义布局：{控件名: [base_x, base_y]}
         self.config_file = "config.json"
         self.load()
 
@@ -123,6 +124,9 @@ class Config:
                     self.render_buff_effects = data.get("render_buff_effects", True)
                     self.graphics_quality = data.get("graphics_quality", "balanced")
                     self.enable_logging = data.get("enable_logging", True)
+                    _hl = data.get("hud_layout", {})
+                    if isinstance(_hl, dict):
+                        self.hud_layout = {k: list(v) for k, v in _hl.items() if isinstance(v, (list, tuple)) and len(v) == 2}
         except Exception as e:
             logger.error(f"配置加载失败: {e}")
 
@@ -139,6 +143,7 @@ class Config:
             "render_buff_effects": self.render_buff_effects,
             "graphics_quality": self.graphics_quality,
             "enable_logging": self.enable_logging,
+            "hud_layout": self.hud_layout,
         }
         try:
             with open(self.config_file, "w", encoding="utf-8") as f:
@@ -234,6 +239,7 @@ class Game:
         self.damage_numbers = []
         self.floating_texts = []
         self.slash_arcs = []  # 刀光弧斩特效（死神镰刀横扫/处决/枪械曳光）
+        self.sweep_rings = []  # 圆形横扫扩散环特效（死神镰刀换弹横扫）
         self.enemy_projectiles = []
 
         # 近战攻击状态
@@ -428,7 +434,56 @@ class Game:
         self.q_aim_started = False
         self.key_q_long_threshold = 0.3  # 长按阈值，与G键一致
         self.throwable_max_dist = 450  # 投掷物最大距离
+        self._apply_hud_layout()
         logger.info("触控控件初始化完成")
+
+    def _apply_hud_layout(self):
+        """应用用户自定义的HUD按钮布局（config.hud_layout: {name: [x, y]} 逻辑坐标）"""
+        lay = getattr(self.config, 'hud_layout', None) or {}
+        if not lay:
+            return
+        def _set(ctrl, key):
+            if ctrl is not None and key in lay:
+                try:
+                    ctrl.base_x = int(lay[key][0])
+                    ctrl.base_y = int(lay[key][1])
+                except (TypeError, IndexError, ValueError):
+                    pass
+        _set(self.joystick, "joystick")
+        _set(self.aim_button, "aim")
+        _set(self.touch_buttons.get("shoot"), "shoot")
+        _set(self.touch_buttons.get("pause"), "pause")
+        _set(self.touch_buttons.get("sprint"), "sprint")
+        _set(self.skill_selector, "skill_selector")
+        _set(self.skill_caster, "skill_caster")
+        _set(self.throwable_switch_btn, "throwable_switch")
+        _set(self.throwable_caster, "throwable_caster")
+
+    def _save_hud_layout(self):
+        """把当前所有触控按钮位置写入配置并持久化"""
+        layout = {}
+        def _put(ctrl, key):
+            if ctrl is not None:
+                layout[key] = [int(ctrl.base_x), int(ctrl.base_y)]
+        _put(self.joystick, "joystick")
+        _put(self.aim_button, "aim")
+        _put(self.touch_buttons.get("shoot"), "shoot")
+        _put(self.touch_buttons.get("pause"), "pause")
+        _put(self.touch_buttons.get("sprint"), "sprint")
+        _put(self.skill_selector, "skill_selector")
+        _put(self.skill_caster, "skill_caster")
+        _put(self.throwable_switch_btn, "throwable_switch")
+        _put(self.throwable_caster, "throwable_caster")
+        self.config.hud_layout = layout
+        self.config.save()
+        logger.info(f"HUD布局已保存: {len(layout)} 个控件")
+
+    def _reset_hud_layout(self):
+        """重置HUD布局为默认（三列两行）"""
+        self.config.hud_layout = {}
+        self.config.save()
+        self._setup_touch_controls()
+        logger.info("HUD布局已重置为默认")
 
     def _setup_menus(self):
         cx = BASE_WIDTH // 2 - 100
@@ -495,7 +550,8 @@ class Game:
             Button(cx, 480, 200, 45, "屏幕震动: 开", color=GRAY),
             Button(cx, 535, 200, 45, "控制: 键控", color=GRAY),
             Button(cx, 590, 200, 45, "日志记录: 开", color=GRAY),
-            Button(cx, 655, 200, 50, "返回", color=RED),
+            Button(cx, 640, 200, 50, "HUD布局", color=BLUE),
+            Button(cx, 695, 200, 50, "返回", color=RED),
         ]
         self.pause_buttons = [
             Button(cx, 170, 200, 50, "继续", color=GREEN),
@@ -1077,6 +1133,7 @@ class Game:
             self.damage_numbers = []
             self.floating_texts = []
             self.slash_arcs = []
+            self.sweep_rings = []
             self.enemy_projectiles = []
             self.smoke_zones = []
             self.grenades = []
@@ -3129,6 +3186,9 @@ class Game:
             if key == pygame.K_ESCAPE:
                 self.state = GameState.PAUSED
                 self.rune_selected = None
+        elif self.state == GameState.HUD_EDIT:
+            if key == pygame.K_ESCAPE:
+                self.state = GameState.SETTINGS
         elif self.state == GameState.SETTINGS:
             if key == pygame.K_ESCAPE:
                 self.config.save()
@@ -5319,15 +5379,15 @@ class Game:
                 if getattr(weapon, "melee_attack_triggered", False):
                     weapon.melee_attack_triggered = False
                     self._start_melee_attack(weapon, mouse_angle)
-                    # 死神镰刀：挥砍后朝面朝方向扔出镰刀并返回（进入换弹节奏）
-                    if getattr(weapon, "is_scythe", False):
-                        self._scythe_throw_attack(weapon, mouse_angle)
                 
                 # 记录射击
                 if self.session:
                     self.session.add_shot_fired()
                 # 播放射击音效
                 if getattr(weapon, "is_melee", False):
+                    self.assets.play_sound_random(["melee_swing", "shoot_pistol"])
+                elif getattr(weapon, "is_scythe", False):
+                    # 死神镰刀：剑气挥砍音效
                     self.assets.play_sound_random(["melee_swing", "shoot_pistol"])
                 elif getattr(weapon, "is_throwable", False):
                     self.assets.play_sound("grenade_throw")
@@ -5354,6 +5414,11 @@ class Game:
                         shoot_btn.max_cooldown = weapon.fire_rate
                     else:
                         shoot_btn.cooldown = 0
+
+        # 死神镰刀换弹期间：形成大圆形横扫区域（持续伤害+特效）
+        _cw = self.player.get_current_weapon()
+        if getattr(_cw, "is_scythe", False) and _cw.is_reloading:
+            self._update_scythe_sweep(_cw, dt)
 
         # 防爆套装自动肘击
         if self.player.riot_gear.equipped and self.config.control_mode == ControlMode.TOUCH:
@@ -6350,6 +6415,10 @@ class Game:
             sa.update(dt)
             if not sa.is_alive():
                 self.slash_arcs.remove(sa)
+        for sr in self.sweep_rings[:]:
+            sr["life"] -= dt
+            if sr["life"] <= 0:
+                self.sweep_rings.remove(sr)
 
         # 摄像机跟随
         self.camera.follow(self.player.x, self.player.y, dt)
@@ -6703,20 +6772,44 @@ class Game:
                 return m
         return STORY_MAP_ORDER[0]
 
-    def _scythe_throw_attack(self, weapon, angle):
-        """死神镰刀：朝面朝方向扔出一段距离，穿透路径上敌人后返回"""
-        tr = getattr(weapon, "throw_range", 320)
-        td = getattr(weapon, "throw_damage", 55) * self.player.damage_multiplier * self.player.buff_manager.get_damage_mult()
-        ts = getattr(weapon, "throw_speed", 13)
-        proj = Projectile(
-            self.player.x, self.player.y,
-            math.cos(angle) * ts, math.sin(angle) * ts,
-            td, tr, (180, 60, 220), 13, pierce=10, is_scythe_throw=True)
-        self.projectiles.append(proj)
-        self.assets.play_sound_random(["melee_swing", "shoot_pistol"])
-        # 进入换弹节奏（"砍几段等一下"）：换弹期间不可再攻击
-        weapon.is_reloading = True
-        weapon.reload_timer = getattr(weapon, "reload_time", 1.4)
+    def _update_scythe_sweep(self, weapon, dt):
+        """死神镰刀换弹期间：玩家周围形成大圆形横扫区域，持续伤害 + 环形刀光特效"""
+        if not self.player or not self.player.alive:
+            return
+        r = getattr(weapon, "sweep_radius", 210)
+        dps = getattr(weapon, "sweep_damage", 85)
+        dps *= (self.player.damage_multiplier *
+                self.player.buff_manager.get_damage_mult() *
+                getattr(self.player, 'damage_mult', 1.0))
+        # 圆形横扫：对范围内所有敌人持续伤害
+        for e in list(self.enemies):
+            if not getattr(e, "alive", True):
+                continue
+            dx, dy = e.x - self.player.x, e.y - self.player.y
+            if math.hypot(dx, dy) <= r:
+                e.take_damage(dps * dt, damage_type="aoe")
+        # 视觉特效
+        self._sweep_fx_timer = getattr(self, "_sweep_fx_timer", 0.0) - dt
+        if self._sweep_fx_timer <= 0:
+            self._sweep_fx_timer = 0.09
+            self.sweep_rings.append({
+                "x": self.player.x, "y": self.player.y,
+                "r": r * 0.25, "max_r": r, "color": (175, 60, 220),
+                "width": max(4, int(r * 0.05)), "life": 0.38, "max_life": 0.38,
+            })
+        self._sweep_arc_timer = getattr(self, "_sweep_arc_timer", 0.0) - dt
+        if self._sweep_arc_timer <= 0:
+            self._sweep_arc_timer = 0.22
+            import random as _r
+            ang = _r.uniform(0, math.pi * 2)
+            self.slash_arcs.append(SlashArc(
+                self.player.x, self.player.y, ang, r,
+                (180, 60, 220), lifetime=0.4, kind="scythe",
+                start_radius=r * 0.55, end_angle_offset=2.9))
+        self._sweep_sound_timer = getattr(self, "_sweep_sound_timer", 0.0) - dt
+        if self._sweep_sound_timer <= 0:
+            self._sweep_sound_timer = 0.42
+            self.assets.play_sound_random(["melee_swing", "shoot_pistol"])
 
     def _codex_unlock_toast(self, unlocked, label):
         """图鉴新解锁时实时弹出提示"""
