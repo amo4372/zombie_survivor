@@ -1971,10 +1971,12 @@ class Renderer:
                     if self.game.config.enable_logging:
                         self.game.logger.info("日志记录已开启")
                 elif i == 9:
-                    # 进入HUD自定义布局编辑
+                    # 进入HUD自定义布局编辑（单机→单机布局；双人→默认编辑P1）
                     self.game.state = GameState.HUD_EDIT
                     self.game.hud_edit_dirty = False
                     self.game.hud_edit_drag = None
+                    self.game.hud_edit_target = "P1" if self.game.is_multiplayer_active() else "单机"
+                    self._hud_edit_load_target(self.game.hud_edit_target)
                 elif i == 10:
                     self.game.config.save()
                     if getattr(self.game, 'settings_from_pause', False):
@@ -2001,35 +2003,38 @@ class Renderer:
         tip = self.game.font.render("拖动按钮调整位置（触控/鼠标），松手放下", True, (200, 200, 220))
         self.screen.blit(tip, tip.get_rect(center=(sw // 2, int(100 * scale))))
 
-        # 双人模式：P1/P2 独立编辑目标切换
-        if self.game.is_multiplayer_active():
-            target = getattr(self.game, "hud_edit_target", "P1")
-            tab1 = pygame.Rect(int(sw // 2 - 210 * scale), int(6 * scale), int(100 * scale), int(36 * scale))
-            tab2 = pygame.Rect(int(sw // 2 - 100 * scale), int(6 * scale), int(100 * scale), int(36 * scale))
-            mouse_pos0 = pygame.mouse.get_pos()
-            mp0 = pygame.mouse.get_pressed()
+        # 布局目标切换：单机 / P1 / P2（三套独立布局，互不覆盖）
+        mp_active = self.game.is_multiplayer_active()
+        target = getattr(self.game, "hud_edit_target", "单机")
+        if not mp_active:
+            target = "单机"
+        tabs = [("单机", "单机布局")]
+        if mp_active:
+            tabs = [("单机", "单机布局"), ("P1", "双人P1"), ("P2", "双人P2")]
+        tab_rects = []
+        tab_w = int(100 * scale)
+        tab_h = int(34 * scale)
+        total_w = len(tabs) * tab_w + (len(tabs) - 1) * int(8 * scale)
+        x0 = sw // 2 - total_w // 2
+        mouse_pos0 = pygame.mouse.get_pos()
+        mp0 = pygame.mouse.get_pressed()
+        for i, (tid, tlabel) in enumerate(tabs):
+            tr = pygame.Rect(x0 + i * (tab_w + int(8 * scale)), int(6 * scale), tab_w, tab_h)
+            tab_rects.append((tid, tr))
             for e in (self.game.touch_events or []):
-                if e["type"] == "down":
-                    if tab1.collidepoint(e["pos"]):
-                        self.game.hud_edit_target = "P1"
-                        self.game.hud_edit_drag = None
-                    elif tab2.collidepoint(e["pos"]):
-                        self.game.hud_edit_target = "P2"
-                        self.game.hud_edit_drag = None
-            if mp0[0]:
-                if tab1.collidepoint(mouse_pos0):
-                    self.game.hud_edit_target = "P1"
+                if e["type"] == "down" and tr.collidepoint(e["pos"]) and self.game.hud_edit_target != tid:
+                    self.game.hud_edit_target = tid
                     self.game.hud_edit_drag = None
-                elif tab2.collidepoint(mouse_pos0):
-                    self.game.hud_edit_target = "P2"
-                    self.game.hud_edit_drag = None
-            for rect, txt, is_on in [(tab1, "编辑P1", target == "P1"), (tab2, "编辑P2", target == "P2")]:
-                pygame.draw.rect(self.screen, (70, 140, 220) if is_on else (50, 50, 70), rect, border_radius=8)
-                pygame.draw.rect(self.screen, (255, 255, 255), rect, 2, border_radius=8)
-                lbl = self.game.font_small.render(txt, True, WHITE)
-                self.screen.blit(lbl, lbl.get_rect(center=rect.center))
-        else:
-            target = "P1"
+                    self._hud_edit_load_target(tid)
+            if mp0[0] and tr.collidepoint(mouse_pos0) and self.game.hud_edit_target != tid:
+                self.game.hud_edit_target = tid
+                self.game.hud_edit_drag = None
+                self._hud_edit_load_target(tid)
+            is_on = (tid == target)
+            pygame.draw.rect(self.screen, (70, 140, 220) if is_on else (50, 50, 70), tr, border_radius=8)
+            pygame.draw.rect(self.screen, (255, 255, 255), tr, 2, border_radius=8)
+            lbl = self.game.font_small.render(tlabel, True, WHITE)
+            self.screen.blit(lbl, lbl.get_rect(center=tr.center))
 
         # 可编辑控件元数据：(键名, 中文名, 控件, 半径, 标签方位) —— shoot 排在 aim 前，重叠时优先选中可操作按钮
         if target == "P2" and self.game.p2_controls:
@@ -2157,6 +2162,7 @@ class Renderer:
             self.game.hud_edit_dirty = False
         if self._clicked(reset_r, mouse_pos, mouse_pressed, touches, "hud_reset"):
             self.game._reset_hud_layout(target)
+            self._hud_edit_load_target(target)
             self.game.hud_edit_dirty = False
         if self._clicked(back_r, mouse_pos, mouse_pressed, touches, "hud_back"):
             if getattr(self.game, "hud_edit_dirty", False):
@@ -2167,6 +2173,32 @@ class Renderer:
                     self.game._setup_touch_controls()
                     self.game._apply_hud_layout()
             self.game.state = GameState.SETTINGS
+
+    def _hud_edit_load_target(self, target):
+        """切换HUD编辑目标时，把对应布局载入控件（无自定义则回默认）"""
+        g = self.game
+        if target == "P2":
+            g._setup_multiplayer_controls()
+            # P2 布局已由 _setup_multiplayer_controls 应用；无需再动
+        elif target == "P1":
+            g._setup_multiplayer_controls()
+        else:  # 单机
+            if not g.is_multiplayer_active():
+                g._setup_touch_controls()
+                g._apply_hud_layout()
+            else:
+                # 双人时编辑单机布局：临时把控件恢复全屏默认
+                from ui import VirtualJoystick, AimButton, TouchButton, SkillSelector, SkillCaster
+                g.joystick = VirtualJoystick(120, BASE_HEIGHT - 120, 70)
+                g.aim_button = AimButton(780, BASE_HEIGHT - 145, 62)
+                g.touch_buttons["shoot"] = TouchButton(780, BASE_HEIGHT - 145, 62, "射击", RED)
+                g.touch_buttons["pause"] = TouchButton(60, 55, 38, "II", GRAY)
+                g.touch_buttons["sprint"] = TouchButton(210, BASE_HEIGHT - 130, 40, "疾跑", AMBER)
+                g.skill_selector = SkillSelector(1060, BASE_HEIGHT - 320, 42)
+                g.skill_caster = SkillCaster(1150, BASE_HEIGHT - 145, 52)
+                g.throwable_switch_btn = TouchButton(910, BASE_HEIGHT - 320, 42, "投掷", ORANGE)
+                g.throwable_caster = SkillCaster(970, BASE_HEIGHT - 145, 48)
+                g._apply_layout_to(g.config.hud_layout or {})
 
     def _draw_play_select(self):
         """开始游戏 → 单人/多人 选择"""
@@ -2514,36 +2546,77 @@ class Renderer:
         self.screen = orig_screen
 
     def _draw_hud_split(self, player, label, rect):
-        """双人分屏 HUD：血量/经验/技能/触控控件（画在主屏对应半区）"""
+        """双人分屏 HUD：完整迷你HUD（血条/经验/武器弹药/技能/时间/得分/键位提示/倒地救援/触控控件）"""
         g = self.game
         scale = g.scale
         half_w = rect.width
-        # 血量
-        hp_pct = max(0, player.hp) / max(1, player.max_hp)
-        bar_w = int(half_w * 0.6)
-        bar_h = int(14 * scale)
         bx = rect.x + int(half_w * 0.2)
+        bar_w = int(half_w * 0.6)
+        # ===== 顶部：时间（P1 显示）与波次 =====
+        if label == "P1":
+            tl = max(0, int(getattr(g, 'time_left', 0)))
+            t_txt = g.font.render(f"{tl // 60:02d}:{tl % 60:02d}", True, WHITE)
+            self.screen.blit(t_txt, t_txt.get_rect(midtop=(rect.x + half_w // 2, rect.y + int(4 * scale))))
+        # ===== 血条 =====
+        hp_pct = max(0, player.hp) / max(1, player.max_hp)
+        bar_h = int(14 * scale)
         by = rect.y + int(26 * scale)
         pygame.draw.rect(self.screen, (40, 40, 40), (bx, by, bar_w, bar_h))
         pygame.draw.rect(self.screen, (220, 60, 60), (bx, by, int(bar_w * hp_pct), bar_h))
         pygame.draw.rect(self.screen, (200, 200, 200), (bx, by, bar_w, bar_h), 1)
         hp_txt = g.font_small.render(f"{max(0,int(player.hp))}/{player.max_hp}", True, WHITE)
         self.screen.blit(hp_txt, (bx, by - int(16 * scale)))
-        # 当前武器
+        # ===== 经验条 =====
+        if hasattr(player, 'exp_to_level') and player.exp_to_level:
+            exp_pct = max(0.0, min(1.0, player.exp / max(1, player.exp_to_level)))
+            exb = pygame.Rect(bx, rect.y + int(46 * scale), bar_w, int(5 * scale))
+            pygame.draw.rect(self.screen, (40, 40, 60), exb)
+            pygame.draw.rect(self.screen, (120, 200, 255), (exb.x, exb.y, int(exb.w * exp_pct), exb.h))
+            lv = g.font_small.render(f"Lv.{player.level}", True, (150, 220, 255))
+            self.screen.blit(lv, (rect.x + int(half_w * 0.82), rect.y + int(38 * scale)))
+        # ===== 武器 + 弹药 =====
         w = player.get_current_weapon() if hasattr(player, 'get_current_weapon') else None
         if w:
             wname = getattr(w, 'display_name', None) or getattr(w, 'name', '?')
             w_txt = g.font_small.render(f"{wname}", True, GOLD)
-            self.screen.blit(w_txt, (bx, rect.y + int(44 * scale)))
-        # 倒地状态：显示救援进度条
+            self.screen.blit(w_txt, (bx, rect.y + int(54 * scale)))
+            ammo = getattr(w, 'current_ammo', None)
+            if ammo is not None and ammo != "∞":
+                a_txt = g.font_small.render(f"弹药 {ammo}/{getattr(w, 'max_ammo', '?')}", True, (210, 210, 215))
+                self.screen.blit(a_txt, (bx, rect.y + int(68 * scale)))
+        # ===== 技能栏（当前技能 + 冷却） =====
+        sk = getattr(g, 'p2_selected_skill', None) if label == "P2" else getattr(g, 'selected_skill', None)
+        if sk and hasattr(player, 'skill_tree'):
+            sobj = player.skill_tree.get_skill(sk)
+            if sobj:
+                sname = getattr(sobj, 'name', '技能')
+                cd_left = player.active_skills.get(sk, 0)
+                if cd_left > 0:
+                    s_txt = g.font_small.render(f"技能: {sname} ({cd_left:.0f}s)", True, (180, 180, 190))
+                else:
+                    s_txt = g.font_small.render(f"技能: {sname}", True, (150, 230, 150))
+                self.screen.blit(s_txt, (bx, rect.y + int(82 * scale)))
+        # ===== 得分 =====
+        if hasattr(player, 'score'):
+            sc = g.font_small.render(f"分数 {player.score}", True, (240, 230, 150))
+            self.screen.blit(sc, (rect.x + int(half_w * 0.82), rect.y + int(54 * scale)))
+        # ===== 键位提示（键盘模式） =====
+        if g.config.control_mode == ControlMode.KEYBOARD:
+            if label == "P1":
+                hint = "WASD移动 · 鼠标射击 · E技能 · Q投掷 · Ctrl疾跑"
+            else:
+                hint = "方向键移动 · J射击 · U技能 · O投掷 · Shift疾跑"
+            ht = g.font_small.render(hint, True, (200, 200, 215))
+            self.screen.blit(ht, (rect.x + half_w // 2 - ht.get_width() // 2, rect.y + int(96 * scale)))
+        # ===== 倒地状态：显示救援进度条 =====
         if getattr(player, 'downed', False):
-            pygame.draw.rect(self.screen, (80, 70, 20), (bx, rect.y + int(60 * scale), bar_w, int(10 * scale)))
+            pygame.draw.rect(self.screen, (80, 70, 20), (bx, rect.y + int(112 * scale), bar_w, int(10 * scale)))
             prog = max(0.0, min(1.0, getattr(player, 'rescue_progress', 0) / 2.5))
-            pygame.draw.rect(self.screen, (240, 220, 80), (bx, rect.y + int(60 * scale), int(bar_w * prog), int(10 * scale)))
-            pygame.draw.rect(self.screen, (255, 255, 255), (bx, rect.y + int(60 * scale), bar_w, int(10 * scale)), 1)
+            pygame.draw.rect(self.screen, (240, 220, 80), (bx, rect.y + int(112 * scale), int(bar_w * prog), int(10 * scale)))
+            pygame.draw.rect(self.screen, (255, 255, 255), (bx, rect.y + int(112 * scale), bar_w, int(10 * scale)), 1)
             dtxt = g.font_small.render("倒地 · 队友靠近救援", True, (240, 230, 120))
-            self.screen.blit(dtxt, (bx, rect.y + int(74 * scale)))
-        # 触控控件（仅触控模式）——控件逻辑坐标本身即左/右半屏，直接画在主屏
+            self.screen.blit(dtxt, (bx, rect.y + int(124 * scale)))
+        # ===== 触控控件（仅触控模式） =====
         if g.config.control_mode == ControlMode.TOUCH and not g.is_network_client_render():
             if label == "P1":
                 self._draw_touch_controls_split(g, left=True)

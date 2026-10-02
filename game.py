@@ -105,7 +105,9 @@ class Config:
         self.render_buff_effects = True  # 是否渲染buff等额外效果
         self.graphics_quality = "balanced"  # performance / balanced / quality
         self.enable_logging = True      # 游戏日志开关（用户可选）
-        self.hud_layout = {}  # HUD触控按钮自定义布局：{控件名: [base_x, base_y]}
+        self.hud_layout = {}  # HUD触控按钮自定义布局：{控件名: [base_x, base_y]}（单机模式）
+        self.mp_p1_layout = {}  # 双人模式 P1 触控布局（独立于单机）
+        self.p2_hud_layout = {}  # 双人模式 P2 触控布局
         self.config_file = "config.json"
         self.load()
 
@@ -128,6 +130,12 @@ class Config:
                     _hl = data.get("hud_layout", {})
                     if isinstance(_hl, dict):
                         self.hud_layout = {k: list(v) for k, v in _hl.items() if isinstance(v, (list, tuple)) and len(v) == 2}
+                    _p1 = data.get("mp_p1_layout", {})
+                    if isinstance(_p1, dict):
+                        self.mp_p1_layout = {k: list(v) for k, v in _p1.items() if isinstance(v, (list, tuple)) and len(v) == 2}
+                    _p2 = data.get("p2_hud_layout", {})
+                    if isinstance(_p2, dict):
+                        self.p2_hud_layout = {k: list(v) for k, v in _p2.items() if isinstance(v, (list, tuple)) and len(v) == 2}
         except Exception as e:
             logger.error(f"配置加载失败: {e}")
 
@@ -145,6 +153,8 @@ class Config:
             "graphics_quality": self.graphics_quality,
             "enable_logging": self.enable_logging,
             "hud_layout": self.hud_layout,
+            "mp_p1_layout": self.mp_p1_layout,
+            "p2_hud_layout": self.p2_hud_layout,
         }
         try:
             with open(self.config_file, "w", encoding="utf-8") as f:
@@ -465,7 +475,11 @@ class Game:
 
     def _apply_hud_layout(self):
         """应用用户自定义的HUD按钮布局（config.hud_layout: {name: [x, y]} 逻辑坐标）"""
-        lay = getattr(self.config, 'hud_layout', None) or {}
+        self._apply_layout_to(self.config.hud_layout or {})
+
+    def _apply_layout_to(self, layout):
+        """把布局字典应用到 P1 触控控件"""
+        lay = layout or {}
         if not lay:
             return
         def _set(ctrl, key):
@@ -485,8 +499,8 @@ class Game:
         _set(self.throwable_switch_btn, "throwable_switch")
         _set(self.throwable_caster, "throwable_caster")
 
-    def _save_hud_layout(self, target="P1"):
-        """把当前所有触控按钮位置写入配置并持久化（P1→hud_layout / P2→p2_hud_layout）"""
+    def _save_hud_layout(self, target="单机"):
+        """保存触控布局（单机→hud_layout / P1→mp_p1_layout / P2→p2_hud_layout）"""
         layout = {}
         def _put(ctrl, key):
             if ctrl is not None:
@@ -503,6 +517,17 @@ class Game:
             _put(c2["throwable_switch"], "throwable_switch")
             _put(c2["throwable_caster"], "throwable_caster")
             self.config.p2_hud_layout = layout
+        elif target == "P1":
+            _put(self.joystick, "joystick")
+            _put(self.aim_button, "aim")
+            _put(self.touch_buttons.get("shoot"), "shoot")
+            _put(self.touch_buttons.get("pause"), "pause")
+            _put(self.touch_buttons.get("sprint"), "sprint")
+            _put(self.skill_selector, "skill_selector")
+            _put(self.skill_caster, "skill_caster")
+            _put(self.throwable_switch_btn, "throwable_switch")
+            _put(self.throwable_caster, "throwable_caster")
+            self.config.mp_p1_layout = layout
         else:
             _put(self.joystick, "joystick")
             _put(self.aim_button, "aim")
@@ -517,13 +542,19 @@ class Game:
         self.config.save()
         logger.info(f"HUD布局已保存({target}): {len(layout)} 个控件")
 
-    def _reset_hud_layout(self, target="P1"):
-        """重置HUD布局为默认（P1→hud_layout / P2→p2_hud_layout）"""
+    def _reset_hud_layout(self, target="单机"):
+        """重置HUD布局为默认（单机→hud_layout / P1→mp_p1_layout / P2→p2_hud_layout）"""
         if target == "P2" and self.p2_controls:
             self.config.p2_hud_layout = {}
             self.config.save()
             self._setup_multiplayer_controls()
             logger.info("P2 HUD布局已重置为默认")
+            return
+        if target == "P1":
+            self.config.mp_p1_layout = {}
+            self.config.save()
+            self._setup_multiplayer_controls()
+            logger.info("P1 HUD布局已重置为默认")
             return
         self.config.hud_layout = {}
         self.config.save()
@@ -560,10 +591,9 @@ class Game:
         self.p2_selected_throwable = "incendiary"
         self.p2_fire_held = False
         self._p2_finger_ids = set()  # P2 触控手指（右半屏）
-        # 双人独立 HUD 布局：P1 用 hud_layout（仅接受左半屏 x<640 的坐标），P2 用 p2_hud_layout
-        lay = getattr(self.config, 'hud_layout', None) or {}
-        if lay and all(v[0] < BASE_WIDTH // 2 for v in lay.values() if len(v) > 0):
-            self._apply_hud_layout()
+        # 双人独立 HUD 布局：P1 用 mp_p1_layout，P2 用 p2_hud_layout（单机 hud_layout 完全独立）
+        if getattr(self.config, 'mp_p1_layout', None):
+            self._apply_layout_to(self.config.mp_p1_layout)
         lay2 = getattr(self.config, 'p2_hud_layout', None) or {}
         if lay2:
             def _set2(ctrl, key):
@@ -1668,6 +1698,9 @@ class Game:
                 self.player2 = None
                 self.camera2 = None
                 self.p2_controls = None
+                # 单机：刷新触控控件并应用最新 HUD 布局（保存布局后直接开局也能生效）
+                self._setup_touch_controls()
+                self._apply_hud_layout()
             self.particles = ParticleSystem()
             self.lifesteal_flash = 0.0  # 吸血屏幕效果强度(0-1)
             # 屏幕血渍系统（持久化，受伤时添加，随时间淡出流淌）
@@ -5876,6 +5909,10 @@ class Game:
                 _r = trigger_hook(HOOK_TOUCH_EVENT, _e, self)
                 if not (True in _r):
                     _tev.append(_e)
+            # 双人同屏：P1 控件只接收左半屏的按下事件（防止右半屏触摸误触 P1；up 全收防卡死）
+            if self.is_multiplayer_active() and self.state == GameState.PLAYING:
+                _half_px = self.scaled_width // 2
+                _tev = [e for e in _tev if e["type"] != "down" or e.get("pos", (0, 0))[0] < _half_px]
             self.joystick.handle_touch(_tev, self.scale, self._active_touch_ids)
             # Windows 触控一体机（班班通等）的触摸以鼠标事件合成为主，up 可能被系统手势/驱动吞掉：
             # 用 mouse.get_pressed 兜底释放"鼠标手指(id=-1)"，防止摇杆/攻击按钮卡在按下态
