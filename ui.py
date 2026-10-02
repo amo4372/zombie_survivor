@@ -87,6 +87,7 @@ class Button:
         self.border_radius = border_radius
         self.hovered = False
         self.pressed = False
+        self.touch_pressed = False  # 触控按下状态（跨帧保持，独立于鼠标悬停）
         self.visible = True
         self.enabled = True
         self.was_pressed = False
@@ -105,21 +106,16 @@ class Button:
         scaled_rect = self.get_scaled_rect(scale)
         self.hovered = scaled_rect.collidepoint(mouse_pos)
         clicked = False
-        touch_down_on_button = False
         if touch_events:
             for event in touch_events:
                 if event["type"] == "down":
                     if scaled_rect.collidepoint(event["pos"]):
-                        self.pressed = True
-                        touch_down_on_button = True
+                        self.touch_pressed = True
                 elif event["type"] == "up":
-                    if self.pressed:
-                        self.pressed = False
+                    if self.touch_pressed:
+                        self.touch_pressed = False
                         if scaled_rect.collidepoint(event["pos"]):
                             clicked = True
-                    elif touch_down_on_button and scaled_rect.collidepoint(event["pos"]):
-                        # 瞬发点击：同一帧内有down和up
-                        clicked = True
         if self.hovered:
             if mouse_pressed[0]:
                 if not self.was_pressed:
@@ -133,6 +129,8 @@ class Button:
         else:
             if not mouse_pressed[0]:
                 self.was_pressed = False
+            # 仅重置鼠标按下态；触控按下用独立 touch_pressed 保持，
+            # 不会被此处清掉（纯触控设备鼠标光标不在按钮上，原逻辑会吞掉触控点击）
             self.pressed = False
         return clicked
 
@@ -144,7 +142,7 @@ class Button:
             color = (60, 60, 60)
         else:
             color = self.hover_color if self.hovered else self.color
-        if self.pressed:
+        if self.pressed or self.touch_pressed:
             color = tuple(max(0, c - 40) for c in color)
         pygame.draw.rect(screen, color, scaled_rect, border_radius=self.border_radius)
         pygame.draw.rect(screen, self.text_color, scaled_rect, 2, border_radius=self.border_radius)

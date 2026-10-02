@@ -3032,7 +3032,7 @@ class Game:
             bs = [_ET.BOSS_LONG, _ET.BOSS_XIANG, _ET.BOSS_MUTANT, _ET.BOSS_QUEEN, _ET.BOSS_TITAN, _ET.BOSS_WANG]
             import random as _r
             et = _r.choice(bs)
-            e = Enemy(self.player.x + _r.randint(-100, 100), self.player.y + _r.randint(-100, 100), et, 1, self.difficulty)
+            e = Enemy(self.player.x + _r.randint(-100, 100), self.player.y + _r.randint(-100, 100), et, 1, self.config.difficulty)
             self.enemies.append(e)
             self.floating_texts.append(FloatingText(e.x, e.y, f"生成 {getattr(e,'name','')}", color=(255, 80, 80), lifetime=2.0))
         elif idx == 3:
@@ -3040,14 +3040,14 @@ class Game:
             from config import EnemyType as _ET
             ets = [_ET.ELITE_BRUTE, _ET.ELITE_ASSASSIN, _ET.ELITE_SORCERER, _ET.ELITE_GUARDIAN]
             for _ in range(5):
-                e = Enemy(self.player.x + _r.randint(-150, 150), self.player.y + _r.randint(-150, 150), _r.choice(ets), 1, self.difficulty)
+                e = Enemy(self.player.x + _r.randint(-150, 150), self.player.y + _r.randint(-150, 150), _r.choice(ets), 1, self.config.difficulty)
                 self.enemies.append(e)
         elif idx == 4:
             import random as _r
             from config import EnemyType as _ET
             ets = [_ET.ZOMBIE_NORMAL, _ET.ZOMBIE_FAST, _ET.ZOMBIE_CRAWLER, _ET.ZOMBIE_RANGED]
             for _ in range(12):
-                e = Enemy(self.player.x + _r.randint(-200, 200), self.player.y + _r.randint(-200, 200), _r.choice(ets), 1, self.difficulty)
+                e = Enemy(self.player.x + _r.randint(-200, 200), self.player.y + _r.randint(-200, 200), _r.choice(ets), 1, self.config.difficulty)
                 self.enemies.append(e)
         elif idx == 5:
             self.enemies.clear()
