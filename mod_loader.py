@@ -587,10 +587,17 @@ class ModAPI:
     def show_message(self, text, duration=3.0):
         """在屏幕上显示消息"""
         if self._game:
+            ft = getattr(mod_hooks, '_global_classes', {}).get('FloatingText')
+            if ft is None:
+                try:
+                    from ui import FloatingText
+                    ft = FloatingText
+                except Exception:
+                    return
             self._game.floating_texts.append(
-                FloatingText(self._game.player.x if self._game.player else 0,
-                           self._game.player.y - 60 if self._game.player else 0,
-                           text, (255, 255, 200))
+                ft(self._game.player.x if self._game.player else 0,
+                   self._game.player.y - 60 if self._game.player else 0,
+                   text, (255, 255, 200))
             )
     
     # === 配置/数据相关 ===

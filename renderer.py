@@ -55,6 +55,24 @@ class Renderer:
     def __init__(self, screen, game):
         self.screen = screen
         self.game = game
+        self._touch_clicks = {}  # 符文界面等：跨帧触控按下状态（key -> bool）
+
+    def _clicked(self, rect, mouse_pos, mouse_pressed, touch_events, key):
+        """统一鼠标+触控点击检测（带跨帧触控状态）。
+        rect 为已缩放的屏幕坐标矩形。
+        鼠标：按下且在 rect 内即触发（保持原有即时反馈）。
+        触控：down 在 rect 内记录，手指抬起仍在 rect 内时触发。"""
+        if rect.collidepoint(mouse_pos) and mouse_pressed[0]:
+            return True
+        if touch_events:
+            for e in touch_events:
+                if e["type"] == "down" and rect.collidepoint(e["pos"]):
+                    self._touch_clicks[key] = True
+                elif e["type"] == "up":
+                    was = self._touch_clicks.pop(key, False)
+                    if was and rect.collidepoint(e["pos"]):
+                        return True
+        return False
 
     def render(self):
         state = self.game.state
@@ -2653,11 +2671,11 @@ class Renderer:
         title = g.font_title.render("我的符文", True, GOLD)
         self.screen.blit(title, title.get_rect(center=(sw // 2, int(60 * scale))))
 
-        # 返回按钮
+        # 返回按钮（统一鼠标+触控点击）
         back_btn = pygame.Rect(int(30 * scale), int(25 * scale), int(120 * scale), int(40 * scale))
         mouse_pos = pygame.mouse.get_pos()
         mouse_pressed = pygame.mouse.get_pressed()
-        if back_btn.collidepoint(mouse_pos) and mouse_pressed[0]:
+        if self._clicked(back_btn, mouse_pos, mouse_pressed, g.touch_events, "rune_back"):
             if getattr(g, '_rune_back_cooldown', 0) <= 0:
                 g._rune_back_cooldown = 0.3
                 g.state = GameState.PAUSED
@@ -2707,7 +2725,7 @@ class Renderer:
             self.screen.blit(lv, lv.get_rect(center=(rect.centerx, ry + int(48 * scale))))
             rar = g.font_small.render(RARITY_NAMES.get(cfg["rarity"], "普通"), True, RARITY_COLORS.get(cfg["rarity"], GRAY))
             self.screen.blit(rar, rar.get_rect(center=(rect.centerx, ry + int(70 * scale))))
-            if rect.collidepoint(mouse_pos) and mouse_pressed[0] and getattr(g, '_rune_click_cooldown', 0) <= 0:
+            if self._clicked(rect, mouse_pos, mouse_pressed, g.touch_events, ("rune_cell", idx)) and getattr(g, '_rune_click_cooldown', 0) <= 0:
                 clicked_idx = idx
 
         # 点击符文 → 选中（查看详情）
@@ -2719,9 +2737,9 @@ class Renderer:
             rt = g.rune_selected
             cfg = RUNE_CONFIG[rt]
             stacks = g.rune_manager.runes[rt]
-            # 关闭按钮
+            # 关闭按钮（统一鼠标+触控点击）
             close_rect = pygame.Rect(int(sw - 50 * scale), int(160 * scale), int(36 * scale), int(36 * scale))
-            if close_rect.collidepoint(mouse_pos) and mouse_pressed[0] and getattr(g, '_rune_close_cooldown', 0) <= 0:
+            if self._clicked(close_rect, mouse_pos, mouse_pressed, g.touch_events, "rune_close") and getattr(g, '_rune_close_cooldown', 0) <= 0:
                 g.rune_selected = None
             detail_w = int(420 * scale)
             detail_h = int(300 * scale)

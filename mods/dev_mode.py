@@ -12,10 +12,11 @@
   F6  回满血（Full Heal）
   F7  +1000 经验
   F8  解锁全部技能
-  F9  穿墙/自由移动（Noclip）
+  F9  开发者调试面板（内置面板开关，见游戏内 F9 提示）
   F10 切换游戏速度（0.5x / 1x / 2x / 4x）
   F11 在鼠标位置生成 10 只僵尸
   F12 传送到鼠标位置
+  N   穿墙/自由移动（Noclip）
 
 注意：此 mod 仅用于开发调试，正式发布时请移除或禁用。
 """
@@ -187,7 +188,7 @@ def on_keydown(key):
         _notify(game, f"已解锁 {count} 个技能", (200, 100, 255))
         return True
 
-    elif key == pygame.K_F9:
+    elif key == pygame.K_n:
         on = _toggle("noclip")
         _notify(game, f"穿墙模式: {'开' if on else '关'}", (150, 255, 200) if on else (200, 200, 200))
         return True
@@ -296,7 +297,7 @@ def on_render_hud(screen, game):
     lines.append(f"F1无敌: {'ON' if _state['god_mode'] else 'off'}")
     lines.append(f"F2必杀: {'ON' if _state['one_hit_kill'] else 'off'}")
     lines.append(f"F3无CD: {'ON' if _state['no_cooldown'] else 'off'}")
-    lines.append(f"F9穿墙: {'ON' if _state['noclip'] else 'off'}")
+    lines.append(f"N穿墙: {'ON' if _state['noclip'] else 'off'}")
     lines.append(f"F10速度: {_time_scales[_state['time_scale_index']]}x")
 
     # 渲染
