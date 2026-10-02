@@ -166,6 +166,33 @@ class Projectile:
             pygame.draw.circle(screen, (*self.color[:3], 200), (px, py), s + 2)
             pygame.draw.circle(screen, WHITE, (px, py), s)
             pygame.draw.circle(screen, CYAN, (px, py), s - 2)
+        elif self.is_scythe_throw:
+            # ===== 死神镰刀抛掷：旋转镰刀（紫刃+长柄），局内清晰可见 =====
+            import math as _m
+            _spin = _m.radians((pygame.time.get_ticks() / 6.0) % 360)  # 持续旋转
+            _blade_r = max(10, int(20 * scale))
+            _dir = _m.atan2(self.vy, self.vx)
+            # 紫光晕
+            _g = pygame.Surface((_blade_r * 2 + 12, _blade_r * 2 + 12), pygame.SRCALPHA)
+            _gc = _blade_r + 6
+            pygame.draw.circle(_g, (180, 60, 220, 60), (_gc, _gc), _blade_r + 4)
+            screen.blit(_g, (px - _gc, py - _gc))
+            # 旋转刀弧（朝向运动方向 + 旋转偏移）
+            _base = _dir + _spin
+            # 刀刃（亮紫弧）
+            pygame.draw.arc(screen, (216, 130, 250), (px - _blade_r, py - _blade_r, _blade_r * 2, _blade_r * 2),
+                            _base - 2.3, _base + 0.7, max(3, int(6 * scale)))
+            pygame.draw.arc(screen, (150, 60, 210), (px - _blade_r, py - _blade_r, _blade_r * 2, _blade_r * 2),
+                            _base - 2.1, _base + 0.5, max(2, int(3 * scale)))
+            # 柄（从中心朝反方向）
+            _hx = px - _m.cos(_base) * (_blade_r + 8)
+            _hy = py - _m.sin(_base) * (_blade_r + 8)
+            pygame.draw.line(screen, (110, 90, 62), (px, py), (int(_hx), int(_hy)), max(2, int(4 * scale)))
+            pygame.draw.line(screen, (150, 122, 82), (px, py), (int(_hx), int(_hy)), max(1, int(2 * scale)))
+            # 柄端银环
+            pygame.draw.circle(screen, (170, 174, 190), (int(_hx), int(_hy)), max(2, int(3 * scale)))
+            # 白亮高光点
+            pygame.draw.circle(screen, WHITE, (px, py), max(1, int(2 * scale)))
         else:
             pygame.draw.circle(screen, self.color, (px, py), s)
             if s > 2:

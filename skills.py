@@ -63,18 +63,6 @@ class Skill:
                 return False
         return True
 
-    def can_unlock_combo(self, player_skills):
-        """组合技/终极技的前置检测：所有 requires 都须满足（按技能名）"""
-        for req_type, req_level in self.requires:
-            found = False
-            for ps in player_skills:
-                if ps.skill_type == req_type and ps.current_level >= req_level:
-                    found = True
-                    break
-            if not found:
-                return False
-        return True
-
     def get_description(self):
         """根据当前等级获取描述词条（高等级有不同词条）"""
         if self.current_level in self.level_descriptions:
@@ -151,41 +139,26 @@ class Skill:
 class SkillTree:
     def __init__(self):
         self.skills = self._create_skills()
-        # 组合技 / 终极技节点（《黎明前20分钟》三层体系）
-        self.combo_skills = []
-        self.ultimate_skills = []
-        self._create_combo_and_ultimate()
         self.skill_points = 0
         self._skill_pool = []
+        self._apply_tuning()
+        # 最近升级的被动技能（倾向性）：升级某被动后，后续几次技能卡更倾向再次出现它
+        self._last_upgraded_passive = None
+        self._passive_boost_remaining = 0
 
-    def _create_combo_and_ultimate(self):
-        """创建组合技与终极技节点（单级，requires 为前置技能名）"""
-        for cname, cfg in COMBO_SKILL_DEFS.items():
-            stype = getattr(SkillType, cfg["type"], None)
-            if stype is None:
-                continue
-            req = [(getattr(SkillType, n, SkillType.HEALTH_UP), 1) for n in cfg["requires"][0]]
-            s = Skill(stype, cname, cfg["desc"], 1, icon_color=GOLD, requires=req,
-                      effect_key="combo", effect_per_level=0.1, weight=2.5)
-            s.combo_tier = "combo"
-            s.combo_effect = cfg.get("effect", {})
-            self.combo_skills.append(s)
-            self.skills.append(s)
-        for uname, cfg in ULTIMATE_SKILL_DEFS.items():
-            stype = getattr(SkillType, cfg["type"], None)
-            if stype is None:
-                continue
-            req = [(getattr(SkillType, n, SkillType.HEALTH_UP), 1) for n in cfg["requires"][0]]
-            s = Skill(stype, uname, cfg["desc"], 1, icon_color=CRIMSON, requires=req,
-                      effect_key="combo", effect_per_level=0.1, weight=3.5)
-            s.combo_tier = "ultimate"
-            s.combo_effect = cfg.get("effect", {})
-            self.ultimate_skills.append(s)
-            self.skills.append(s)
-
-    def get_combo_and_ultimate(self):
-        """返回 (组合技列表, 终极技列表)"""
-        return self.combo_skills, self.ultimate_skills
+    def _apply_tuning(self):
+        """平衡调整：被动技能最高3级；减弱技能间前置依赖"""
+        # 被动技能(非主动)统一 max_level=3，裁剪等级词条
+        for s in self.skills:
+            if not s.is_active and s.max_level > 3:
+                s.max_level = 3
+                if s.level_descriptions:
+                    s.level_descriptions = {k: v for k, v in s.level_descriptions.items() if k <= 3}
+                s.max_level_bonus = None
+        # 减弱依赖：所有前置需求等级 clamp 到 1（只需拥有前置技能即可解锁后续）
+        for s in self.skills:
+            if s.requires:
+                s.requires = [(rt, 1) for rt, _ in s.requires]
 
     def _create_skills(self):
         return [
@@ -465,12 +438,18 @@ class SkillTree:
 
     def upgrade_skill(self, skill_type):
         skill = self.get_skill(skill_type)
-        if not skill or skill.current_level > 0:
-            return False
-        # 单级语义：无论 max_level 多少，选中即满级（1级）
-        skill.current_level = 1
-        skill.max_level = 1
-        return True
+        if skill and skill.can_upgrade(self.skills) and self.skill_points > 0:
+            skill.current_level += 1
+            self.skill_points -= 1
+            # 升级被动后：后续几次技能卡倾向再次出现该被动（本被动权重额外提升）
+            if not skill.is_active:
+                self._last_upgraded_passive = skill_type
+                self._passive_boost_remaining = 3
+            else:
+                self._last_upgraded_passive = None
+                self._passive_boost_remaining = 0
+            return True
+        return False
 
     def get_available_skills(self):
         """获取当前可升级的技能列表"""
@@ -481,11 +460,14 @@ class SkillTree:
         return available
 
     def get_random_skill_cards(self, count=3, current_weapon=None):
-        """三层卡池（《黎明前20分钟》式）：
-        1) 终极技：两个前置组合技都已拥有且未获得 → 最高优先
-        2) 组合技：两个前置基础技能都已拥有且未获得
-        3) 基础技能：未拥有（单级）
-        权重：终极技>组合技>基础技能，近战武器加权近战类。
+        """随机获取技能卡供选择（基于技能权重的归一化爆率系统）
+        
+        权重规则：
+        - 技能自身 weight 属性（稀有度）
+        - 已拥有未满级的被动技能 ×4（倾向继续强化同一被动路线）
+        - 最近一次升级的被动技能额外 ×3（升级后紧随其后的技能卡更倾向该被动，最多生效3次）
+        - 满级技能不出现（已在 get_available_skills 中过滤）
+        - 近战武器（如死神镰刀）时，近战类技能权重 ×3（技能池按武器类型优化）
         """
         melee_boost = set()
         try:
@@ -495,66 +477,42 @@ class SkillTree:
                     melee_boost.add(s)
         except Exception:
             pass
-
-        pool = []
-        pool_weight = []
-
-        def _can_unlock(skill):
-            if skill.current_level > 0:
-                return False
-            return skill.can_unlock_combo(self.skills)
-
-        def _weight(skill, tier_weight):
-            w = skill.weight * tier_weight
+        available = self.get_available_skills()
+        if len(available) <= count:
+            return available
+        # 计算归一化权重
+        boost_last = bool(self._passive_boost_remaining > 0 and self._last_upgraded_passive is not None)
+        weights = []
+        for skill in available:
+            w = skill.weight
+            if not skill.is_active and 0 < skill.current_level < skill.max_level:
+                w *= 4.0  # 已拥有未满级的被动技能：倾向继续强化（高权重更易再次出现）
+            elif skill.current_level == 0 and not skill.is_active:
+                w *= 1.2  # 未解锁被动：普通权重
+            if boost_last and getattr(skill, "skill_type", None) == self._last_upgraded_passive:
+                w *= 3.0  # 最近升级的被动：额外倾向
             is_melee = bool(current_weapon and getattr(current_weapon, "is_melee", False))
             if is_melee and getattr(skill, "skill_type", None) in melee_boost:
-                w *= 3.0
-            return max(0.01, w)
-
-        # 1) 终极技
-        for skill in self.ultimate_skills:
-            if _can_unlock(skill):
-                pool.append(skill)
-                pool_weight.append(_weight(skill, 4.0))
-        # 2) 组合技
-        for skill in self.combo_skills:
-            if _can_unlock(skill):
-                pool.append(skill)
-                pool_weight.append(_weight(skill, 2.0))
-        # 3) 基础技能（未拥有）
-        for skill in self.skills:
-            if getattr(skill, "combo_tier", None):
-                continue
-            if skill.current_level > 0:
-                continue
-            if skill.max_level > 1 and skill.current_level > 0:
-                continue
-            pool.append(skill)
-            pool_weight.append(_weight(skill, 1.0))
-
-        if not pool:
-            return []
-
+                w *= 3.0  # 近战武器优先近战/附魔类技能
+            weights.append(max(0.01, w))
         selected = []
-        temp_pool = pool.copy()
-        temp_weight = pool_weight.copy()
-        while len(selected) < count and temp_pool:
-            total = sum(temp_weight)
+        temp_available = available.copy()
+        temp_weights = weights.copy()
+        while len(selected) < count and temp_available:
+            total = sum(temp_weights)
             if total <= 0:
                 break
             r = random.uniform(0, total)
             cumsum = 0
-            chosen = None
-            for i, (skill, w) in enumerate(zip(temp_pool, temp_weight)):
+            for i, (skill, w) in enumerate(zip(temp_available, temp_weights)):
                 cumsum += w
                 if r <= cumsum:
-                    chosen = skill
-                    temp_pool.pop(i)
-                    temp_weight.pop(i)
+                    selected.append(skill)
+                    temp_available.pop(i)
+                    temp_weights.pop(i)
                     break
-            if chosen is None:
-                break
-            selected.append(chosen)
+        if boost_last and self._passive_boost_remaining > 0:
+            self._passive_boost_remaining -= 1
         return selected
 
     def get_unlocked_active_skills(self):

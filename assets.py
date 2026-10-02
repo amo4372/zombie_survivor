@@ -96,6 +96,7 @@ ASSET_REGISTRY = {
         "boss_mutant":       "assets/images/boss_mutant.png",
         "boss_queen":        "assets/images/boss_queen.png",
         "boss_titan":        "assets/images/boss_titan.png",
+        "boss_wang":         "assets/images/boss_wang.png",
         # === 新精英怪 ===
         "elite_brute":       "assets/images/elite_brute.png",
         "elite_assassin":    "assets/images/elite_assassin.png",

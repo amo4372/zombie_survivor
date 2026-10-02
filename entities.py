@@ -615,10 +615,6 @@ class Player:
         self.armor = 0.0  # 新增：护甲减伤
         self.dodge_chance = 0.0  # 新增：闪避几率
         self.regen_rate = 0.0  # 新增：生命恢复
-        # 组合技/终极技元素强化标记（三层体系）
-        self.combo_burn = 0.0
-        self.combo_frost = 0.0
-        self.combo_poison = 0.0
         self.fortress_active = False  # 新增：堡垒状态
 
         # 临时增益（保留兼容，实际由buff_manager管理）
@@ -934,40 +930,6 @@ class Player:
         regen_skill = skill.get_skill(SkillType.REGENERATION)
         if regen_skill:
             self.regen_rate = regen_skill.current_level * 0.01 * self.max_hp
-
-        # 组合技/终极技被动加成（三层体系）
-        for s in getattr(skill, 'combo_skills', []) + getattr(skill, 'ultimate_skills', []):
-            if getattr(s, 'current_level', 0) <= 0:
-                continue
-            eff = getattr(s, 'combo_effect', {}) or {}
-            for k, v in eff.items():
-                if k == "damage":
-                    self.damage_mult = getattr(self, 'damage_mult', 1.0) + v
-                    self.damage_multiplier = getattr(self, 'damage_multiplier', 1.0) + v
-                elif k == "fire_rate":
-                    self.fire_rate_mult = getattr(self, 'fire_rate_mult', 1.0) + v
-                elif k == "speed":
-                    self.speed_mult = getattr(self, 'speed_mult', 1.0) + v
-                elif k == "cooldown":
-                    self.cooldown_mult = (getattr(self, 'cooldown_mult', 1.0) - v)
-                elif k == "armor":
-                    self.armor = getattr(self, 'armor', 0.0) + v
-                elif k == "max_hp":
-                    self.max_hp = int(self.max_hp * (1 + v))
-                elif k == "regen":
-                    self.regen_rate = getattr(self, 'regen_rate', 0.0) + v * self.max_hp
-                elif k == "life_steal":
-                    self.life_steal = getattr(self, 'life_steal', 0.0) + v
-                elif k == "crit_chance":
-                    self.crit_chance = getattr(self, 'crit_chance', 0.05) + v
-                elif k == "crit_damage":
-                    self.crit_damage = getattr(self, 'crit_damage', 1.5) + v
-                elif k == "burn":
-                    self.combo_burn = getattr(self, 'combo_burn', 0.0) + v
-                elif k == "frost":
-                    self.combo_frost = getattr(self, 'combo_frost', 0.0) + v
-                elif k == "poison":
-                    self.combo_poison = getattr(self, 'combo_poison', 0.0) + v
 
     def gain_exp(self, amount):
         self.exp += int(amount * self.exp_mult)
@@ -2389,7 +2351,7 @@ class Enemy:
         return pygame.Rect(self.x - self.size, self.y - self.size, 
                           self.size * 2, self.size * 2)
 
-    def draw(self, screen, camera_x, camera_y, font, scale=1.0, assets=None):
+    def draw(self, screen, camera_x, camera_y, font, scale=1.0, assets=None, player_x=None, player_y=None):
         px = int((self.x - camera_x) * scale)
         py = int((self.y - camera_y) * scale)
         s = max(2, int(self.size * scale))
@@ -2459,6 +2421,7 @@ class Enemy:
                 EnemyType.BOSS_MUTANT: "boss_mutant",
                 EnemyType.BOSS_QUEEN: "boss_queen",
                 EnemyType.BOSS_TITAN: "boss_titan",
+                EnemyType.BOSS_WANG: "boss_wang",
                 EnemyType.ELITE_BRUTE: "elite_brute",
                 EnemyType.ELITE_ASSASSIN: "elite_assassin",
                 EnemyType.ELITE_SORCERER: "elite_sorcerer",
@@ -2528,6 +2491,9 @@ class Enemy:
             # 龙某举盾特效
             shield_s = int(35 * scale)
             pygame.draw.circle(screen, BLUE, (px, py), shield_s, max(2,int(3*scale)))
+        # ===== 王某：手持武器（枪械形态 / 死神镰刀形态，双形态可见）=====
+        if getattr(self, "enemy_type", None) == EnemyType.BOSS_WANG and self.max_hp > 0:
+            self._draw_wang_weapon(screen, px, py, s, scale, player_x, player_y)
         # =========处决前摇红色闪烁警告【新增】=========
         if getattr(self,"boss_is_executing",False):
             flash = abs(math.sin(pygame.time.get_ticks() / 80))
@@ -2535,6 +2501,63 @@ class Enemy:
             g = int(30*flash)
             b = int(30*flash)
             pygame.draw.circle(screen,(r,g,b),(px,py),int((s+25)*scale),max(3,int(4*scale)))
+
+    def _draw_wang_weapon(self, screen, px, py, s, scale, player_x=None, player_y=None):
+        """王某手持武器渲染：血量>50% 枪械形态；<=50% 死神镰刀形态（均朝玩家方向）"""
+        import math as _m
+        _ang = 0.0
+        if player_x is not None and player_y is not None and (player_x != self.x or player_y != self.y):
+            _ang = _m.atan2(player_y - self.y, player_x - self.x)
+        _scythe_form = (self.hp / self.max_hp) <= 0.5
+        _ticks = pygame.time.get_ticks()
+
+        if _scythe_form:
+            # ===== 死神镰刀形态：紫刃大弧 + 长柄，幽光脉动 =====
+            _pulse = abs(_m.sin(_ticks / 300.0)) * 0.5 + 0.5
+            _blade_r = int((s * 1.9 + 10) * scale)
+            _g = pygame.Surface((_blade_r * 2 + 16, _blade_r * 2 + 16), pygame.SRCALPHA)
+            _gc = _blade_r + 8
+            # 刀刃弧（指向玩家方向）
+            pygame.draw.arc(_g, (216, 140, 250, 200), (6, 6, _blade_r * 2, _blade_r * 2),
+                            _ang - 2.1, _ang + 0.9, max(3, int(7 * scale)))
+            pygame.draw.arc(_g, (150, 60, 210, 240), (6, 6, _blade_r * 2, _blade_r * 2),
+                            _ang - 1.9, _ang + 0.7, max(2, int(4 * scale)))
+            # 外发光
+            pygame.draw.arc(_g, (120, 40, 190, int(70 * _pulse)), (2, 2, _blade_r * 2 + 8, _blade_r * 2 + 8),
+                            _ang - 2.2, _ang + 1.0, max(4, int(10 * scale)))
+            screen.blit(_g, (px - _gc, py - _gc))
+            # 镰刀柄（从王某朝玩家方向延伸）
+            _hl = int((s + 16) * scale)
+            _hx = px + _m.cos(_ang) * _hl
+            _hy = py + _m.sin(_ang) * _hl
+            pygame.draw.line(screen, (92, 74, 54), (px, py), (_hx, _hy), max(3, int(5 * scale)))
+            pygame.draw.line(screen, (128, 104, 74), (px, py), (_hx, _hy), max(1, int(2 * scale)))
+            # 柄端银环
+            pygame.draw.circle(screen, (170, 174, 190), (int(_hx), int(_hy)), max(3, int(5 * scale)))
+        else:
+            # ===== 枪械形态：暗色步枪指向玩家 =====
+            _gl = int((s + 20) * scale)
+            _gx = px + _m.cos(_ang) * _gl
+            _gy = py + _m.sin(_ang) * _gl
+            # 枪身
+            _bw = max(3, int(5 * scale))
+            pygame.draw.line(screen, (58, 60, 74), (px, py), (_gx, _gy), _bw)
+            # 枪管（细长）
+            _bx = px + _m.cos(_ang) * (_gl + int(10 * scale))
+            _by = py + _m.sin(_ang) * (_gl + int(10 * scale))
+            pygame.draw.line(screen, (36, 38, 50), (_gx, _gy), (_bx, _by), max(2, int(3 * scale)))
+            # 金饰
+            pygame.draw.line(screen, (206, 168, 78), (px, py), (_gx, _gy), max(1, int(2 * scale)))
+            # 枪口火光（开火时闪烁）
+            _flash = abs(_m.sin(_ticks / 120.0))
+            if _flash > 0.55:
+                _fglow = pygame.Surface((int(26 * scale) * 2, int(26 * scale) * 2), pygame.SRCALPHA)
+                _fc = int(26 * scale)
+                pygame.draw.circle(_fglow, (255, 170, 60, int(120 * _flash)), (_fc, _fc), _fc)
+                pygame.draw.circle(_fglow, (255, 230, 140, int(200 * _flash)), (_fc, _fc), int(10 * scale))
+                screen.blit(_fglow, (int(_bx) - _fc, int(_by) - _fc))
+            # 瞄具小点
+            pygame.draw.circle(screen, (120, 200, 220), (int((px + _gx) / 2), int((py + _gy) / 2)), max(1, int(2 * scale)))
 
 
 class ExpOrb:

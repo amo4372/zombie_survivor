@@ -311,7 +311,7 @@ class Renderer:
                             g.dev_mode = True
                             g.dev_input_active = False
                             g.dev_input_str = ""
-                            g.update_status_text = "开发者模式已开启！局内按 T 键打开调试面板"
+                            g.update_status_text = "开发者模式已开启！局内按 F9 键打开调试面板"
                         else:
                             g.dev_input_active = False
                             g.dev_input_str = ""
@@ -327,7 +327,7 @@ class Renderer:
         self.screen.blit(ov, (0, 0))
         head = g.font.render("开发者调试面板", True, (60, 220, 60))
         self.screen.blit(head, (sw - 210, 40))
-        tip = g.font_small.render("T 键 关闭面板 · 无敌/倍率等", True, (200, 200, 210))
+        tip = g.font_small.render("F9 键 关闭面板 · 无敌/倍率等", True, (200, 200, 210))
         self.screen.blit(tip, (sw - 250, 66))
         bx, by = sw - 190, 90
         for btn in g.dev_buttons:
@@ -2041,7 +2041,8 @@ class Renderer:
 
         # 绘制敌人
         for enemy in self.game.enemies:
-            enemy.draw(self.screen, cam_x, cam_y, self.game.font, scale, self.game.assets)
+            enemy.draw(self.screen, cam_x, cam_y, self.game.font, scale, self.game.assets,
+                       getattr(self.game.player, 'x', None), getattr(self.game.player, 'y', None))
             # 技能前摇预警：释放带前摇的技能时显示警示（红色闪烁圈+危险标记）
             if (getattr(enemy, 'boss_is_executing', False)
                     or getattr(enemy, 'skill_windup', 0) > 0
@@ -2149,6 +2150,10 @@ class Renderer:
         # 绘制浮动文字
         for ft in self.game.floating_texts:
             ft.draw(self.screen, self.game.font, cam_x, cam_y, scale)
+
+        # 绘制刀光弧斩特效（死神镰刀/枪械曳光）
+        for sa in getattr(self.game, 'slash_arcs', []):
+            sa.draw(self.screen, cam_x, cam_y, scale)
 
         # 绘制创伤效果（屏幕边缘血溅）
         self._draw_trauma_effect()
@@ -2572,7 +2577,7 @@ class Renderer:
         mouse_pressed = pygame.mouse.get_pressed()
 
         for i, btn in enumerate(self.game.pause_buttons):
-            # 开发者面板按钮：仅开发者模式解锁后显示
+            # 非开发者模式下隐藏"开发者面板"按钮
             if btn.text == "开发者面板" and not getattr(self.game, 'dev_mode', False):
                 continue
             if btn.update(mouse_pos, mouse_pressed, self.game.touch_events, self.game.scale):
@@ -2593,16 +2598,14 @@ class Renderer:
                     # 进入设置，标记从暂停进入
                     self.game.settings_from_pause = True
                     self.game.state = GameState.SETTINGS
+                elif btn.text == "开发者面板":
+                    # 开发者模式下面板开关（局内调试面板）
+                    self.game.dev_panel_open = not getattr(self.game, 'dev_panel_open', False)
+                    if hasattr(self.game, '_rebuild_dev_buttons'):
+                        self.game._rebuild_dev_buttons()
+                    self.game.state = GameState.PLAYING
                 elif btn.text == "返回菜单":
                     self.game.state = GameState.MENU
-                elif btn.text == "开发者面板":
-                    # 仅开发者模式下可用：切换局内调试面板
-                    if self.game.dev_mode:
-                        self.game.dev_panel_open = not self.game.dev_panel_open
-                        self.game._rebuild_dev_buttons()
-                        # 关闭面板回到游戏，方便操作
-                        if self.game.dev_panel_open:
-                            self.game.state = GameState.PLAYING
             btn.draw(self.screen, self.game.font_large, self.game.scale)
 
     def _draw_rune_view(self):

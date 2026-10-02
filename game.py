@@ -65,7 +65,7 @@ def _save_decrypt(data: bytes, key: bytes = _SAVE_CRYPT_KEY) -> bytes:
     layer1 = _save_xor_crypt(layer2, key)
     return layer1
 from ui import (FontManager, Button, VirtualJoystick, TouchButton, DamageNumber, 
-                FloatingText, ParticleSystem, AimButton, SkillSelector, SkillCaster, 
+                FloatingText, SlashArc, ParticleSystem, AimButton, SkillSelector, SkillCaster, 
                 SkillCardSelector, WeaponSwitchButton, draw_dashed_line)
 from skills import SkillTree
 from weapons import Weapon, Projectile
@@ -233,6 +233,7 @@ class Game:
         self.exp_orbs = []
         self.damage_numbers = []
         self.floating_texts = []
+        self.slash_arcs = []  # 刀光弧斩特效（死神镰刀横扫/处决/枪械曳光）
         self.enemy_projectiles = []
 
         # 近战攻击状态
@@ -496,12 +497,12 @@ class Game:
             Button(cx, 655, 200, 50, "返回", color=RED),
         ]
         self.pause_buttons = [
-            Button(cx, 200, 200, 50, "继续", color=GREEN),
-            Button(cx, 270, 200, 50, "符文", color=GOLD),
-            Button(cx, 340, 200, 50, "技能树", color=BLUE),
-            Button(cx, 410, 200, 50, "设置", color=GRAY),
-            Button(cx, 480, 200, 50, "返回菜单", color=RED),
-            Button(cx, 550, 200, 50, "开发者面板", color=(80, 180, 90)),
+            Button(cx, 170, 200, 50, "继续", color=GREEN),
+            Button(cx, 235, 200, 50, "符文", color=GOLD),
+            Button(cx, 300, 200, 50, "技能树", color=BLUE),
+            Button(cx, 365, 200, 50, "设置", color=GRAY),
+            Button(cx, 430, 200, 50, "返回菜单", color=RED),
+            Button(cx, 495, 200, 50, "开发者面板", color=(80, 180, 90)),
         ]
         self.settings_from_pause = False  # 标记设置是否从暂停菜单进入
         # 符文查看界面状态
@@ -786,9 +787,7 @@ class Game:
                     stype = getattr(SkillType, sname)
                     skill = self.player.skill_tree.get_skill(stype)
                     if skill:
-                        # 单级语义：恢复为 0/1（旧多级存档向下兼容）
-                        skill.current_level = 1 if level > 0 else 0
-                        skill.max_level = 1
+                        skill.current_level = level
                 except:
                     pass
             # 如果有待升级，重新生成技能卡
@@ -1076,6 +1075,7 @@ class Game:
             self.exp_orbs = []
             self.damage_numbers = []
             self.floating_texts = []
+            self.slash_arcs = []
             self.enemy_projectiles = []
             self.smoke_zones = []
             self.grenades = []
@@ -2360,6 +2360,10 @@ class Game:
                     if not enemy.alive:
                         self._on_enemy_death(enemy)
             self.particles.spawn_explosion(fx, fy, LIME, 25)
+            # 幻影突袭刀光（三个方向的绿色弧斩）
+            self.slash_arcs.append(SlashArc(
+                fx, fy, rad, 90, LIME, lifetime=0.4, kind="scythe",
+                start_radius=20, end_angle_offset=1.3))
             self.camera.shake(5, 0.2)
         self.floating_texts.append(FloatingText(
             self.player.x, self.player.y - 40, "幻影打击!", color=LIME, lifetime=1.5
@@ -2432,6 +2436,15 @@ class Game:
                     self._on_enemy_death(enemy)
         self.particles.spawn_explosion(self.player.x, self.player.y, ORANGE, 40)
         self.camera.shake(15, 0.5)
+        # 冲击波扩散光环（可视范围提示，更帅）
+        self.slash_arcs.append(SlashArc(
+            self.player.x, self.player.y, 0.0, sw_radius,
+            (255, 150, 40), lifetime=0.5, kind="scythe",
+            start_radius=sw_radius * 0.35, end_angle_offset=6.2))
+        self.slash_arcs.append(SlashArc(
+            self.player.x, self.player.y, math.pi / 3, sw_radius * 1.15,
+            (255, 200, 80), lifetime=0.4, kind="scythe",
+            start_radius=sw_radius * 0.5, end_angle_offset=6.2))
         label = "地震波!" if is_max else "冲击波!"
         self.floating_texts.append(FloatingText(
             self.player.x, self.player.y - 40, label, color=ORANGE, lifetime=1.5
@@ -2915,24 +2928,29 @@ class Game:
     def _handle_dev_keys(self, events):
         """处理开发者密码输入与局内调试面板开关（键盘）"""
         if self.dev_input_active:
-            # 系统输入法文本输入（TEXTINPUT）优先；兼容触屏字符键盘与PC键盘
             for ev in events:
+                # SDL_IME 系统输入法：TEXTINPUT 是最终合成字符事件（含中文候选），
+                # 同一按键还会伴随 KEYDOWN，字符追加只走 TEXTINPUT，避免双重输入
                 if ev.type == pygame.TEXTINPUT:
-                    if ev.text and len(self.dev_input_str) < 16:
+                    if len(self.dev_input_str) < 16:
                         self.dev_input_str += ev.text
-                elif ev.type == pygame.KEYDOWN:
+                    continue
+                if ev.type == pygame.KEYDOWN:
                     if ev.key == pygame.K_RETURN:
                         if self.dev_input_str == self._DEV_PASSWORD:
                             self.dev_mode = True
                             self.dev_input_active = False
                             self.dev_input_str = ""
-                            self.update_status_text = "开发者模式已开启！局内F9或暂停菜单打开调试面板"
+                            self.update_status_text = "开发者模式已开启！局内按 F9 键打开调试面板"
                         else:
                             self.dev_input_active = False
                             self.dev_input_str = ""
                             self.update_status_text = "密码错误，请重试（连点版本号重新输入）"
                     elif ev.key == pygame.K_BACKSPACE:
                         self.dev_input_str = self.dev_input_str[:-1]
+                    elif ev.key == pygame.K_ESCAPE:
+                        self.dev_input_active = False
+                        self.dev_input_str = ""
             return
         for ev in events:
             if ev.type == pygame.KEYDOWN and ev.key == pygame.K_F9:
@@ -4684,11 +4702,6 @@ class Game:
     def _apply_skill_card(self, skill):
         """应用选中的技能卡"""
         if self.player.skill_tree.upgrade_skill(skill.skill_type):
-            # 刷新玩家属性（单级/组合技/终极技加成统一生效）
-            try:
-                self.player._update_stats()
-            except Exception:
-                pass
             self.floating_texts.append(FloatingText(
                 self.player.x, self.player.y - 40, 
                 f"升级: {skill.name}!", color=GOLD, lifetime=2.0
@@ -5556,9 +5569,9 @@ class Game:
 
             # ===== 王某技能（枪械+死神镰刀双形态）=====
             elif result == "wang_gunfire":
-                # 枪械形态：4连发子弹朝玩家
+                # 枪械形态：4连发子弹朝玩家 + 曳光弹道
+                base_ang = math.atan2(self.player.y - enemy.y, self.player.x - enemy.x)
                 for _ in range(4):
-                    base_ang = math.atan2(self.player.y - enemy.y, self.player.x - enemy.x)
                     ang = base_ang + random.uniform(-0.12, 0.12)
                     proj = Projectile(
                         enemy.x, enemy.y,
@@ -5566,6 +5579,10 @@ class Game:
                         int(enemy.damage * 0.8), 440, FIRE_ORANGE, 4
                     )
                     self.enemy_projectiles.append(proj)
+                    # 曳光弹道（火橙直线）
+                    self.slash_arcs.append(SlashArc(
+                        enemy.x, enemy.y, ang, 300, FIRE_ORANGE,
+                        lifetime=0.28, kind="tracer", end_angle_offset=0.3))
                 self.assets.play_sound("shoot_pistol")
                 self.particles.spawn(enemy.x, enemy.y, FIRE_ORANGE, 6, (3, 6), (-2, 2), (0.2, 0.5))
 
@@ -5582,10 +5599,16 @@ class Game:
                         self.player.y += (self.player.y - enemy.y) / gdist * 40
 
             elif result == "wang_scythe_sweep":
-                # 死神镰刀：大范围横扫，玩家受伤+强击退
+                # 死神镰刀：大范围横扫，玩家受伤+强击退（紫色刀光弧斩可见）
                 self.camera.shake(15, 0.7)
                 self.assets.play_sound("melee_swing")
                 self.particles.spawn_explosion(enemy.x, enemy.y, CRIMSON, 70)
+                s_ang = math.atan2(self.player.y - enemy.y, self.player.x - enemy.x)
+                for _off in (-0.5, 0.0, 0.5):
+                    self.slash_arcs.append(SlashArc(
+                        enemy.x, enemy.y, s_ang + _off, 240 + abs(_off) * 90,
+                        (196, 100, 240), lifetime=0.45, kind="scythe",
+                        start_radius=40, end_angle_offset=1.1))
                 sdist = math.hypot(self.player.x - enemy.x, self.player.y - enemy.y)
                 if sdist < 290:
                     self.player.take_damage(int(enemy.damage * 2.4), damage_type="melee", attack_x=enemy.x, attack_y=enemy.y)
@@ -5594,11 +5617,18 @@ class Game:
                         self.player.y += (self.player.y - enemy.y) / sdist * 55
 
             elif result == "wang_execution_scythe":
-                # 王某处决斩击：超高伤害AOE
+                # 王某处决斩击：超高伤害AOE（血红满月斩 + 双镰刀弧）
                 self.camera.shake(20, 1.0)
                 self.assets.play_sound("melee_swing")
                 self.particles.spawn_explosion(enemy.x, enemy.y, CRIMSON, 90)
                 self.particles.spawn_explosion(enemy.x, enemy.y, BLOOD_RED, 60)
+                e_ang = math.atan2(self.player.y - enemy.y, self.player.x - enemy.x)
+                self.slash_arcs.append(SlashArc(
+                    enemy.x, enemy.y, e_ang, 330, CRIMSON,
+                    lifetime=0.6, kind="scythe", start_radius=60, end_angle_offset=6.2))
+                self.slash_arcs.append(SlashArc(
+                    enemy.x, enemy.y, e_ang + math.pi, 260, (210, 90, 240),
+                    lifetime=0.5, kind="scythe", start_radius=30, end_angle_offset=6.2))
                 edist = math.hypot(self.player.x - enemy.x, self.player.y - enemy.y)
                 if edist < 280:
                     self.player.take_damage(int(enemy.damage * 4.0), damage_type="aoe", attack_x=enemy.x, attack_y=enemy.y)
@@ -6130,35 +6160,32 @@ class Game:
                     # 元素精通加成
                     elem_skill = self.player.skill_tree.get_skill(SkillType.ELEMENTAL_MASTERY)
                     elem_mult = 1.0 + (0.3 * (elem_skill.current_level if elem_skill else 0))
-                    cb = getattr(self.player, 'combo_burn', 0.0)
-                    cf = getattr(self.player, 'combo_frost', 0.0)
-                    cp = getattr(self.player, 'combo_poison', 0.0)
                     # 火焰附魔
                     flame_skill = self.player.skill_tree.get_skill(SkillType.FLAME_ENCHANT)
                     if flame_skill and flame_skill.current_level > 0:
                         flame_chances = {1: 0.2, 2: 0.3, 3: 0.4, 4: 0.5, 5: 0.6}
                         flame_durs = {1: 3, 2: 4, 3: 5, 4: 6, 5: 8}
-                        if random.random() < min(0.9, flame_chances.get(flame_skill.current_level, 0.2) + cb * 0.2):
-                            enemy.apply_buff(BuffType.BURN, duration=(flame_durs.get(flame_skill.current_level, 3) * elem_mult) + int(cb * 3))
+                        if random.random() < flame_chances.get(flame_skill.current_level, 0.2):
+                            enemy.apply_buff(BuffType.BURN, duration=flame_durs.get(flame_skill.current_level, 3) * elem_mult)
                     # 冰霜附魔
                     frost_skill = self.player.skill_tree.get_skill(SkillType.FROST_ENCHANT)
                     if frost_skill and frost_skill.current_level > 0:
                         frost_chances = {1: 0.2, 2: 0.3, 3: 0.4, 4: 0.5, 5: 0.6}
                         frost_durs = {1: 3, 2: 4, 3: 5, 4: 2, 5: 3}
-                        if random.random() < min(0.9, frost_chances.get(frost_skill.current_level, 0.2) + cf * 0.2):
-                            if frost_skill.current_level >= 4 or cf > 0.5:
-                                enemy.apply_buff(BuffType.FREEZE, duration=(frost_durs.get(frost_skill.current_level, 2) * elem_mult) + int(cf * 2))
+                        if random.random() < frost_chances.get(frost_skill.current_level, 0.2):
+                            if frost_skill.current_level >= 4:
+                                enemy.apply_buff(BuffType.FREEZE, duration=frost_durs.get(frost_skill.current_level, 2) * elem_mult)
                                 if self.session:
                                     self.session.add_enemy_frozen()
                             else:
-                                enemy.apply_buff(BuffType.SLOW, duration=(frost_durs.get(frost_skill.current_level, 3) * elem_mult) + int(cf * 2))
+                                enemy.apply_buff(BuffType.SLOW, duration=frost_durs.get(frost_skill.current_level, 3) * elem_mult)
                     # 剧毒附魔
                     poison_skill = self.player.skill_tree.get_skill(SkillType.POISON_ENCHANT)
                     if poison_skill and poison_skill.current_level > 0:
                         poison_chances = {1: 0.15, 2: 0.25, 3: 0.35, 4: 0.45, 5: 0.55}
                         poison_durs = {1: 5, 2: 6, 3: 7, 4: 8, 5: 10}
-                        if random.random() < min(0.9, poison_chances.get(poison_skill.current_level, 0.15) + cp * 0.2):
-                            enemy.apply_buff(BuffType.POISON, duration=(poison_durs.get(poison_skill.current_level, 5) * elem_mult) + int(cp * 3))
+                        if random.random() < poison_chances.get(poison_skill.current_level, 0.15):
+                            enemy.apply_buff(BuffType.POISON, duration=poison_durs.get(poison_skill.current_level, 5) * elem_mult)
                     self.damage_numbers.append(DamageNumber(enemy.x, enemy.y, actual_damage, is_crit=is_crit, damage_type="ranged"))
                     self.particles.spawn_blood(enemy.x, enemy.y, 5)
 
@@ -6287,6 +6314,10 @@ class Game:
             ft.update(dt)
             if not ft.is_alive():
                 self.floating_texts.remove(ft)
+        for sa in self.slash_arcs[:]:
+            sa.update(dt)
+            if not sa.is_alive():
+                self.slash_arcs.remove(sa)
 
         # 摄像机跟随
         self.camera.follow(self.player.x, self.player.y, dt)
@@ -6661,31 +6692,34 @@ class Game:
             self.ach_toast_queue.append({"key": "codex", "desc": f"图鉴解锁: {label}", "timer": 3.0})
 
     def _check_combos(self):
-        """三层技能体系：检测组合技/终极技解锁并实时弹出（属性加成由 _update_stats 统一应用）"""
+        """检查组合技（多个技能达到等级后触发），解锁时给被动加成并实时弹出"""
         try:
+            unlocked = self.records.get_combo_unlocked()
             p = self.player
-            st = p.skill_tree
-            unlocked = set(getattr(self.records, 'get_combo_unlocked', lambda: set())())
-            for cname, cfg in COMBO_SKILL_DEFS.items():
-                stype = getattr(SkillType, cfg["type"], None)
-                if stype is None:
+            for cname, cfg in COMBO_SKILLS.items():
+                if cname in unlocked:
                     continue
-                sk = st.get_skill(stype)
-                if sk and sk.current_level > 0 and cname not in unlocked:
+                ok = True
+                for st_name, min_lvl in cfg["require"].items():
+                    st = getattr(SkillType, st_name, None)
+                    if st is None:
+                        ok = False
+                        break
+                    sk = p.skill_tree.get_skill(st)
+                    if not sk or sk.current_level < min_lvl:
+                        ok = False
+                        break
+                if ok:
                     self.records.unlock_combo(cname)
+                    for k, v in cfg["bonus"].items():
+                        if k == "damage":
+                            p.damage_multiplier += v
+                        elif k == "fire_rate":
+                            p.fire_rate_mult = getattr(p, 'fire_rate_mult', 1.0) + v
+                        elif k == "reduce":
+                            p.dmg_reduce = min(0.5, getattr(p, 'dmg_reduce', 0) + v)
                     self.ach_toast_queue.append({"key": "combo", "desc": f"组合技解锁: {cname}", "timer": 3.5})
-                    self.floating_texts.append(FloatingText(p.x, p.y - 60, f"组合技! {cname}", color=GOLD, lifetime=2.0))
-            for uname, cfg in ULTIMATE_SKILL_DEFS.items():
-                stype = getattr(SkillType, cfg["type"], None)
-                if stype is None:
-                    continue
-                sk = st.get_skill(stype)
-                if sk and sk.current_level > 0:
-                    key = f"ult_{uname}"
-                    if key not in unlocked:
-                        self.records.unlock_combo(key)
-                        self.ach_toast_queue.append({"key": "ult", "desc": f"终极技解锁: {uname}", "timer": 4.0})
-                        self.floating_texts.append(FloatingText(p.x, p.y - 70, f"终极技! {uname}", color=CRIMSON, lifetime=2.5))
+                    self.floating_texts.append(FloatingText(p.x, p.y - 60, f"组合技! {cname}", color=PURPLE, lifetime=2.0))
         except Exception:
             pass
 

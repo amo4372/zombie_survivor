@@ -1055,19 +1055,8 @@ class SkillCardSelector:
 
             # 类型标签
             type_y = level_y + int(18 * scale)
-            tier = getattr(skill, "combo_tier", None)
-            if tier == "ultimate":
-                type_color = CRIMSON
-                type_text = font.render("【终极技】", True, type_color)
-            elif tier == "combo":
-                type_color = GOLD
-                type_text = font.render("【组合技】", True, type_color)
-            elif skill.is_active:
-                type_color = CYAN
-                type_text = font.render("【主动】", True, type_color)
-            else:
-                type_color = GREEN
-                type_text = font.render("【被动】", True, type_color)
+            type_color = CYAN if skill.is_active else GREEN
+            type_text = font.render("【主动】" if skill.is_active else "【被动】", True, type_color)
             type_rect = type_text.get_rect(center=(x + card_w // 2, type_y))
             screen.blit(type_text, type_rect)
 
@@ -1288,6 +1277,60 @@ class FloatingText:
         px = int((self.x - camera_x) * scale)
         py = int((self.y - camera_y) * scale)
         screen.blit(text_surf, (px, py))
+
+    def is_alive(self):
+        return self.lifetime > 0
+
+
+class SlashArc:
+    """刀光弧斩特效：王某死神镰刀横扫/处决 + 枪械曳光"""
+    def __init__(self, x, y, angle, radius, color, lifetime=0.45,
+                 kind="scythe", start_radius=0, end_angle_offset=1.0):
+        self.x = x
+        self.y = y
+        self.angle = angle          # 主方向（弧度）
+        self.radius = radius        # 最大半径
+        self.start_radius = start_radius
+        self.end_angle_offset = end_angle_offset  # 弧的结束角偏移（相对主方向）
+        self.color = color
+        self.lifetime = lifetime
+        self.max_lifetime = lifetime
+        self.kind = kind            # scythe=弧形刀光 / tracer=直线曳光
+
+    def update(self, dt):
+        self.lifetime -= dt
+
+    def draw(self, screen, camera_x=0, camera_y=0, scale=1.0):
+        if self.lifetime <= 0:
+            return
+        progress = 1.0 - (self.lifetime / self.max_lifetime)  # 0→1
+        alpha = int(220 * (1.0 - progress))
+        px = int((self.x - camera_x) * scale)
+        py = int((self.y - camera_y) * scale)
+        if self.kind == "tracer":
+            # 直线曳光：从中心向主方向延伸
+            length = int(self.radius * (0.4 + 0.6 * progress) * scale)
+            ex = px + math.cos(self.angle) * length
+            ey = py + math.sin(self.angle) * length
+            mid = px + math.cos(self.angle) * (length * 0.45)
+            midy = py + math.sin(self.angle) * (length * 0.45)
+            pygame.draw.line(screen, (*self.color[:3], alpha), (px, py), (int(mid), int(midy)), max(2, int(4 * scale)))
+            pygame.draw.line(screen, (255, 255, 255), (int(mid), int(midy)), (int(ex), int(ey)), max(1, int(2 * scale)))
+            return
+        # 弧形刀光：半径随进度扩张
+        r = int((self.start_radius + (self.radius - self.start_radius) * progress) * scale)
+        w = max(3, int(8 * scale))
+        surf = pygame.Surface((r * 2 + w * 2, r * 2 + w * 2), pygame.SRCALPHA)
+        cc = r + w
+        start_a = self.angle - 2.4
+        end_a = self.angle + self.end_angle_offset
+        # 外发光
+        pygame.draw.arc(surf, (*self.color[:3], alpha // 3), (w, w, r * 2, r * 2), start_a, end_a, w + 3)
+        # 主刃光
+        pygame.draw.arc(surf, (*self.color[:3], alpha), (w, w, r * 2, r * 2), start_a, end_a, w)
+        # 内亮刃
+        pygame.draw.arc(surf, (255, 255, 255), (w, w, r * 2, r * 2), start_a + 0.15, end_a - 0.15, max(2, w // 3))
+        screen.blit(surf, (px - cc, py - cc))
 
     def is_alive(self):
         return self.lifetime > 0
