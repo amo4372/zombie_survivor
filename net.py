@@ -27,6 +27,11 @@ class NetHost:
         try:
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            # 低延迟：禁用 Nagle 算法，小包立即发送
+            try:
+                self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            except Exception:
+                pass
             self.sock.bind(("0.0.0.0", self.port))
             self.sock.listen(1)
             self.running = True
@@ -40,6 +45,10 @@ class NetHost:
     def _accept_loop(self):
         try:
             conn, _addr = self.sock.accept()
+            try:
+                conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            except Exception:
+                pass
             with self.lock:
                 self.client_conn = conn
                 self.connected = True
@@ -110,6 +119,11 @@ class NetClient:
             self.sock.settimeout(5)
             self.sock.connect((self.ip, self.port))
             self.sock.settimeout(None)
+            # 低延迟：禁用 Nagle 算法
+            try:
+                self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            except Exception:
+                pass
             self.connected = True
             self.running = True
             threading.Thread(target=self._recv_loop, daemon=True).start()

@@ -1986,7 +1986,7 @@ class Renderer:
             btn.draw(self.screen, self.game.font_large, scale)
 
     def _draw_hud_edit(self):
-        """HUD触控按钮自定义布局编辑界面：拖动按钮调整位置"""
+        """HUD触控按钮自定义布局编辑界面：拖动按钮调整位置（双人模式支持 P1/P2 独立编辑）"""
         scale = self.game.scale
         sw = self.game.scaled_width
         sh = self.game.scaled_height
@@ -2001,18 +2001,62 @@ class Renderer:
         tip = self.game.font.render("拖动按钮调整位置（触控/鼠标），松手放下", True, (200, 200, 220))
         self.screen.blit(tip, tip.get_rect(center=(sw // 2, int(100 * scale))))
 
+        # 双人模式：P1/P2 独立编辑目标切换
+        if self.game.is_multiplayer_active():
+            target = getattr(self.game, "hud_edit_target", "P1")
+            tab1 = pygame.Rect(int(sw // 2 - 210 * scale), int(6 * scale), int(100 * scale), int(36 * scale))
+            tab2 = pygame.Rect(int(sw // 2 - 100 * scale), int(6 * scale), int(100 * scale), int(36 * scale))
+            mouse_pos0 = pygame.mouse.get_pos()
+            mp0 = pygame.mouse.get_pressed()
+            for e in (self.game.touch_events or []):
+                if e["type"] == "down":
+                    if tab1.collidepoint(e["pos"]):
+                        self.game.hud_edit_target = "P1"
+                        self.game.hud_edit_drag = None
+                    elif tab2.collidepoint(e["pos"]):
+                        self.game.hud_edit_target = "P2"
+                        self.game.hud_edit_drag = None
+            if mp0[0]:
+                if tab1.collidepoint(mouse_pos0):
+                    self.game.hud_edit_target = "P1"
+                    self.game.hud_edit_drag = None
+                elif tab2.collidepoint(mouse_pos0):
+                    self.game.hud_edit_target = "P2"
+                    self.game.hud_edit_drag = None
+            for rect, txt, is_on in [(tab1, "编辑P1", target == "P1"), (tab2, "编辑P2", target == "P2")]:
+                pygame.draw.rect(self.screen, (70, 140, 220) if is_on else (50, 50, 70), rect, border_radius=8)
+                pygame.draw.rect(self.screen, (255, 255, 255), rect, 2, border_radius=8)
+                lbl = self.game.font_small.render(txt, True, WHITE)
+                self.screen.blit(lbl, lbl.get_rect(center=rect.center))
+        else:
+            target = "P1"
+
         # 可编辑控件元数据：(键名, 中文名, 控件, 半径, 标签方位) —— shoot 排在 aim 前，重叠时优先选中可操作按钮
-        items = [
-            ("joystick", "移动摇杆", self.game.joystick, 70, "above"),
-            ("shoot", "射击", self.game.touch_buttons.get("shoot"), 62, "above"),
-            ("aim", "瞄准", self.game.aim_button, 62, "below"),
-            ("pause", "暂停", self.game.touch_buttons.get("pause"), 38, "above"),
-            ("sprint", "疾跑", self.game.touch_buttons.get("sprint"), 40, "above"),
-            ("skill_selector", "技能切换", self.game.skill_selector, 42, "above"),
-            ("skill_caster", "技能释放", self.game.skill_caster, 52, "above"),
-            ("throwable_switch", "投掷切换", self.game.throwable_switch_btn, 42, "above"),
-            ("throwable_caster", "投掷释放", self.game.throwable_caster, 48, "above"),
-        ]
+        if target == "P2" and self.game.p2_controls:
+            c2 = self.game.p2_controls
+            items = [
+                ("joystick", "移动摇杆", c2["joystick"], 70, "above"),
+                ("shoot", "射击", c2["shoot"], 62, "above"),
+                ("aim", "瞄准", c2["aim"], 62, "below"),
+                ("pause", "暂停", c2["pause"], 38, "above"),
+                ("sprint", "疾跑", c2["sprint"], 40, "above"),
+                ("skill_selector", "技能切换", c2["skill_selector"], 42, "above"),
+                ("skill_caster", "技能释放", c2["skill_caster"], 52, "above"),
+                ("throwable_switch", "投掷切换", c2["throwable_switch"], 42, "above"),
+                ("throwable_caster", "投掷释放", c2["throwable_caster"], 48, "above"),
+            ]
+        else:
+            items = [
+                ("joystick", "移动摇杆", self.game.joystick, 70, "above"),
+                ("shoot", "射击", self.game.touch_buttons.get("shoot"), 62, "above"),
+                ("aim", "瞄准", self.game.aim_button, 62, "below"),
+                ("pause", "暂停", self.game.touch_buttons.get("pause"), 38, "above"),
+                ("sprint", "疾跑", self.game.touch_buttons.get("sprint"), 40, "above"),
+                ("skill_selector", "技能切换", self.game.skill_selector, 42, "above"),
+                ("skill_caster", "技能释放", self.game.skill_caster, 52, "above"),
+                ("throwable_switch", "投掷切换", self.game.throwable_switch_btn, 42, "above"),
+                ("throwable_caster", "投掷释放", self.game.throwable_caster, 48, "above"),
+            ]
         mouse_pos = pygame.mouse.get_pos()
         mouse_pressed = pygame.mouse.get_pressed()
         touches = self.game.touch_events or []
@@ -2109,16 +2153,19 @@ class Renderer:
             lbl = self.game.font_large.render(txt, True, WHITE)
             self.screen.blit(lbl, lbl.get_rect(center=rect.center))
         if self._clicked(save_r, mouse_pos, mouse_pressed, touches, "hud_save"):
-            self.game._save_hud_layout()
+            self.game._save_hud_layout(target)
             self.game.hud_edit_dirty = False
         if self._clicked(reset_r, mouse_pos, mouse_pressed, touches, "hud_reset"):
-            self.game._reset_hud_layout()
+            self.game._reset_hud_layout(target)
             self.game.hud_edit_dirty = False
         if self._clicked(back_r, mouse_pos, mouse_pressed, touches, "hud_back"):
             if getattr(self.game, "hud_edit_dirty", False):
                 # 未保存返回：恢复为已保存布局（或默认）
-                self.game._setup_touch_controls()
-                self.game._apply_hud_layout()
+                if self.game.is_multiplayer_active():
+                    self.game._setup_multiplayer_controls()
+                else:
+                    self.game._setup_touch_controls()
+                    self.game._apply_hud_layout()
             self.game.state = GameState.SETTINGS
 
     def _draw_play_select(self):
@@ -2330,6 +2377,26 @@ class Renderer:
                 continue
             col = tuple(p.get("color", (255, 255, 255))[:3])
             pygame.draw.circle(self.screen, col, (px, py), max(3, int(p.get("size", 6) * scale * 0.6)))
+        # 特效（客户端也能看到技能效果）
+        for fx in snap.get("effects", []):
+            if fx.get("t") == "ring":
+                px = int((fx["x"] - cam_x) * scale)
+                py = int((fx["y"] - cam_y) * scale)
+                r = int(fx["r"] * scale)
+                col = tuple(fx.get("color", (190, 80, 230))[:3])
+                ring = pygame.Surface((r * 2, r * 2), pygame.SRCALPHA)
+                alpha = int(200 * max(0, min(1, fx.get("life", 0.3) * 3)))
+                pygame.draw.circle(ring, (*col, alpha), (r, r), r, max(3, int(8 * scale)))
+                self.screen.blit(ring, (px - r, py - r))
+            elif fx.get("t") == "arc":
+                px = int((fx["x"] - cam_x) * scale)
+                py = int((fx["y"] - cam_y) * scale)
+                col = tuple(fx.get("color", (190, 80, 230))[:3])
+                r = int(fx.get("radius", 150) * scale)
+                arc_surf = pygame.Surface((r * 2, r * 2), pygame.SRCALPHA)
+                pygame.draw.arc(arc_surf, (*col, 220), (0, 0, r * 2, r * 2),
+                                fx.get("angle", 0), fx.get("angle", 0) + 0.8, max(4, int(10 * scale)))
+                self.screen.blit(arc_surf, (px - r, py - r))
         # 玩家
         labels = ["P1", "P2"]
         cols = [GREEN, CYAN]
@@ -2337,10 +2404,19 @@ class Renderer:
             px = int((p["x"] - cam_x) * scale)
             py = int((p["y"] - cam_y) * scale)
             r = max(8, int(16 * scale))
-            pygame.draw.circle(self.screen, cols[idx], (px, py), r)
-            pygame.draw.circle(self.screen, WHITE, (px, py), r, 2)
-            tag = g.font_small.render(labels[idx], True, cols[idx])
+            if p.get("downed"):
+                pygame.draw.circle(self.screen, (200, 200, 60), (px, py), r, 3)
+                tag = g.font_small.render(labels[idx] + " 倒地", True, (240, 230, 120))
+            else:
+                pygame.draw.circle(self.screen, cols[idx], (px, py), r)
+                pygame.draw.circle(self.screen, WHITE, (px, py), r, 2)
+                tag = g.font_small.render(labels[idx], True, cols[idx])
             self.screen.blit(tag, (px - tag.get_width() // 2, py - r - int(14 * scale)))
+            # 武器名
+            wname = p.get("weapon", "")
+            if wname:
+                wt = g.font_small.render(wname, True, GOLD)
+                self.screen.blit(wt, (px - wt.get_width() // 2, py + r + int(4 * scale)))
         # HUD：时间与状态
         tl = max(0, int(snap.get("time_left", 0)))
         time_txt = g.font.render(f"网络联机  {tl // 60:02d}:{tl % 60:02d}", True, WHITE)
@@ -2459,6 +2535,14 @@ class Renderer:
             wname = getattr(w, 'display_name', None) or getattr(w, 'name', '?')
             w_txt = g.font_small.render(f"{wname}", True, GOLD)
             self.screen.blit(w_txt, (bx, rect.y + int(44 * scale)))
+        # 倒地状态：显示救援进度条
+        if getattr(player, 'downed', False):
+            pygame.draw.rect(self.screen, (80, 70, 20), (bx, rect.y + int(60 * scale), bar_w, int(10 * scale)))
+            prog = max(0.0, min(1.0, getattr(player, 'rescue_progress', 0) / 2.5))
+            pygame.draw.rect(self.screen, (240, 220, 80), (bx, rect.y + int(60 * scale), int(bar_w * prog), int(10 * scale)))
+            pygame.draw.rect(self.screen, (255, 255, 255), (bx, rect.y + int(60 * scale), bar_w, int(10 * scale)), 1)
+            dtxt = g.font_small.render("倒地 · 队友靠近救援", True, (240, 230, 120))
+            self.screen.blit(dtxt, (bx, rect.y + int(74 * scale)))
         # 触控控件（仅触控模式）——控件逻辑坐标本身即左/右半屏，直接画在主屏
         if g.config.control_mode == ControlMode.TOUCH and not g.is_network_client_render():
             if label == "P1":
@@ -2572,8 +2656,19 @@ class Renderer:
                     or getattr(enemy, 'special_windup_timer', 0) > 0):
                 self._draw_skill_warning(enemy, cam_x, cam_y, scale)
 
-        # 绘制玩家
-        player.draw(self.screen, cam_x, cam_y, self.game.font, scale)
+        # 绘制玩家（双人模式两个玩家都画，彼此可见）
+        if self.game.player2 is not None:
+            for p in (self.game.player, self.game.player2):
+                if p is None:
+                    continue
+                p.draw(self.screen, cam_x, cam_y, self.game.font, scale)
+                if getattr(p, 'downed', False):
+                    dtag = self.game.font_small.render("倒地", True, (240, 230, 120))
+                    dx = int((p.x - cam_x) * scale)
+                    dy = int((p.y - cam_y) * scale)
+                    self.screen.blit(dtag, (dx - dtag.get_width() // 2, dy - int(24 * scale)))
+        else:
+            player.draw(self.screen, cam_x, cam_y, self.game.font, scale)
 
         # 近战挥砍动画
         if hasattr(self.game, 'melee_attack_active') and self.game.melee_attack_active:

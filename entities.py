@@ -572,6 +572,8 @@ class Player:
         self.hp = 100
         self.alive = True
         self.downed = False
+        self.downed_timer = 0.0    # 倒地时长（救援/自动复活用）
+        self.rescue_progress = 0.0  # 队友救援进度（0~2.5）
         self.level = 1
         self.exp = 0
         self.exp_to_level = 100

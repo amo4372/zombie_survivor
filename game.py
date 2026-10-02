@@ -358,6 +358,7 @@ class Game:
                          "throw": False, "sprint": False}
         self.p2_controls = None
         self._p2_finger_ids = set()
+        self.hud_edit_target = "P1"  # HUD布局编辑对象（双人模式 P1/P2）
 
         self.menu_buttons = []
         self.settings_buttons = []
@@ -484,27 +485,46 @@ class Game:
         _set(self.throwable_switch_btn, "throwable_switch")
         _set(self.throwable_caster, "throwable_caster")
 
-    def _save_hud_layout(self):
-        """把当前所有触控按钮位置写入配置并持久化"""
+    def _save_hud_layout(self, target="P1"):
+        """把当前所有触控按钮位置写入配置并持久化（P1→hud_layout / P2→p2_hud_layout）"""
         layout = {}
         def _put(ctrl, key):
             if ctrl is not None:
                 layout[key] = [int(ctrl.base_x), int(ctrl.base_y)]
-        _put(self.joystick, "joystick")
-        _put(self.aim_button, "aim")
-        _put(self.touch_buttons.get("shoot"), "shoot")
-        _put(self.touch_buttons.get("pause"), "pause")
-        _put(self.touch_buttons.get("sprint"), "sprint")
-        _put(self.skill_selector, "skill_selector")
-        _put(self.skill_caster, "skill_caster")
-        _put(self.throwable_switch_btn, "throwable_switch")
-        _put(self.throwable_caster, "throwable_caster")
-        self.config.hud_layout = layout
+        if target == "P2" and self.p2_controls:
+            c2 = self.p2_controls
+            _put(c2["joystick"], "joystick")
+            _put(c2["aim"], "aim")
+            _put(c2["shoot"], "shoot")
+            _put(c2["pause"], "pause")
+            _put(c2["sprint"], "sprint")
+            _put(c2["skill_selector"], "skill_selector")
+            _put(c2["skill_caster"], "skill_caster")
+            _put(c2["throwable_switch"], "throwable_switch")
+            _put(c2["throwable_caster"], "throwable_caster")
+            self.config.p2_hud_layout = layout
+        else:
+            _put(self.joystick, "joystick")
+            _put(self.aim_button, "aim")
+            _put(self.touch_buttons.get("shoot"), "shoot")
+            _put(self.touch_buttons.get("pause"), "pause")
+            _put(self.touch_buttons.get("sprint"), "sprint")
+            _put(self.skill_selector, "skill_selector")
+            _put(self.skill_caster, "skill_caster")
+            _put(self.throwable_switch_btn, "throwable_switch")
+            _put(self.throwable_caster, "throwable_caster")
+            self.config.hud_layout = layout
         self.config.save()
-        logger.info(f"HUD布局已保存: {len(layout)} 个控件")
+        logger.info(f"HUD布局已保存({target}): {len(layout)} 个控件")
 
-    def _reset_hud_layout(self):
-        """重置HUD布局为默认（三列两行）"""
+    def _reset_hud_layout(self, target="P1"):
+        """重置HUD布局为默认（P1→hud_layout / P2→p2_hud_layout）"""
+        if target == "P2" and self.p2_controls:
+            self.config.p2_hud_layout = {}
+            self.config.save()
+            self._setup_multiplayer_controls()
+            logger.info("P2 HUD布局已重置为默认")
+            return
         self.config.hud_layout = {}
         self.config.save()
         self._setup_touch_controls()
@@ -523,7 +543,7 @@ class Game:
         self.skill_caster = SkillCaster(550, BASE_HEIGHT - 145, 52)
         self.throwable_switch_btn = TouchButton(380, BASE_HEIGHT - 320, 42, "投掷", ORANGE)
         self.throwable_caster = SkillCaster(430, BASE_HEIGHT - 145, 48)
-        self._apply_hud_layout()  # 布局保存仍对 P1 生效（双人默认左半屏）
+        # 注意：双人模式禁用已保存的全屏 HUD 布局（会覆盖 P1 控件回右半屏与 P2 重叠）
         # P2 控件（右半屏 640-1280 逻辑坐标）
         self.p2_controls = {
             "joystick": VirtualJoystick(640 + 140, BASE_HEIGHT - 120, 70),
@@ -540,6 +560,29 @@ class Game:
         self.p2_selected_throwable = "incendiary"
         self.p2_fire_held = False
         self._p2_finger_ids = set()  # P2 触控手指（右半屏）
+        # 双人独立 HUD 布局：P1 用 hud_layout（仅接受左半屏 x<640 的坐标），P2 用 p2_hud_layout
+        lay = getattr(self.config, 'hud_layout', None) or {}
+        if lay and all(v[0] < BASE_WIDTH // 2 for v in lay.values() if len(v) > 0):
+            self._apply_hud_layout()
+        lay2 = getattr(self.config, 'p2_hud_layout', None) or {}
+        if lay2:
+            def _set2(ctrl, key):
+                if ctrl is not None and key in lay2:
+                    try:
+                        ctrl.base_x = int(lay2[key][0])
+                        ctrl.base_y = int(lay2[key][1])
+                    except (TypeError, IndexError, ValueError):
+                        pass
+            c2 = self.p2_controls
+            _set2(c2["joystick"], "joystick")
+            _set2(c2["aim"], "aim")
+            _set2(c2["shoot"], "shoot")
+            _set2(c2["pause"], "pause")
+            _set2(c2["sprint"], "sprint")
+            _set2(c2["skill_selector"], "skill_selector")
+            _set2(c2["skill_caster"], "skill_caster")
+            _set2(c2["throwable_switch"], "throwable_switch")
+            _set2(c2["throwable_caster"], "throwable_caster")
         logger.info("同屏双人控件初始化完成")
 
     def _apply_character_bonuses2(self):
@@ -608,12 +651,15 @@ class Game:
                 shoot = True
             if self.client_skill.just_released:
                 skill = True
-        # 发送输入帧
-        self.net_client.send_input({
-            "mx": float(mx), "my": float(my),
-            "shoot": bool(shoot), "skill": bool(skill),
-            "throw": False, "sprint": False,
-        })
+        # 发送输入帧（20Hz 节流，减少无效包）
+        self.net_input_timer = getattr(self, 'net_input_timer', 0) - dt
+        if self.net_input_timer <= 0:
+            self.net_input_timer = 0.05
+            self.net_client.send_input({
+                "mx": round(float(mx), 3), "my": round(float(my), 3),
+                "shoot": bool(shoot), "skill": bool(skill),
+                "throw": False, "sprint": False,
+            })
         # 主机断开 → 返回联机界面
         if not self.net_client.connected:
             self.floating_texts.append(FloatingText(0, 0, "与主机断开连接", color=CRIMSON, lifetime=2.0))
@@ -621,9 +667,13 @@ class Game:
             self.state = GameState.NET_MULTIPLAYER
 
     def _net_send_snapshot(self):
-        """主机：每帧广播世界快照给客户端"""
+        """主机：每帧广播世界快照给客户端（20Hz 节流 + 坐标量化）"""
         if not self.net_host or not self.net_host.connected or not self.net_started:
             return
+        self.net_snap_timer = getattr(self, 'net_snap_timer', 0) - 1 / 60
+        if self.net_snap_timer > 0:
+            return
+        self.net_snap_timer = 0.05
         try:
             projs = []
             for p in self.projectiles[:50]:
@@ -632,26 +682,43 @@ class Game:
                     col = tuple(col)[:3]
                 except Exception:
                     col = (255, 255, 255)
-                projs.append({"x": p.x, "y": p.y, "size": getattr(p, 'size', 6), "color": list(col)})
+                projs.append({"x": round(p.x, 1), "y": round(p.y, 1),
+                              "size": getattr(p, 'size', 6), "color": list(col)})
             enems = []
             for e in self.enemies[:80]:
-                enems.append({"x": e.x, "y": e.y, "hp": getattr(e, 'hp', 0),
+                enems.append({"x": round(e.x, 1), "y": round(e.y, 1), "hp": int(getattr(e, 'hp', 0)),
                               "size": getattr(e, 'size', getattr(e, 'radius', 12))})
+            # 特效快照：环形横扫 / 挥砍弧线（让客户端看到技能效果）
+            effects = []
+            for sr in self.sweep_rings[:10]:
+                effects.append({"t": "ring", "x": round(sr["x"], 1), "y": round(sr["y"], 1),
+                                "r": round(sr["r"], 1), "max_r": round(sr.get("max_r", sr["r"]), 1),
+                                "color": list(sr.get("color", (190, 80, 230))[:3]), "life": round(sr.get("life", 0.3), 2)})
+            for sa in self.slash_arcs[:8]:
+                effects.append({"t": "arc", "x": round(sa.x, 1), "y": round(sa.y, 1),
+                                "angle": round(sa.angle, 2), "radius": round(sa.radius, 1),
+                                "color": list(getattr(sa, 'color', (190, 80, 230))[:3]),
+                                "life": round(sa.lifetime, 2)})
             snap = {
                 "started": True,
                 "time_left": getattr(self, 'time_left', 0),
                 "wave": getattr(self, 'wave_count', 0) if hasattr(self, 'wave_count') else 0,
                 "players": [
-                    {"x": self.player.x, "y": self.player.y, "hp": self.player.hp,
-                     "max_hp": self.player.max_hp, "alive": self.player.alive},
-                    {"x": self.player2.x if self.player2 else self.player.x,
-                     "y": self.player2.y if self.player2 else self.player.y,
-                     "hp": self.player2.hp if self.player2 else 0,
-                     "max_hp": self.player2.max_hp if self.player2 else 1,
-                     "alive": bool(self.player2 and self.player2.alive)},
+                    {"x": round(self.player.x, 1), "y": round(self.player.y, 1), "hp": int(self.player.hp),
+                     "max_hp": int(self.player.max_hp), "alive": self.player.alive,
+                     "downed": bool(getattr(self.player, 'downed', False)),
+                     "weapon": self.player.get_current_weapon().name if self.player.get_current_weapon() else "PISTOL"},
+                    {"x": round(self.player2.x, 1) if self.player2 else round(self.player.x, 1),
+                     "y": round(self.player2.y, 1) if self.player2 else round(self.player.y, 1),
+                     "hp": int(self.player2.hp) if self.player2 else 0,
+                     "max_hp": int(self.player2.max_hp) if self.player2 else 1,
+                     "alive": bool(self.player2 and self.player2.alive),
+                     "downed": bool(self.player2 and getattr(self.player2, 'downed', False)),
+                     "weapon": self.player2.get_current_weapon().name if (self.player2 and self.player2.get_current_weapon()) else "PISTOL"},
                 ],
                 "enemies": enems,
                 "projectiles": projs,
+                "effects": effects,
             }
             self.net_host.send_snapshot({"type": "snapshot", "data": snap})
         except Exception as e:
@@ -3653,6 +3720,20 @@ class Game:
                     self.dev_panel_open = not self.dev_panel_open
                     self._rebuild_dev_buttons()
 
+    def start_text_input(self):
+        """唤起系统输入法（SDL_IME），供网络IP输入框/开发者密码框使用"""
+        try:
+            pygame.key.start_text_input()
+        except Exception:
+            pass
+
+    def stop_text_input(self):
+        """收起系统输入法"""
+        try:
+            pygame.key.stop_text_input()
+        except Exception:
+            pass
+
     def _focus_dev_input(self):
         """聚焦开发者密码输入框：激活系统输入法（SDL_IME），开始接受输入"""
         if not self.dev_input_active:
@@ -5646,6 +5727,54 @@ class Game:
         self._update_black_holes(dt)
         self._update_medic_pods(dt)
 
+    def _update_rescue(self, dt):
+        """双人救援系统：倒地→队友救援复活（同屏靠近自动救援 / 网络 8 秒自动复活）；全倒地则结束"""
+        p1, p2 = self.player, self.player2
+        if not p1 or not p2:
+            return False
+        # 1) 触发倒地：hp<=0 且未倒地 → 倒地（不立即死亡）
+        for p in (p1, p2):
+            if p.hp <= 0 and not p.downed and getattr(p, 'alive', True):
+                p.downed = True
+                p.alive = False
+                p.downed_timer = 0.0
+                p.rescue_progress = 0.0
+                self.floating_texts.append(FloatingText(
+                    p.x, p.y - 40, "倒地！等待救援...", color=(240, 230, 120), lifetime=2.0))
+                self.assets.play_sound_random(["player_hurt", "hurt"])
+        # 2) 救援 / 自动复活
+        for p in (p1, p2):
+            if not p.downed:
+                continue
+            p.downed_timer += dt
+            mate = p2 if p is p1 else p1
+            rescued = False
+            if self.multiplayer_mode == "same_screen":
+                near = mate is not None and not mate.downed and math.hypot(mate.x - p.x, mate.y - p.y) < 120
+                if near:
+                    p.rescue_progress += dt
+                    if p.rescue_progress >= 2.5:
+                        rescued = True
+                else:
+                    p.rescue_progress = 0.0
+            else:
+                # 网络联机：8 秒自动复活（跨设备救援不便，给保底）
+                if p.downed_timer >= 8.0:
+                    rescued = True
+            if rescued:
+                p.downed = False
+                p.alive = True
+                p.hp = int(p.max_hp * 0.5)
+                p.rescue_progress = 0.0
+                p.invincible_timer = 1.5
+                self.floating_texts.append(FloatingText(p.x, p.y - 40, "已复活!", color=GREEN, lifetime=1.5))
+                try:
+                    self.assets.play_sound("heal")
+                except Exception:
+                    pass
+        # 3) 双人全部倒地 → 游戏结束
+        return bool((p1.downed or not p1.alive) and (p2.downed or not p2.alive))
+
     def _update_playing(self, dt):
         # 衰减吸血屏幕效果
         # Mod 每帧钩子
@@ -6073,12 +6202,15 @@ class Game:
                 self._perform_bash(self.player.facing_angle)
 
         # 生成敌人 - 尸潮期间大量刷新，非尸潮期间少量刷新
+        # 双人/联机：怪物按玩家人数调整难度（上限×1.8 + 额外刷新频率）
         spawn_type = self.horde_manager.should_spawn()
+        mp_mult = 1.8 if self.is_multiplayer_active() else 1.0
         max_enemies = 80 if self.horde_manager.is_horde_active() else 25
         if not hasattr(self, 'time_slow_active') or not self.time_slow_active:
             pass
         else:
             max_enemies = int(max_enemies * 0.7)
+        max_enemies = int(max_enemies * mp_mult)
         if spawn_type and len(self.enemies) < max_enemies:
             # 处理元组返回：(boss_type, drops_vaccine)
             drops_vaccine = False
@@ -6129,12 +6261,30 @@ class Game:
                     f"【{scale_name}】", color=scale_color, lifetime=3.0
                 ))
 
+        # 双人/联机：额外刷新频率（难度随玩家数调整）
+        if self.is_multiplayer_active():
+            self._mp_spawn_timer = getattr(self, '_mp_spawn_timer', 0) + dt
+            if self._mp_spawn_timer >= 0.35 and len(self.enemies) < max_enemies:
+                self._mp_spawn_timer -= 0.35
+                _extra = self.horde_manager.should_spawn()
+                if _extra:
+                    if isinstance(_extra, tuple):
+                        _extra, _dv = _extra
+                    _ang2 = random.uniform(0, math.pi * 2)
+                    _dist2 = random.randint(400, 700)
+                    _sx, _sy = self.world.clamp_position(
+                        self.player.x + math.cos(_ang2) * _dist2,
+                        self.player.y + math.sin(_ang2) * _dist2, 20)
+                    self.enemies.append(Enemy(_sx, _sy, _extra, 1, self.config.difficulty))
+
         # 更新敌人
         for enemy in self.enemies[:]:
-            # 选择最近的玩家作为目标（双人模式支持多目标）
+            # 选择最近的玩家作为目标（双人模式支持多目标，倒地玩家不成为目标）
             if self.player2:
-                d1 = (enemy.x - self.player.x) ** 2 + (enemy.y - self.player.y) ** 2
-                d2 = (enemy.x - self.player2.x) ** 2 + (enemy.y - self.player2.y) ** 2
+                d1 = (enemy.x - self.player.x) ** 2 + (enemy.y - self.player.y) ** 2 \
+                    if not getattr(self.player, 'downed', False) else 1e18
+                d2 = (enemy.x - self.player2.x) ** 2 + (enemy.y - self.player2.y) ** 2 \
+                    if (self.player2 and not getattr(self.player2, 'downed', False)) else 1e18
                 if d2 < d1:
                     target_x, target_y, target_obj = self.player2.x, self.player2.y, self.player2
                 else:
@@ -7082,24 +7232,34 @@ class Game:
                 self.camera2.follow(self.player2.x, self.player2.y, dt)
             self._update_player2(dt)
 
-        if self.player.hp <= 0 or (self.player2 and self.player2.hp <= 0):
-            # 单人模式：正常游戏结束
-            if self.session:
-                self.session.set_died(True)
-                new_unlock_keys = self.session.finalize() or []
-                for k in new_unlock_keys:
-                    ach_data = self.records.data["achievements"].get(k)
-                    if ach_data:
-                        self.ach_toast_queue.append({
-                            "key":k,
-                            "desc": ach_data["desc"],
-                            "timer":4.0
-                        })
-                self.session = None
-            # 播放失败音乐
-            self.assets.play_music("gameover")
-            self.delete_saved_game()
-            self.state = GameState.GAME_OVER
+        if self.is_multiplayer_active():
+            # 双人/联机：救援系统——全部倒地才游戏结束
+            if self._update_rescue(dt):
+                self._trigger_multiplayer_game_over()
+        elif self.player.hp <= 0:
+            self._trigger_multiplayer_game_over()
+
+    def _trigger_multiplayer_game_over(self):
+        """触发游戏结束结算（单/双人共用）"""
+        if self.state != GameState.PLAYING:
+            return
+        # 单人模式：正常游戏结束
+        if self.session:
+            self.session.set_died(True)
+            new_unlock_keys = self.session.finalize() or []
+            for k in new_unlock_keys:
+                ach_data = self.records.data["achievements"].get(k)
+                if ach_data:
+                    self.ach_toast_queue.append({
+                        "key":k,
+                        "desc": ach_data["desc"],
+                        "timer":4.0
+                    })
+            self.session = None
+        # 播放失败音乐
+        self.assets.play_music("gameover")
+        self.delete_saved_game()
+        self.state = GameState.GAME_OVER
 
         if self.horde_manager.is_timed_over():
             self._final_dialogue()

@@ -29,7 +29,7 @@ ESSENTIAL_FILES = [
     "renderer.py", "buff.py", "skills.py", "ui.py", "weapons.py",
     "assets.py", "records.py", "logger.py", "dialogue.py",
     "skill_wheel.py", "runes.py", "lighting.py", "mod_loader.py",
-    "codex.py", "skill_tree_view.py", "updater.py", "version.txt",
+    "codex.py", "skill_tree_view.py", "updater.py", "net.py", "version.txt",
     "requirements.txt", "README.md",
 ]
 
