@@ -1563,32 +1563,38 @@ class Enemy:
         返回: None / "wang_gunfire" / "wang_grenade" / "wang_scythe_sweep" / dict(子弹)
         """
         if hp_ratio > 0.5:
-            # ===== 枪械形态（远程压制）=====
-            # 连续射击弹幕（朝玩家方向3连发）
-            if dist > 150 and self.boss_shoot_cd <= 0 and random.random() < 0.04:
+            # ===== 枪械形态（远程压制）【Utility AI】=====
+            pick, _ps = self._utility_pick([
+                ("gunfire", lambda: (66 if (dist > 150 and self.boss_shoot_cd <= 0) else 0)),
+                ("grenade", lambda: (52 if (self.boss_grenade_cd <= 0) else 0)),
+                ("move", lambda: 26),
+            ])
+            if pick == "gunfire":
                 self.boss_shoot_cd = 1.2
                 self.skill_windup = 0.5
                 return "wang_gunfire"
-            # 枪榴弹（范围爆炸）
-            if self.boss_grenade_cd <= 0 and random.random() < 0.02:
+            elif pick == "grenade":
                 self.boss_grenade_cd = 6.0
                 self.skill_windup = 0.8
                 return "wang_grenade"
         else:
-            # ===== 死神镰刀形态（近战爆发）=====
-            # 处决斩击（低血量+近距离启动前摇）
-            if can_execution and dist < 200 and random.random() < 0.03:
+            # ===== 死神镰刀形态（近战爆发）【Utility AI】=====
+            pick, _ps = self._utility_pick([
+                ("execution", lambda: (78 if (can_execution and dist < 200) else 0)),
+                ("sweep", lambda: (66 if (dist < 230 and self.boss_aoe_cd <= 0) else 0)),
+                ("dash", lambda: (60 if (dist > 120 and self.boss_dash_cd <= 0) else 0)),
+                ("move", lambda: 32),
+            ])
+            if pick == "execution":
                 self.boss_is_executing = True
                 self.boss_execution_windup = 1.2
                 self.boss_execution_cd = 12.0
                 return None
-            # 大范围镰刀横扫
-            if dist < 230 and self.boss_aoe_cd <= 0 and random.random() < 0.035:
+            elif pick == "sweep":
                 self.boss_aoe_cd = 4.0
                 self.skill_windup = 0.6
                 return "wang_scythe_sweep"
-            # 高速突进斩
-            if dist > 120 and self.boss_dash_cd <= 0 and random.random() < 0.03:
+            elif pick == "dash":
                 self.is_dashing = True
                 self.dash_target_x = player_x
                 self.dash_target_y = player_y
@@ -1603,6 +1609,24 @@ class Enemy:
             self.x += (player_x - self.x) / dist * move_speed * bsm * dt * 60
             self.y += (player_y - self.y) / dist * move_speed * bsm * dt * 60
         return None
+
+    def _utility_pick(self, actions):
+        """Utility AI 决策核心：评估所有就绪行为，实时打分，返回分数最高的行为key与分数。
+
+        actions: list[ (key, score_func) ]，score_func 计算 0~100 分；就绪性由各行为打分内判断。
+        返回: (best_key, best_score)，best_score<=0 时返回 (None, 0) 表示无行为触发。
+        """
+        best_key = None
+        best_score = 0.0
+        for key, score_func in actions:
+            try:
+                s = float(score_func())
+            except Exception:
+                s = 0.0
+            if s > best_score:
+                best_score = s
+                best_key = key
+        return best_key, best_score
 
     def _boss_behavior(self, dt, player_x, player_y, dist, player):
         """
@@ -1706,15 +1730,23 @@ class Enemy:
             if dist < 160:
                 self.boss_hold_shield = False
 
-            # 【处决重劈】血量低概率启动前摇
-            if can_execution and dist < 170 and random.random() < 0.025:
+            # 【Utility AI 决策】龙某所有就绪行为实时打分，选最高分执行
+            pick, _ps = self._utility_pick([
+                ("execution", lambda: (65 if (can_execution and dist < 170) else 0)),
+                ("dash", lambda: (70 if (dist > 110 and self.boss_dash_cd <= 0) else 0)),
+                ("aoe", lambda: (68 if (dist < 140 and self.boss_aoe_cd <= 0) else 0)),
+                ("slam", lambda: (55 + (25 if hp_ratio <= 0.5 else 0)) if (dist < 200 and self.boss_ground_slam_cd <= 0) else 0),
+                ("charge", lambda: (62 if (150 < dist < 400 and self.boss_charge_cd <= 0) else 0)),
+                ("summon", lambda: (45 if (hp_ratio < 0.5 and self.boss_summon_cd <= 0) else 0)),
+                ("regen", lambda: (40 if (hp_ratio < 0.4 and self.boss_regen_cd <= 0) else 0)),
+                ("move", lambda: 28),
+            ])
+            if pick == "execution":
                 self.boss_is_executing = True
                 self.boss_execution_windup = 1.1   # 1.1秒红色前摇警告
                 self.boss_execution_cd = 14.0
                 return None
-
-            # 冲刺
-            if dist > 110 and self.boss_dash_cd <= 0 and random.random() < 0.025:
+            elif pick == "dash":
                 self.is_dashing = True
                 self.dash_target_x = player_x
                 self.dash_target_y = player_y
@@ -1722,20 +1754,13 @@ class Enemy:
                 self.dash_timer = 0.45
                 self.boss_dash_cd = 4.5
                 return None
-
-            # AOE地面震荡
-            if dist < 140 and self.boss_aoe_cd <= 0 and random.random() < 0.03:
+            elif pick == "aoe":
                 self.boss_aoe_cd = 5.0
                 return "boss_aoe"
-
-            # 【地震波】大范围环形AOE，低血量更频繁
-            slam_chance = 0.02 if hp_ratio > 0.5 else 0.04
-            if dist < 200 and self.boss_ground_slam_cd <= 0 and random.random() < slam_chance:
+            elif pick == "slam":
                 self.boss_ground_slam_cd = 8.0
                 return "boss_ground_slam"
-
-            # 【狂暴冲锋】向玩家方向高速冲锋，带拖尾
-            if dist > 150 and dist < 400 and self.boss_charge_cd <= 0 and random.random() < 0.02:
+            elif pick == "charge":
                 self.boss_charge_cd = 6.0
                 self.boss_is_charging = True
                 self.boss_charge_timer = 0.5
@@ -1743,14 +1768,10 @@ class Enemy:
                 if d > 0:
                     self.boss_charge_dir = ((player_x - self.x) / d, (player_y - self.y) / d)
                 return None
-
-            # 【召唤小怪】低血量时召唤普通僵尸
-            if hp_ratio < 0.5 and self.boss_summon_cd <= 0 and random.random() < 0.015:
+            elif pick == "summon":
                 self.boss_summon_cd = 15.0
                 return "boss_summon_melee"
-
-            # 【护盾再生】低血量时回血
-            if hp_ratio < 0.4 and self.boss_regen_cd <= 0 and random.random() < 0.01:
+            elif pick == "regen":
                 self.boss_regen_cd = 20.0
                 self.hp = min(self.max_hp, self.hp + self.max_hp * 0.15)
                 return "boss_regen"
@@ -1761,28 +1782,36 @@ class Enemy:
                 self.y += (player_y - self.y) / dist * self.speed * self._buff_speed_mult * dt * 60
 
         elif self.enemy_type == EnemyType.BOSS_XIANG:
-            # ----向某：远程Boss【增强：后撤滑步、连射模式、霰弹处决】----
-            # 【处决霰弹爆发】近距离+残血启动前摇
-            if can_execution and dist <160 and random.random() <0.025:
+            # ----向某：远程Boss【Utility AI 决策】----
+            pick, _ps = self._utility_pick([
+                ("execution", lambda: (72 if (can_execution and dist < 160) else 0)),
+                ("backstep", lambda: (66 if (dist < 140 and self.boss_backstep_cd <= 0) else 0)),
+                ("salvo", lambda: (62 if (dist > 130 and self.boss_salvo_cd <= 0) else 0)),
+                ("shoot", lambda: (55 if (dist > 130 and self.boss_shoot_cd <= 0) else 0)),
+                ("barrage", lambda: (45 + (22 if hp_ratio <= 0.5 else 0)) if self.boss_barrage_cd <= 0 else 0),
+                ("smoke", lambda: (34 if (dist > 100 and self.boss_smoke_cd <= 0) else 0)),
+                ("grenade", lambda: (40 if (120 < dist < 350 and self.boss_grenade_cd <= 0) else 0)),
+                ("teleport", lambda: (30 if (hp_ratio < 0.6 and self.boss_teleport_cd <= 0) else 0)),
+                ("summon", lambda: (38 if (hp_ratio < 0.5 and self.boss_summon_cd <= 0) else 0)),
+                ("dash", lambda: (36 if (90 < dist < 240 and self.boss_dash_cd <= 0) else 0)),
+                ("move", lambda: 24),
+            ])
+            if pick == "execution":
                 self.boss_is_executing = True
                 self.boss_execution_windup = 1.0
-                self.boss_execution_cd =13.0
+                self.boss_execution_cd = 13.0
                 return None
-
-            # 后撤滑步：玩家靠近，拉开距离
-            if dist <140 and self.boss_backstep_cd <=0 and random.random()<0.02:
-                self.boss_backstep_cd =6.0
+            elif pick == "backstep":
+                self.boss_backstep_cd = 6.0
                 back_dx = self.x - player_x
                 back_dy = self.y - player_y
-                b_dist = math.hypot(back_dx,back_dy)
-                if b_dist>0:
-                    self.x += (back_dx / b_dist)*90
-                    self.y += (back_dy / b_dist)*90
+                b_dist = math.hypot(back_dx, back_dy)
+                if b_dist > 0:
+                    self.x += (back_dx / b_dist) * 90
+                    self.y += (back_dy / b_dist) * 90
                 return None
-
-            # 连射模式
-            if dist>130 and self.boss_salvo_cd <=0 and random.random() <0.035:
-                self.boss_salvo_cd =2.8
+            elif pick == "salvo":
+                self.boss_salvo_cd = 2.8
                 # 连续3发子弹
                 for _ in range(3):
                     return {
@@ -1790,47 +1819,33 @@ class Enemy:
                         "target_x": player_x, "target_y": player_y,
                         "damage": int(self.damage * 0.55)
                     }
-            # 普通单发射击
-            elif dist > 130 and self.boss_shoot_cd <=0 and random.random() <0.035:
+            elif pick == "shoot":
                 self.boss_shoot_cd = 1.6
                 return {
                     "x": self.x, "y": self.y,
                     "target_x": player_x, "target_y": player_y,
                     "damage": int(self.damage * 0.65)
                 }
-
-            # 【弹幕扫射】环形发射多方向子弹
-            barrage_chance = 0.02 if hp_ratio > 0.5 else 0.035
-            if self.boss_barrage_cd <= 0 and random.random() < barrage_chance:
+            elif pick == "barrage":
                 self.boss_barrage_cd = 7.0
                 return "boss_barrage"
-
-            # 【烟雾弹】在玩家位置生成烟雾区域减速
-            if dist > 100 and self.boss_smoke_cd <= 0 and random.random() < 0.015:
+            elif pick == "smoke":
                 self.boss_smoke_cd = 10.0
                 return "boss_smoke"
-
-            # 【手雷】投掷延迟爆炸手雷
-            if dist > 120 and dist < 350 and self.boss_grenade_cd <= 0 and random.random() < 0.02:
+            elif pick == "grenade":
                 self.boss_grenade_cd = 6.0
                 return "boss_grenade"
-
-            # 【闪现】低血量时瞬移到玩家侧后方
-            if hp_ratio < 0.6 and self.boss_teleport_cd <= 0 and random.random() < 0.015:
+            elif pick == "teleport":
                 self.boss_teleport_cd = 12.0
                 angle = math.atan2(player_y - self.y, player_x - self.x) + math.radians(random.choice([120, -120]))
                 teleport_dist = 150
                 self.x = player_x + math.cos(angle) * teleport_dist
                 self.y = player_y + math.sin(angle) * teleport_dist
                 return "boss_teleport"
-
-            # 【召唤远程小怪】低血量时召唤远程僵尸
-            if hp_ratio < 0.5 and self.boss_summon_cd <= 0 and random.random() < 0.015:
+            elif pick == "summon":
                 self.boss_summon_cd = 18.0
                 return "boss_summon_ranged"
-
-            # 近身冲刺
-            if dist >90 and dist <240 and self.boss_dash_cd <=0 and random.random() <0.022:
+            elif pick == "dash":
                 self.is_dashing = True
                 self.dash_target_x = player_x
                 self.dash_target_y = player_y
@@ -1853,16 +1868,7 @@ class Enemy:
             if self.combo_timer > 0:
                 self.combo_timer -= dt
 
-            # 【处决：毁灭连招】残血+近距离启动
-            if can_execution and dist < 180 and random.random() < 0.02:
-                self.boss_is_executing = True
-                self.boss_execution_windup = 0.8
-                self.boss_execution_cd = 15.0
-                self.combo_state = 1
-                self.combo_timer = 2.5
-                return None
-
-            # 连招进行中：连续高伤害攻击
+            # 连招进行中：连续高伤害攻击（优先于新决策）
             if self.combo_state > 0 and self.combo_timer > 0:
                 if self.combo_state == 1 and self.combo_timer < 2.0:
                     self.combo_state = 2
@@ -1879,8 +1885,21 @@ class Enemy:
                     return "mutant_combo_finisher"  # 终结：下砸AOE
                 return None
 
-            # 【变异冲刺】高速冲刺
-            if dist > 150 and self.boss_dash_cd <= 0 and random.random() < 0.03:
+            # 【Utility AI 决策】变异体：处决连招/冲刺/酸液/追击
+            pick, _ps = self._utility_pick([
+                ("execution", lambda: (75 if (can_execution and dist < 180) else 0)),
+                ("dash", lambda: (63 if (dist > 150 and self.boss_dash_cd <= 0) else 0)),
+                ("acid", lambda: (58 if (dist < 300 and self.boss_shoot_cd <= 0) else 0)),
+                ("move", lambda: 28),
+            ])
+            if pick == "execution":
+                self.boss_is_executing = True
+                self.boss_execution_windup = 0.8
+                self.boss_execution_cd = 15.0
+                self.combo_state = 1
+                self.combo_timer = 2.5
+                return None
+            elif pick == "dash":
                 self.is_dashing = True
                 self.dash_target_x = player_x
                 self.dash_target_y = player_y
@@ -1888,9 +1907,7 @@ class Enemy:
                 self.dash_timer = 0.35
                 self.boss_dash_cd = 4.0
                 return None
-
-            # 【酸液喷射】远程扇形攻击
-            if dist < 300 and self.boss_shoot_cd <= 0 and random.random() < 0.025:
+            elif pick == "acid":
                 self.boss_shoot_cd = 3.0
                 results = []
                 base_angle = math.atan2(player_y - self.y, player_x - self.x)
@@ -1917,29 +1934,28 @@ class Enemy:
                 self.y += (player_y - self.y) / dist * self.speed * self._buff_speed_mult * dt * 60
 
         elif self.enemy_type == EnemyType.BOSS_QUEEN:
-            # ----尸潮女王：召唤+控制Boss----
-            # 【召唤小怪】定期召唤
-            if self.boss_summon_cd <= 0 and random.random() < 0.02:
+            # ----尸潮女王：召唤+控制Boss【Utility AI 决策】----
+            pick, _ps = self._utility_pick([
+                ("summon", lambda: (58 if (self.boss_summon_cd <= 0) else 0)),
+                ("mind", lambda: (50 if (dist < 250 and self.boss_smoke_cd <= 0) else 0)),
+                ("tentacle", lambda: (46 if (dist < 200 and self.boss_ground_slam_cd <= 0) else 0)),
+                ("poison", lambda: (40 if (dist > 100 and self.boss_grenade_cd <= 0) else 0)),
+                ("execution", lambda: (74 if (can_execution and dist < 200) else 0)),
+                ("move", lambda: 26),
+            ])
+            if pick == "summon":
                 self.boss_summon_cd = getattr(self, "summon_interval", 8.0)
                 return "queen_summon"
-
-            # 【精神控制】让玩家随机移动（恐惧效果）
-            if dist < 250 and self.boss_smoke_cd <= 0 and random.random() < 0.015:
+            elif pick == "mind":
                 self.boss_smoke_cd = 12.0
                 return "queen_mind_control"
-
-            # 【毒雾】在玩家位置生成毒雾
-            if dist > 100 and self.boss_grenade_cd <= 0 and random.random() < 0.02:
-                self.boss_grenade_cd = 7.0
-                return "queen_poison_cloud"
-
-            # 【触手攻击】地下触手突袭
-            if dist < 200 and self.boss_ground_slam_cd <= 0 and random.random() < 0.02:
+            elif pick == "tentacle":
                 self.boss_ground_slam_cd = 5.0
                 return "queen_tentacle"
-
-            # 【处决：虫群吞噬】残血启动
-            if can_execution and dist < 200 and random.random() < 0.015:
+            elif pick == "poison":
+                self.boss_grenade_cd = 7.0
+                return "queen_poison_cloud"
+            elif pick == "execution":
                 self.boss_is_executing = True
                 self.boss_execution_windup = 1.2
                 self.boss_execution_cd = 18.0
@@ -1956,14 +1972,18 @@ class Enemy:
                     self.y += (player_y - self.y) / dist * self.speed * self._buff_speed_mult * dt * 60
 
         elif self.enemy_type == EnemyType.BOSS_TITAN:
-            # ----泰坦：巨型坦克Boss----
-            # 【地震踩踏】大范围AOE
-            if dist < 150 and self.boss_ground_slam_cd <= 0 and random.random() < 0.025:
+            # ----泰坦：巨型坦克Boss【Utility AI 决策】----
+            pick, _ps = self._utility_pick([
+                ("stomp", lambda: (62 if (dist < 150 and self.boss_ground_slam_cd <= 0) else 0)),
+                ("boulder", lambda: (52 if (dist > 200 and self.boss_shoot_cd <= 0) else 0)),
+                ("charge", lambda: (57 if (dist > 250 and self.boss_charge_cd <= 0) else 0)),
+                ("execution", lambda: (76 if (can_execution and dist < 200) else 0)),
+                ("move", lambda: 28),
+            ])
+            if pick == "stomp":
                 self.boss_ground_slam_cd = 6.0
                 return "titan_stomp"
-
-            # 【巨石投掷】远程攻击
-            if dist > 200 and self.boss_shoot_cd <= 0 and random.random() < 0.02:
+            elif pick == "boulder":
                 self.boss_shoot_cd = 4.0
                 return {
                     "x": self.x, "y": self.y,
@@ -1971,9 +1991,7 @@ class Enemy:
                     "damage": int(self.damage * 0.8),
                     "is_boulder": True,
                 }
-
-            # 【狂暴冲锋】长距离冲锋
-            if dist > 250 and self.boss_charge_cd <= 0 and random.random() < 0.015:
+            elif pick == "charge":
                 self.boss_charge_cd = 10.0
                 self.boss_is_charging = True
                 self.boss_charge_timer = 1.2
@@ -1981,9 +1999,7 @@ class Enemy:
                 if d > 0:
                     self.boss_charge_dir = ((player_x - self.x) / d, (player_y - self.y) / d)
                 return None
-
-            # 【处决：泰坦之怒】残血+大范围
-            if can_execution and dist < 200 and random.random() < 0.015:
+            elif pick == "execution":
                 self.boss_is_executing = True
                 self.boss_execution_windup = 1.5
                 self.boss_execution_cd = 20.0

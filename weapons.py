@@ -567,9 +567,9 @@ class Weapon:
             return "∞"
         return f"{self.current_ammo}/{self.max_ammo}"
 
-
 def render_weapon_icon(weapon_type):
-    """程序化生成武器贴图（透明surface，枪口朝右/0度），局内玩家手持与图鉴共用"""
+    """程序化生成武器专属贴图（透明surface，枪口朝右/0度），局内玩家手持与图鉴共用。
+    每把武器都有独立的造型、配色与部件，一眼可辨。"""
     from config import WeaponType
     wt = weapon_type.value if hasattr(weapon_type, 'value') else weapon_type
     try:
@@ -579,27 +579,137 @@ def render_weapon_icon(weapon_type):
     surf = pygame.Surface((64, 64), pygame.SRCALPHA)
     cx, cy = 32, 32
     name = wt.name if hasattr(wt, 'name') else str(wt)
-    if name in ("KNIFE", "BAT", "CHAINSAW", "SCYTHE"):
-        if name == "KNIFE":
-            pygame.draw.polygon(surf, (200, 205, 215),
-                                [(cx - 6, cy - 6), (cx + 26, cy - 6), (cx + 32, cy + 2), (cx - 10, cy + 2)])
-            pygame.draw.rect(surf, (130, 95, 60), (cx - 26, cy - 4, 24, 10))
-        elif name == "SCYTHE":
-            pygame.draw.arc(surf, (220, 225, 235), (cx - 30, cy - 26, 66, 56), 0, 3.3, 9)
-            pygame.draw.line(surf, (145, 115, 80), (cx + 28, cy + 2), (cx - 26, cy + 42), 8)
-            pygame.draw.circle(surf, (160, 130, 90), (cx + 28, cy + 2), 8)
-        elif name == "CHAINSAW":
-            pygame.draw.rect(surf, (120, 120, 132), (cx - 30, cy - 4, 60, 14))
-            for i in range(-26, 30, 9):
-                pygame.draw.circle(surf, (90, 90, 100), (cx + i, cy + 3), 3)
-            pygame.draw.rect(surf, (150, 80, 60), (cx - 4, cy + 10, 24, 16))
-        else:  # BAT
-            pygame.draw.line(surf, (150, 120, 70), (cx - 30, cy + 2), (cx + 30, cy + 2), 10)
-            pygame.draw.rect(surf, (120, 90, 60), (cx - 6, cy + 2, 22, 12))
-    else:
-        # 枪械：枪身+枪管+弹匣+瞄准
-        pygame.draw.rect(surf, (75, 75, 88), (cx - 20, cy - 6, 54, 14))
-        pygame.draw.rect(surf, (75, 75, 88), (cx + 28, cy - 3, 20, 8))
-        pygame.draw.rect(surf, (70, 70, 80), (cx - 16, cy + 8, 24, 14))
-        pygame.draw.rect(surf, (200, 60, 60), (cx - 30, cy - 3, 7, 7))
+
+    # ===== 近战专属 =====
+    if name == "SCYTHE":
+        pygame.draw.arc(surf, (225, 230, 240), (cx - 30, cy - 26, 66, 56), 0, 3.3, 9)
+        pygame.draw.line(surf, (150, 120, 82), (cx + 28, cy + 2), (cx - 26, cy + 42), 8)
+        pygame.draw.circle(surf, (165, 135, 92), (cx + 28, cy + 2), 8)
+        return surf
+    if name == "KNIFE":
+        pygame.draw.polygon(surf, (205, 210, 220),
+                            [(cx - 6, cy - 6), (cx + 26, cy - 6), (cx + 32, cy + 2), (cx - 10, cy + 2)])
+        pygame.draw.rect(surf, (135, 98, 62), (cx - 26, cy - 4, 24, 10))
+        return surf
+    if name == "BAT":
+        pygame.draw.line(surf, (155, 122, 72), (cx - 30, cy + 2), (cx + 30, cy + 2), 11)
+        pygame.draw.rect(surf, (125, 92, 62), (cx - 6, cy + 2, 22, 12))
+        return surf
+    if name == "CHAINSAW":
+        pygame.draw.rect(surf, (125, 125, 135), (cx - 30, cy - 4, 60, 14))
+        for i in range(-26, 30, 9):
+            pygame.draw.circle(surf, (92, 92, 102), (cx + i, cy + 3), 3)
+        pygame.draw.rect(surf, (155, 82, 62), (cx - 4, cy + 10, 24, 16))
+        return surf
+
+    # ===== 枪械专属配置：body(主体尺寸+色) barrel(枪管长+宽+色) mag(弹匣) grip stock scope special =====
+    GUN = {
+        "PISTOL":               dict(body=(26, 8, 40, 14, (72, 72, 84)), barrel=(18, 6, (62, 62, 72)), mag="pistol", grip=True, accent=(205, 195, 60)),
+        "REVOLVER":             dict(body=(22, 8, 38, 14, (92, 96, 102)), barrel=(20, 6, (86, 86, 92)), grip=True, special="cylinder", accent=(165, 165, 170)),
+        "DESERT_EAGLE":         dict(body=(30, 7, 46, 16, (122, 96, 50)), barrel=(22, 7, (112, 86, 46)), mag="pistol", grip=True, accent=(205, 162, 82)),
+        "RIFLE":                dict(body=(20, 8, 48, 15, (62, 82, 56)), barrel=(24, 6, (52, 72, 50)), mag="rifle", grip=True, stock=True, accent=(82, 112, 72)),
+        "AK47":                 dict(body=(18, 8, 50, 15, (72, 60, 45)), barrel=(24, 6, (92, 76, 56)), mag="ak", grip=True, stock="wood", accent=(185, 142, 82)),
+        "M4A1":                 dict(body=(20, 8, 48, 15, (56, 76, 62)), barrel=(24, 6, (46, 66, 52)), mag="rifle", grip=True, stock=True, accent=(92, 122, 88)),
+        "SCAR":                 dict(body=(20, 7, 50, 14, (72, 76, 56)), barrel=(26, 6, (62, 66, 48)), mag="rifle", grip=True, stock=True, scope=True, accent=(185, 150, 62)),
+        "SMG":                  dict(body=(22, 9, 42, 13, (52, 57, 77)), barrel=(14, 5, (46, 51, 72)), mag="smg", grip=True, accent=(102, 112, 152)),
+        "UMP45":                dict(body=(24, 9, 44, 13, (66, 71, 87)), barrel=(16, 5, (61, 66, 82)), mag="smg", grip=True, accent=(132, 137, 162)),
+        "P90":                  dict(body=(24, 9, 46, 13, (46, 96, 96)), barrel=(14, 5, (41, 86, 86)), mag="top", grip=True, accent=(92, 192, 192)),
+        "SNIPER":               dict(body=(16, 7, 52, 13, (42, 77, 52)), barrel=(30, 5, (36, 67, 47)), mag="bolt", grip=True, stock=True, scope=True, accent=(72, 132, 82)),
+        "SEMI_AUTO_SNIPER":     dict(body=(16, 7, 52, 13, (66, 76, 46)), barrel=(26, 5, (61, 71, 41)), mag="rifle", grip=True, stock=True, scope=True, accent=(152, 162, 92)),
+        "AWP":                  dict(body=(14, 7, 54, 13, (52, 87, 62)), barrel=(32, 5, (47, 77, 57)), mag="bolt", grip=True, stock=True, scope=True, accent=(225, 202, 82)),
+        "SHOTGUN":              dict(body=(20, 9, 46, 15, (112, 71, 50)), barrel=(22, 7, (102, 61, 45)), grip=True, special="pump", accent=(162, 102, 72)),
+        "DOUBLE_BARREL":        dict(body=(18, 8, 44, 15, (62, 62, 67)), barrel=(24, 10, (57, 57, 62)), grip=True, special="double", stock="wood", accent=(132, 92, 62)),
+        "AA12":                 dict(body=(20, 8, 48, 15, (72, 72, 77)), barrel=(20, 6, (67, 67, 72)), mag="rifle", grip=True, stock=True, accent=(152, 152, 162)),
+        "MACHINE_GUN":          dict(body=(18, 8, 52, 16, (82, 97, 56)), barrel=(24, 7, (77, 92, 51)), grip=True, special="belt", stock=True, accent=(142, 162, 82)),
+        "MINIGUN":              dict(body=(22, 8, 46, 16, (77, 77, 82)), barrel=(22, 12, (72, 72, 77)), grip=True, special="minigun", accent=(205, 82, 62)),
+        "LMG":                  dict(body=(18, 8, 54, 16, (92, 72, 56)), barrel=(26, 7, (87, 67, 51)), mag="box", grip=True, stock=True, accent=(152, 122, 82)),
+        "ROCKET_LAUNCHER":      dict(body=(16, 10, 50, 20, (72, 87, 62)), barrel=(20, 9, (67, 82, 57)), grip=True, special="rocket", accent=(205, 142, 52)),
+        "FLAMETHROWER":         dict(body=(18, 10, 46, 18, (97, 61, 51)), barrel=(18, 8, (142, 71, 41)), mag="tank", special="flame", accent=(242, 122, 42)),
+        "CROSSBOW":             dict(body=(14, 8, 44, 16, (122, 92, 62)), barrel=(18, 6, (112, 82, 57)), grip=True, special="bow", accent=(172, 132, 82)),
+        "GRENADE_LAUNCHER":     dict(body=(18, 9, 46, 16, (67, 77, 62)), barrel=(18, 8, (62, 72, 57)), grip=True, special="gl", accent=(205, 182, 72)),
+        "PLASMA_RIFLE":         dict(body=(18, 8, 50, 15, (92, 51, 112)), barrel=(24, 6, (122, 62, 152)), mag="rifle", grip=True, stock=True, special="glow", accent=(182, 92, 222)),
+        "RAILGUN":              dict(body=(14, 7, 54, 14, (57, 72, 87)), barrel=(32, 6, (72, 92, 112)), grip=True, stock=True, scope=True, special="rail", accent=(142, 202, 232)),
+    }
+    cfg = GUN.get(name, GUN["PISTOL"])
+    bx, by, bw, bh, body_col = cfg["body"]
+    blen, bh, bcol = cfg["barrel"]
+    # 枪身
+    pygame.draw.rect(surf, body_col, (cx - bx, cy - by, bw, bh), border_radius=3)
+    # 枪管
+    pygame.draw.rect(surf, bcol, (cx - bx + bw - 3, cy - 3, blen, bh), border_radius=2)
+
+    # 弹匣
+    mag = cfg.get("mag")
+    if mag == "pistol":
+        pygame.draw.rect(surf, (50, 50, 60), (cx - 12, cy + 3, 16, 11))
+    elif mag == "smg":
+        pygame.draw.rect(surf, (45, 48, 62), (cx - 14, cy + 3, 18, 10))
+    elif mag == "rifle":
+        pygame.draw.rect(surf, (45, 50, 42), (cx - 14, cy + 3, 16, 12))
+    elif mag == "ak":
+        pygame.draw.polygon(surf, (92, 76, 52), [(cx - 14, cy + 3), (cx - 14, cy + 15), (cx - 2, cy + 15), (cx - 2, cy + 3)])
+    elif mag == "top":  # P90 顶部弹匣
+        pygame.draw.rect(surf, (40, 80, 80), (cx - 18, cy - 14, 20, 9))
+    elif mag == "box":  # LMG 弹箱
+        pygame.draw.rect(surf, (70, 55, 42), (cx - 18, cy + 4, 22, 12))
+    elif mag == "tank":  # 火焰喷射器燃料罐
+        pygame.draw.rect(surf, (140, 68, 40), (cx - 22, cy + 5, 24, 14))
+    elif mag == "bolt":  # 狙击拉栓
+        pygame.draw.rect(surf, (40, 66, 46), (cx + 6, cy - 12, 10, 7))
+
+    # 握把
+    if cfg.get("grip"):
+        pygame.draw.rect(surf, (55, 55, 62), (cx - 8, cy + 2, 14, 14), border_radius=3)
+
+    # 枪托
+    st = cfg.get("stock")
+    if st == "wood":
+        pygame.draw.rect(surf, (125, 92, 60), (cx - bx - 14, cy - 6, 16, 12), border_radius=3)
+    elif st:
+        pygame.draw.rect(surf, (52, 60, 48), (cx - bx - 14, cy - 5, 16, 10), border_radius=3)
+
+    # 瞄准镜
+    if cfg.get("scope"):
+        pygame.draw.rect(surf, (70, 70, 78), (cx - 4, cy - 13, 14, 7), border_radius=2)
+        pygame.draw.circle(surf, (150, 210, 230), (cx + 8, cy - 10), 3)
+
+    # 特殊部件
+    sp = cfg.get("special")
+    if sp == "cylinder":  # 左轮转轮
+        pygame.draw.circle(surf, (100, 103, 108), (cx - 10, cy), 6)
+        pygame.draw.circle(surf, (60, 60, 65), (cx - 10, cy), 3)
+    elif sp == "pump":  # 霰弹泵动
+        pygame.draw.rect(surf, (82, 58, 44), (cx - 6, cy - 5, 10, 12), border_radius=2)
+    elif sp == "double":  # 双管
+        pygame.draw.rect(surf, (50, 50, 55), (cx + 20, cy - 9, 26, 6))
+    elif sp == "belt":  # 机枪弹链
+        for i in range(cx - 20, cx + 28, 7):
+            pygame.draw.rect(surf, (160, 180, 90), (i, cy + 4, 5, 9))
+    elif sp == "minigun":  # 加特林多管
+        for a in range(0, 360, 45):
+            import math as _m
+            r = 7
+            dx = int(_m.cos(_m.radians(a)) * r)
+            dy = int(_m.sin(_m.radians(a)) * r)
+            pygame.draw.circle(surf, (70, 70, 75), (cx + 18, cy + dx // 2), 3)
+        pygame.draw.circle(surf, (150, 60, 50), (cx + 18, cy), 8)
+    elif sp == "rocket":  # 火箭筒前锥头
+        pygame.draw.polygon(surf, (90, 100, 78), [(cx + 48, cy - 8), (cx + 62, cy), (cx + 48, cy + 8)])
+    elif sp == "flame":  # 火焰喷射口
+        pygame.draw.circle(surf, (250, 150, 50), (cx + 46, cy), 6)
+        pygame.draw.circle(surf, (255, 200, 90), (cx + 48, cy), 3)
+    elif sp == "bow":  # 十字弩弓
+        pygame.draw.line(surf, (100, 70, 45), (cx - 18, cy - 12), (cx + 26, cy - 12), 4)
+        pygame.draw.line(surf, (150, 120, 85), (cx - 18, cy + 12), (cx + 26, cy + 12), 4)
+        pygame.draw.line(surf, (140, 140, 150), (cx - 18, cy - 12), (cx - 18, cy + 12), 3)
+    elif sp == "gl":  # 榴弹发射器下挂
+        pygame.draw.rect(surf, (55, 62, 50), (cx - 6, cy + 8, 16, 9))
+    elif sp == "glow":  # 等离子发光
+        pygame.draw.rect(surf, (200, 130, 240), (cx - 2, cy - 3, 30, 6))
+    elif sp == "rail":  # 轨道炮线圈
+        for i in range(4):
+            pygame.draw.rect(surf, (120, 170, 200), (cx + 6 + i * 8, cy - 6, 6, 12))
+
+    # 枪口/配色点缀
+    pygame.draw.rect(surf, cfg["accent"], (cx + 34, cy - 3, 7, 6))
     return surf

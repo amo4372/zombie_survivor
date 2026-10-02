@@ -1472,9 +1472,21 @@ class Renderer:
                     pygame.draw.circle(self.screen, (255, 45, 45), (cx - 9, cy - 4), 5)
                     pygame.draw.circle(self.screen, (255, 45, 45), (cx + 9, cy - 4), 5)
             else:
-                self._paint_weapon_icon(entry_key, x, y, w, h)
+                self._draw_codex_weapon_preview(entry_key, x, y, w, h)
         except Exception:
             pass
+
+    def _draw_codex_weapon_preview(self, entry_key, x, y, w, h):
+        """图鉴武器预览：用局内同一套专属程序化贴图，缩放显示"""
+        try:
+            from config import WeaponType
+            from weapons import render_weapon_icon
+            wt = WeaponType[entry_key.upper()]
+            icon = render_weapon_icon(wt)
+            icon = pygame.transform.scale(icon, (w - 4, h - 4))
+            self.screen.blit(icon, (x + 2, y + 2))
+        except Exception:
+            self._paint_weapon_icon(entry_key, x, y, w, h)
 
     def _paint_weapon_icon(self, entry_key, x, y, w, h):
         """程序化绘制武器图标（按武器类型画剪影）"""
