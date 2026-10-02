@@ -312,6 +312,7 @@ class Game:
         self.dev_click_count = 0         # 主菜单版本号连点计数
         self.dev_click_timer = 0.0       # 连点窗口计时
         self.dev_input_active = False    # 密码输入框是否激活
+        self.dev_input_focused = False   # 密码输入框是否聚焦（点击后接受系统输入法）
         self.dev_input_str = ""          # 已输入密码
         self.dev_panel_open = False      # 局内调试面板开关
         self.dev_god = False             # 无敌
@@ -2930,33 +2931,63 @@ class Game:
         if self.dev_input_active:
             for ev in events:
                 # SDL_IME 系统输入法：TEXTINPUT 是最终合成字符事件（含中文候选），
-                # 同一按键还会伴随 KEYDOWN，字符追加只走 TEXTINPUT，避免双重输入
+                # 同一按键还会伴随 KEYDOWN，字符追加只走 TEXTINPUT，避免双重输入。
+                # 只有输入框聚焦后才接受输入（点击输入框/回车/空格/Tab 聚焦）
                 if ev.type == pygame.TEXTINPUT:
-                    if len(self.dev_input_str) < 16:
+                    if self.dev_input_focused and len(self.dev_input_str) < 16:
                         self.dev_input_str += ev.text
                     continue
                 if ev.type == pygame.KEYDOWN:
+                    if not self.dev_input_focused:
+                        # 未聚焦：回车/空格/Tab = 键盘"点击"输入框聚焦；ESC 关闭密码框
+                        if ev.key in (pygame.K_RETURN, pygame.K_SPACE, pygame.K_TAB):
+                            self._focus_dev_input()
+                        elif ev.key == pygame.K_ESCAPE:
+                            self._blur_dev_input()
+                            self.dev_input_active = False
+                            self.dev_input_str = ""
+                        continue
+                    # ===== 聚焦态：接受系统输入法输入 =====
                     if ev.key == pygame.K_RETURN:
                         if self.dev_input_str == self._DEV_PASSWORD:
                             self.dev_mode = True
                             self.dev_input_active = False
                             self.dev_input_str = ""
+                            self._blur_dev_input()
                             self.update_status_text = "开发者模式已开启！局内按 F9 键打开调试面板"
                         else:
                             self.dev_input_active = False
                             self.dev_input_str = ""
+                            self._blur_dev_input()
                             self.update_status_text = "密码错误，请重试（连点版本号重新输入）"
                     elif ev.key == pygame.K_BACKSPACE:
                         self.dev_input_str = self.dev_input_str[:-1]
                     elif ev.key == pygame.K_ESCAPE:
-                        self.dev_input_active = False
-                        self.dev_input_str = ""
+                        self._blur_dev_input()
             return
         for ev in events:
             if ev.type == pygame.KEYDOWN and ev.key == pygame.K_F9:
                 if self.state == GameState.PLAYING and self.dev_mode:
                     self.dev_panel_open = not self.dev_panel_open
                     self._rebuild_dev_buttons()
+
+    def _focus_dev_input(self):
+        """聚焦开发者密码输入框：激活系统输入法（SDL_IME），开始接受输入"""
+        if not self.dev_input_active:
+            return
+        self.dev_input_focused = True
+        try:
+            pygame.key.start_text_input()
+        except Exception:
+            pass
+
+    def _blur_dev_input(self):
+        """失焦：关闭系统输入法候选框，不再接受输入"""
+        self.dev_input_focused = False
+        try:
+            pygame.key.stop_text_input()
+        except Exception:
+            pass
 
     def _rebuild_dev_buttons(self):
         """重建局内调试面板按钮（依据当前 dev 状态）"""
