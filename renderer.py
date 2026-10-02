@@ -2572,6 +2572,9 @@ class Renderer:
         mouse_pressed = pygame.mouse.get_pressed()
 
         for i, btn in enumerate(self.game.pause_buttons):
+            # 开发者面板按钮：仅开发者模式解锁后显示
+            if btn.text == "开发者面板" and not getattr(self.game, 'dev_mode', False):
+                continue
             if btn.update(mouse_pos, mouse_pressed, self.game.touch_events, self.game.scale):
                 self.game.logger.info(f"暂停按钮 '{btn.text}' 被点击")
                 if btn.text == "继续":
@@ -2592,6 +2595,14 @@ class Renderer:
                     self.game.state = GameState.SETTINGS
                 elif btn.text == "返回菜单":
                     self.game.state = GameState.MENU
+                elif btn.text == "开发者面板":
+                    # 仅开发者模式下可用：切换局内调试面板
+                    if self.game.dev_mode:
+                        self.game.dev_panel_open = not self.game.dev_panel_open
+                        self.game._rebuild_dev_buttons()
+                        # 关闭面板回到游戏，方便操作
+                        if self.game.dev_panel_open:
+                            self.game.state = GameState.PLAYING
             btn.draw(self.screen, self.game.font_large, self.game.scale)
 
     def _draw_rune_view(self):

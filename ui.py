@@ -1055,8 +1055,19 @@ class SkillCardSelector:
 
             # 类型标签
             type_y = level_y + int(18 * scale)
-            type_color = CYAN if skill.is_active else GREEN
-            type_text = font.render("【主动】" if skill.is_active else "【被动】", True, type_color)
+            tier = getattr(skill, "combo_tier", None)
+            if tier == "ultimate":
+                type_color = CRIMSON
+                type_text = font.render("【终极技】", True, type_color)
+            elif tier == "combo":
+                type_color = GOLD
+                type_text = font.render("【组合技】", True, type_color)
+            elif skill.is_active:
+                type_color = CYAN
+                type_text = font.render("【主动】", True, type_color)
+            else:
+                type_color = GREEN
+                type_text = font.render("【被动】", True, type_color)
             type_rect = type_text.get_rect(center=(x + card_w // 2, type_y))
             screen.blit(type_text, type_rect)
 

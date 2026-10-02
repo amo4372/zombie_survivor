@@ -615,6 +615,10 @@ class Player:
         self.armor = 0.0  # 新增：护甲减伤
         self.dodge_chance = 0.0  # 新增：闪避几率
         self.regen_rate = 0.0  # 新增：生命恢复
+        # 组合技/终极技元素强化标记（三层体系）
+        self.combo_burn = 0.0
+        self.combo_frost = 0.0
+        self.combo_poison = 0.0
         self.fortress_active = False  # 新增：堡垒状态
 
         # 临时增益（保留兼容，实际由buff_manager管理）
@@ -930,6 +934,40 @@ class Player:
         regen_skill = skill.get_skill(SkillType.REGENERATION)
         if regen_skill:
             self.regen_rate = regen_skill.current_level * 0.01 * self.max_hp
+
+        # 组合技/终极技被动加成（三层体系）
+        for s in getattr(skill, 'combo_skills', []) + getattr(skill, 'ultimate_skills', []):
+            if getattr(s, 'current_level', 0) <= 0:
+                continue
+            eff = getattr(s, 'combo_effect', {}) or {}
+            for k, v in eff.items():
+                if k == "damage":
+                    self.damage_mult = getattr(self, 'damage_mult', 1.0) + v
+                    self.damage_multiplier = getattr(self, 'damage_multiplier', 1.0) + v
+                elif k == "fire_rate":
+                    self.fire_rate_mult = getattr(self, 'fire_rate_mult', 1.0) + v
+                elif k == "speed":
+                    self.speed_mult = getattr(self, 'speed_mult', 1.0) + v
+                elif k == "cooldown":
+                    self.cooldown_mult = (getattr(self, 'cooldown_mult', 1.0) - v)
+                elif k == "armor":
+                    self.armor = getattr(self, 'armor', 0.0) + v
+                elif k == "max_hp":
+                    self.max_hp = int(self.max_hp * (1 + v))
+                elif k == "regen":
+                    self.regen_rate = getattr(self, 'regen_rate', 0.0) + v * self.max_hp
+                elif k == "life_steal":
+                    self.life_steal = getattr(self, 'life_steal', 0.0) + v
+                elif k == "crit_chance":
+                    self.crit_chance = getattr(self, 'crit_chance', 0.05) + v
+                elif k == "crit_damage":
+                    self.crit_damage = getattr(self, 'crit_damage', 1.5) + v
+                elif k == "burn":
+                    self.combo_burn = getattr(self, 'combo_burn', 0.0) + v
+                elif k == "frost":
+                    self.combo_frost = getattr(self, 'combo_frost', 0.0) + v
+                elif k == "poison":
+                    self.combo_poison = getattr(self, 'combo_poison', 0.0) + v
 
     def gain_exp(self, amount):
         self.exp += int(amount * self.exp_mult)

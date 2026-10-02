@@ -501,6 +501,7 @@ class Game:
             Button(cx, 340, 200, 50, "技能树", color=BLUE),
             Button(cx, 410, 200, 50, "设置", color=GRAY),
             Button(cx, 480, 200, 50, "返回菜单", color=RED),
+            Button(cx, 550, 200, 50, "开发者面板", color=(80, 180, 90)),
         ]
         self.settings_from_pause = False  # 标记设置是否从暂停菜单进入
         # 符文查看界面状态
@@ -785,7 +786,9 @@ class Game:
                     stype = getattr(SkillType, sname)
                     skill = self.player.skill_tree.get_skill(stype)
                     if skill:
-                        skill.current_level = level
+                        # 单级语义：恢复为 0/1（旧多级存档向下兼容）
+                        skill.current_level = 1 if level > 0 else 0
+                        skill.max_level = 1
                 except:
                     pass
             # 如果有待升级，重新生成技能卡
@@ -2912,26 +2915,27 @@ class Game:
     def _handle_dev_keys(self, events):
         """处理开发者密码输入与局内调试面板开关（键盘）"""
         if self.dev_input_active:
+            # 系统输入法文本输入（TEXTINPUT）优先；兼容触屏字符键盘与PC键盘
             for ev in events:
-                if ev.type == pygame.KEYDOWN:
+                if ev.type == pygame.TEXTINPUT:
+                    if ev.text and len(self.dev_input_str) < 16:
+                        self.dev_input_str += ev.text
+                elif ev.type == pygame.KEYDOWN:
                     if ev.key == pygame.K_RETURN:
                         if self.dev_input_str == self._DEV_PASSWORD:
                             self.dev_mode = True
                             self.dev_input_active = False
                             self.dev_input_str = ""
-                            self.update_status_text = "开发者模式已开启！局内按 T 键打开调试面板"
+                            self.update_status_text = "开发者模式已开启！局内F9或暂停菜单打开调试面板"
                         else:
                             self.dev_input_active = False
                             self.dev_input_str = ""
                             self.update_status_text = "密码错误，请重试（连点版本号重新输入）"
                     elif ev.key == pygame.K_BACKSPACE:
                         self.dev_input_str = self.dev_input_str[:-1]
-                    elif ev.unicode and ev.unicode.isprintable():
-                        if len(self.dev_input_str) < 16:
-                            self.dev_input_str += ev.unicode
             return
         for ev in events:
-            if ev.type == pygame.KEYDOWN and ev.key == pygame.K_t:
+            if ev.type == pygame.KEYDOWN and ev.key == pygame.K_F9:
                 if self.state == GameState.PLAYING and self.dev_mode:
                     self.dev_panel_open = not self.dev_panel_open
                     self._rebuild_dev_buttons()
@@ -4680,6 +4684,11 @@ class Game:
     def _apply_skill_card(self, skill):
         """应用选中的技能卡"""
         if self.player.skill_tree.upgrade_skill(skill.skill_type):
+            # 刷新玩家属性（单级/组合技/终极技加成统一生效）
+            try:
+                self.player._update_stats()
+            except Exception:
+                pass
             self.floating_texts.append(FloatingText(
                 self.player.x, self.player.y - 40, 
                 f"升级: {skill.name}!", color=GOLD, lifetime=2.0
@@ -6121,32 +6130,35 @@ class Game:
                     # 元素精通加成
                     elem_skill = self.player.skill_tree.get_skill(SkillType.ELEMENTAL_MASTERY)
                     elem_mult = 1.0 + (0.3 * (elem_skill.current_level if elem_skill else 0))
+                    cb = getattr(self.player, 'combo_burn', 0.0)
+                    cf = getattr(self.player, 'combo_frost', 0.0)
+                    cp = getattr(self.player, 'combo_poison', 0.0)
                     # 火焰附魔
                     flame_skill = self.player.skill_tree.get_skill(SkillType.FLAME_ENCHANT)
                     if flame_skill and flame_skill.current_level > 0:
                         flame_chances = {1: 0.2, 2: 0.3, 3: 0.4, 4: 0.5, 5: 0.6}
                         flame_durs = {1: 3, 2: 4, 3: 5, 4: 6, 5: 8}
-                        if random.random() < flame_chances.get(flame_skill.current_level, 0.2):
-                            enemy.apply_buff(BuffType.BURN, duration=flame_durs.get(flame_skill.current_level, 3) * elem_mult)
+                        if random.random() < min(0.9, flame_chances.get(flame_skill.current_level, 0.2) + cb * 0.2):
+                            enemy.apply_buff(BuffType.BURN, duration=(flame_durs.get(flame_skill.current_level, 3) * elem_mult) + int(cb * 3))
                     # 冰霜附魔
                     frost_skill = self.player.skill_tree.get_skill(SkillType.FROST_ENCHANT)
                     if frost_skill and frost_skill.current_level > 0:
                         frost_chances = {1: 0.2, 2: 0.3, 3: 0.4, 4: 0.5, 5: 0.6}
                         frost_durs = {1: 3, 2: 4, 3: 5, 4: 2, 5: 3}
-                        if random.random() < frost_chances.get(frost_skill.current_level, 0.2):
-                            if frost_skill.current_level >= 4:
-                                enemy.apply_buff(BuffType.FREEZE, duration=frost_durs.get(frost_skill.current_level, 2) * elem_mult)
+                        if random.random() < min(0.9, frost_chances.get(frost_skill.current_level, 0.2) + cf * 0.2):
+                            if frost_skill.current_level >= 4 or cf > 0.5:
+                                enemy.apply_buff(BuffType.FREEZE, duration=(frost_durs.get(frost_skill.current_level, 2) * elem_mult) + int(cf * 2))
                                 if self.session:
                                     self.session.add_enemy_frozen()
                             else:
-                                enemy.apply_buff(BuffType.SLOW, duration=frost_durs.get(frost_skill.current_level, 3) * elem_mult)
+                                enemy.apply_buff(BuffType.SLOW, duration=(frost_durs.get(frost_skill.current_level, 3) * elem_mult) + int(cf * 2))
                     # 剧毒附魔
                     poison_skill = self.player.skill_tree.get_skill(SkillType.POISON_ENCHANT)
                     if poison_skill and poison_skill.current_level > 0:
                         poison_chances = {1: 0.15, 2: 0.25, 3: 0.35, 4: 0.45, 5: 0.55}
                         poison_durs = {1: 5, 2: 6, 3: 7, 4: 8, 5: 10}
-                        if random.random() < poison_chances.get(poison_skill.current_level, 0.15):
-                            enemy.apply_buff(BuffType.POISON, duration=poison_durs.get(poison_skill.current_level, 5) * elem_mult)
+                        if random.random() < min(0.9, poison_chances.get(poison_skill.current_level, 0.15) + cp * 0.2):
+                            enemy.apply_buff(BuffType.POISON, duration=(poison_durs.get(poison_skill.current_level, 5) * elem_mult) + int(cp * 3))
                     self.damage_numbers.append(DamageNumber(enemy.x, enemy.y, actual_damage, is_crit=is_crit, damage_type="ranged"))
                     self.particles.spawn_blood(enemy.x, enemy.y, 5)
 
@@ -6649,34 +6661,31 @@ class Game:
             self.ach_toast_queue.append({"key": "codex", "desc": f"图鉴解锁: {label}", "timer": 3.0})
 
     def _check_combos(self):
-        """检查组合技（多个技能达到等级后触发），解锁时给被动加成并实时弹出"""
+        """三层技能体系：检测组合技/终极技解锁并实时弹出（属性加成由 _update_stats 统一应用）"""
         try:
-            unlocked = self.records.get_combo_unlocked()
             p = self.player
-            for cname, cfg in COMBO_SKILLS.items():
-                if cname in unlocked:
+            st = p.skill_tree
+            unlocked = set(getattr(self.records, 'get_combo_unlocked', lambda: set())())
+            for cname, cfg in COMBO_SKILL_DEFS.items():
+                stype = getattr(SkillType, cfg["type"], None)
+                if stype is None:
                     continue
-                ok = True
-                for st_name, min_lvl in cfg["require"].items():
-                    st = getattr(SkillType, st_name, None)
-                    if st is None:
-                        ok = False
-                        break
-                    sk = p.skill_tree.get_skill(st)
-                    if not sk or sk.current_level < min_lvl:
-                        ok = False
-                        break
-                if ok:
+                sk = st.get_skill(stype)
+                if sk and sk.current_level > 0 and cname not in unlocked:
                     self.records.unlock_combo(cname)
-                    for k, v in cfg["bonus"].items():
-                        if k == "damage":
-                            p.damage_multiplier += v
-                        elif k == "fire_rate":
-                            p.fire_rate_mult = getattr(p, 'fire_rate_mult', 1.0) + v
-                        elif k == "reduce":
-                            p.dmg_reduce = min(0.5, getattr(p, 'dmg_reduce', 0) + v)
                     self.ach_toast_queue.append({"key": "combo", "desc": f"组合技解锁: {cname}", "timer": 3.5})
-                    self.floating_texts.append(FloatingText(p.x, p.y - 60, f"组合技! {cname}", color=PURPLE, lifetime=2.0))
+                    self.floating_texts.append(FloatingText(p.x, p.y - 60, f"组合技! {cname}", color=GOLD, lifetime=2.0))
+            for uname, cfg in ULTIMATE_SKILL_DEFS.items():
+                stype = getattr(SkillType, cfg["type"], None)
+                if stype is None:
+                    continue
+                sk = st.get_skill(stype)
+                if sk and sk.current_level > 0:
+                    key = f"ult_{uname}"
+                    if key not in unlocked:
+                        self.records.unlock_combo(key)
+                        self.ach_toast_queue.append({"key": "ult", "desc": f"终极技解锁: {uname}", "timer": 4.0})
+                        self.floating_texts.append(FloatingText(p.x, p.y - 70, f"终极技! {uname}", color=CRIMSON, lifetime=2.5))
         except Exception:
             pass
 
