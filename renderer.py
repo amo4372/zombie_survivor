@@ -384,7 +384,8 @@ class Renderer:
         for btn in g.dev_buttons:
             btn.base_x = bx
             btn.base_y = by
-            btn.draw(self.screen, g.font_large, scale)
+            # 注意：bx/by 已是屏幕像素坐标，Button 内部不再缩放（传 scale=1.0）
+            btn.draw(self.screen, g.font_large, 1.0)
             by += 42
 
     def _draw_mode_select(self):
@@ -1244,7 +1245,8 @@ class Renderer:
 
         # 返回按钮
         back_btn = self.game.mode_select_buttons[-1]
-        back_btn.base_y = int(sh - 60 * scale)
+        # sh/scale - 60 为逻辑坐标（Button 内部会再乘 scale），避免双重缩放
+        back_btn.base_y = int(sh / scale - 60)
         back_btn.text = "返回"
         if back_btn.update(mouse_pos, mouse_pressed, self.game.touch_events, scale):
             self.game.state = GameState.MENU
@@ -3587,10 +3589,10 @@ class Renderer:
                 self.screen.blit(stat_text, stat_rect)
 
         # 返回菜单按钮
-        cx = sw // 2 - 100
         btn = self.game.menu_buttons[0]
-        btn.base_x = cx
-        btn.base_y = int(480 * scale)
+        # 转换为逻辑坐标（Button 内部会再乘 scale），避免双重缩放
+        btn.base_x = int((sw // 2 - 100) / scale)
+        btn.base_y = 480
         btn.text = "返回主菜单"
         mouse_pos = pygame.mouse.get_pos()
         mouse_pressed = pygame.mouse.get_pressed()

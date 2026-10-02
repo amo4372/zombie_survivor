@@ -3014,7 +3014,8 @@ class Game:
         for idx, btn in enumerate(self.dev_buttons):
             btn.base_x = bx
             btn.base_y = by + idx * 42
-            if btn.update(mouse_pos, mouse_pressed, touch_events, scale):
+            # 注意：bx/by 已是屏幕像素坐标，Button 内部不再缩放（传 scale=1.0）
+            if btn.update(mouse_pos, mouse_pressed, touch_events, 1.0):
                 self._dev_action(idx)
 
     def _dev_action(self, idx):
