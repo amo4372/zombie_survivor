@@ -823,11 +823,11 @@ class HordeManager:
         self.game_mode = game_mode
         self.difficulty = difficulty
 
-        # 基础参数（开局）
-        self.base_horde_duration = 32.0
-        self.min_horde_duration = 14.0
-        self.base_horde_cooldown = 60.0
-        self.min_horde_cooldown = 30.0
+        # 基础参数（开局）：尸潮间隔大幅延长、持续时间大幅延长
+        self.base_horde_duration = 120.0
+        self.min_horde_duration = 60.0
+        self.base_horde_cooldown = 240.0
+        self.min_horde_cooldown = 120.0
 
         self.base_boss_chance_horde = 0.08
         self.base_spawn_rate_horde = 0.35
@@ -862,6 +862,14 @@ class HordeManager:
         self.current_scale = self.SCALE_SMALL
         self.boss_guaranteed = False   # 本次尸潮是否保底Boss
         self.vaccine_boss_spawned = False  # 是否已刷出保底疫苗Boss
+
+        # === 每个Boss全局只出现一次：boss_queue 依次消耗 ===
+        # 第1个尸潮(初始)无Boss，第2~N+1个尸潮每轮刷一个Boss，共 len(boss)+1 个带Boss流程
+        self.boss_queue = [
+            EnemyType.BOSS_LONG, EnemyType.BOSS_XIANG, EnemyType.BOSS_MUTANT,
+            EnemyType.BOSS_QUEEN, EnemyType.BOSS_TITAN, EnemyType.BOSS_WANG,
+        ]
+        random.shuffle(self.boss_queue)
 
         # 故事/限时模式：确保至少刷一个Boss且其中一个爆疫苗
         self.story_boss_guaranteed = game_mode in (GameMode.STORY, GameMode.TIMED)
@@ -1008,16 +1016,15 @@ class HordeManager:
             return None
         self.spawn_timer = spawn_rate
 
-        # === Boss刷新逻辑 ===
+        # === Boss刷新逻辑：每个Boss全局只出现一次 ===
+        # 第1个尸潮(初始)无Boss；第2个及之后，每轮必刷 boss_queue 中下一个Boss，
+        # 直到全部Boss出完(共 len(boss)+1 个流程)，队列耗尽后不再刷Boss。
         if self.horde_active and not self.boss_spawned_this_horde:
-            # 保底Boss：大型以上必刷，中型有概率
-            if self.boss_guaranteed:
+            if self.horde_count >= 2 and self.boss_queue:
                 self.boss_spawned_this_horde = True
-                return self._select_boss_type()
-            # 概率Boss
-            elif random.random() < boss_chance_horde:
-                self.boss_spawned_this_horde = True
-                return self._select_boss_type()
+                btype = self._select_boss_type()
+                if btype is not None:
+                    return btype
 
         # === 普通怪物池（按规模）===
         base_pool = [
@@ -1083,24 +1090,14 @@ class HordeManager:
             return random.choice(unlock_pool)
 
     def _select_boss_type(self):
-        """根据规模和模式选择Boss类型，标记疫苗Boss"""
-        # 王某（极强双形态）更易遇到：巨型尸潮权重最高，大型尸潮也出现
-        if self.current_scale >= self.SCALE_MASSIVE:
-            bosses = [EnemyType.BOSS_MUTANT, EnemyType.BOSS_QUEEN, EnemyType.BOSS_TITAN,
-                      EnemyType.BOSS_WANG, EnemyType.BOSS_WANG, EnemyType.BOSS_WANG]
-            boss_type = random.choice(bosses)
-        elif self.current_scale >= self.SCALE_LARGE:
-            bosses = [EnemyType.BOSS_LONG, EnemyType.BOSS_XIANG, EnemyType.BOSS_MUTANT, EnemyType.BOSS_WANG]
-            boss_type = random.choice(bosses)
-        else:
-            bosses = [EnemyType.BOSS_LONG, EnemyType.BOSS_XIANG]
-            boss_type = random.choice(bosses)
+        """从全局 boss_queue 依次取一个Boss（每个Boss全局只出现一次），标记疫苗Boss"""
+        if not self.boss_queue:
+            return None
+        boss_type = self.boss_queue.pop(0)
 
         # 标记疫苗Boss：故事/限时模式第一个Boss必爆疫苗
         if self.story_boss_guaranteed and not self.vaccine_boss_spawned:
             self.vaccine_boss_spawned = True
-            boss_type = getattr(boss_type, 'value', boss_type)  # 保持原值
-            # 用特殊标记：返回元组(boss_type, drops_vaccine=True)
             return (boss_type, True)
         return boss_type
 

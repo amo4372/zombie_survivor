@@ -1086,6 +1086,21 @@ class Player:
                 end_y = py + math.sin(angle_rad) * int(25 * scale)
                 pygame.draw.line(screen, WHITE, (px, py), (end_x, end_y), max(1, int(3 * scale)))
 
+        # 武器程序化贴图（局内可见，随朝向旋转，独立于身体）
+        try:
+            from weapons import render_weapon_icon
+            _cw = self.get_current_weapon()
+            _wicon = render_weapon_icon(_cw.weapon_type)
+            _off = int(16 * scale)
+            _arad = math.radians(self.facing_angle)
+            _wx = px + math.cos(_arad) * _off
+            _wy = py + math.sin(_arad) * _off
+            _rot = pygame.transform.rotate(_wicon, -self.facing_angle)
+            _wrect = _rot.get_rect(center=(_wx, _wy))
+            screen.blit(_rot, _wrect)
+        except Exception:
+            pass
+
         self.riot_gear.draw(screen, self.x, self.y, camera_x, camera_y, scale)
 
         bar_width = int(40 * scale)

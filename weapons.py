@@ -566,3 +566,40 @@ class Weapon:
         if self.current_ammo == "∞":
             return "∞"
         return f"{self.current_ammo}/{self.max_ammo}"
+
+
+def render_weapon_icon(weapon_type):
+    """程序化生成武器贴图（透明surface，枪口朝右/0度），局内玩家手持与图鉴共用"""
+    from config import WeaponType
+    wt = weapon_type.value if hasattr(weapon_type, 'value') else weapon_type
+    try:
+        wt = WeaponType(wt)
+    except Exception:
+        pass
+    surf = pygame.Surface((64, 64), pygame.SRCALPHA)
+    cx, cy = 32, 32
+    name = wt.name if hasattr(wt, 'name') else str(wt)
+    if name in ("KNIFE", "BAT", "CHAINSAW", "SCYTHE"):
+        if name == "KNIFE":
+            pygame.draw.polygon(surf, (200, 205, 215),
+                                [(cx - 6, cy - 6), (cx + 26, cy - 6), (cx + 32, cy + 2), (cx - 10, cy + 2)])
+            pygame.draw.rect(surf, (130, 95, 60), (cx - 26, cy - 4, 24, 10))
+        elif name == "SCYTHE":
+            pygame.draw.arc(surf, (220, 225, 235), (cx - 30, cy - 26, 66, 56), 0, 3.3, 9)
+            pygame.draw.line(surf, (145, 115, 80), (cx + 28, cy + 2), (cx - 26, cy + 42), 8)
+            pygame.draw.circle(surf, (160, 130, 90), (cx + 28, cy + 2), 8)
+        elif name == "CHAINSAW":
+            pygame.draw.rect(surf, (120, 120, 132), (cx - 30, cy - 4, 60, 14))
+            for i in range(-26, 30, 9):
+                pygame.draw.circle(surf, (90, 90, 100), (cx + i, cy + 3), 3)
+            pygame.draw.rect(surf, (150, 80, 60), (cx - 4, cy + 10, 24, 16))
+        else:  # BAT
+            pygame.draw.line(surf, (150, 120, 70), (cx - 30, cy + 2), (cx + 30, cy + 2), 10)
+            pygame.draw.rect(surf, (120, 90, 60), (cx - 6, cy + 2, 22, 12))
+    else:
+        # 枪械：枪身+枪管+弹匣+瞄准
+        pygame.draw.rect(surf, (75, 75, 88), (cx - 20, cy - 6, 54, 14))
+        pygame.draw.rect(surf, (75, 75, 88), (cx + 28, cy - 3, 20, 8))
+        pygame.draw.rect(surf, (70, 70, 80), (cx - 16, cy + 8, 24, 14))
+        pygame.draw.rect(surf, (200, 60, 60), (cx - 30, cy - 3, 7, 7))
+    return surf

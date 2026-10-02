@@ -531,6 +531,7 @@ class Game:
                 "boss_guaranteed": self.horde_manager.boss_guaranteed if self.horde_manager else False,
                 "boss_spawned_this_horde": self.horde_manager.boss_spawned_this_horde if self.horde_manager else False,
                 "vaccine_boss_spawned": self.horde_manager.vaccine_boss_spawned if self.horde_manager else False,
+                "boss_queue_remaining": [b.name for b in self.horde_manager.boss_queue] if (self.horde_manager and getattr(self.horde_manager, 'boss_queue', None)) else [],
                 "endless_glitch_shown": self.horde_manager.endless_glitch_shown if self.horde_manager else False,
                 "endless_countdown_left": self.horde_manager.endless_countdown_left if self.horde_manager else 90,
                 "map_time_elapsed": getattr(self, 'map_time_elapsed', 0),
@@ -716,6 +717,12 @@ class Game:
                 self.horde_manager.boss_guaranteed = save_data.get("boss_guaranteed", False)
                 self.horde_manager.boss_spawned_this_horde = save_data.get("boss_spawned_this_horde", False)
                 self.horde_manager.vaccine_boss_spawned = save_data.get("vaccine_boss_spawned", False)
+                # 恢复 boss 队列（保证每个Boss全局只出现一次，重启不重复）
+                q_names = save_data.get("boss_queue_remaining", [])
+                if q_names:
+                    from config import EnemyType
+                    _by_name = {e.name: e for e in EnemyType}
+                    self.horde_manager.boss_queue = [_by_name.get(n) for n in q_names if _by_name.get(n) is not None]
                 self.horde_manager.endless_glitch_shown = save_data.get("endless_glitch_shown", False)
                 self.horde_manager.endless_countdown_left = save_data.get("endless_countdown_left", 90)
             # 恢复故事模式地图时间和事件状态
@@ -5185,7 +5192,7 @@ class Game:
                 spawn_type, drops_vaccine = spawn_type
             # 故事模式：使用地图配置的怪物权重（Boss除外）
             boss_types = (EnemyType.BOSS_LONG, EnemyType.BOSS_XIANG, EnemyType.BOSS_MUTANT,
-                         EnemyType.BOSS_QUEEN, EnemyType.BOSS_TITAN)
+                         EnemyType.BOSS_QUEEN, EnemyType.BOSS_TITAN, EnemyType.BOSS_WANG)
             if self.config.game_mode == GameMode.STORY and spawn_type not in boss_types:
                 enemy_weights = self.map_config.get("enemy_weights", {})
                 if enemy_weights:
