@@ -259,6 +259,29 @@ def extract_and_apply_update(zip_path, game_dir=None):
             shutil.rmtree(backup_path, ignore_errors=True)
         os.makedirs(backup_path, exist_ok=True)
 
+        def _copy_retry(src, dst, retries=3):
+            """复制文件，遇到占用/权限错误重试（等待文件解锁），仍失败则给出明确中文原因"""
+            last_err = None
+            for attempt in range(retries):
+                try:
+                    os.makedirs(os.path.dirname(dst), exist_ok=True)
+                    shutil.copy2(src, dst)
+                    return True
+                except (PermissionError, OSError) as e:
+                    last_err = e
+                    if attempt < retries - 1:
+                        time.sleep(0.6)
+            raise PermissionError(
+                f"无法写入文件: {dst}\n"
+                f"原因: {last_err}\n"
+                f"请依次尝试：\n"
+                f"1. 完全退出游戏后重新点击「下载并更新」\n"
+                f"2. 以管理员身份运行游戏再更新\n"
+                f"3. 检查游戏目录/文件是否被设为『只读』，或 U 盘/移动硬盘的写保护开关\n"
+                f"4. 临时关闭杀毒软件/Windows Defender 实时保护（或添加游戏目录白名单）\n"
+                f"5. 检查 F 盘剩余空间与磁盘状态（可运行 chkdsk F: 检查）"
+            )
+
         # 备份所有.py文件、version.txt 与资源目录(assets)
         backup_files = []
         for f in os.listdir(game_dir):
@@ -294,7 +317,7 @@ def extract_and_apply_update(zip_path, game_dir=None):
             if os.path.isfile(src):
                 # 只覆盖.py、version.txt、.md 等文本文件，避免覆盖用户存档
                 if f.endswith('.py') or f == 'version.txt' or f.endswith('.md'):
-                    shutil.copy2(src, dst)
+                    _copy_retry(src, dst)
                     applied_count += 1
 
         # 4.1 覆盖资源目录（图片/音乐/音效/字体）：仅当更新包内含 assets 时
@@ -306,10 +329,9 @@ def extract_and_apply_update(zip_path, game_dir=None):
                 s = os.path.join(up_assets, item)
                 d = os.path.join(game_assets, item)
                 if os.path.isdir(s):
-                    shutil.copytree(s, d, dirs_exist_ok=True)
+                    shutil.copytree(s, d, dirs_exist_ok=True, copy_function=shutil.copy2)
                 elif os.path.isfile(s):
-                    os.makedirs(os.path.dirname(d), exist_ok=True)
-                    shutil.copy2(s, d)
+                    _copy_retry(s, d)
                 applied_count += 1
 
         # 5. 验证新版本号
