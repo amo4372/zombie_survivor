@@ -1679,6 +1679,10 @@ class Game:
             self.camera.shake_enabled = self.config.screen_shake
             # ===== 多人模式：创建第二位玩家 + 第二摄像机 =====
             if self.multiplayer_mode in ("same_screen", "network"):
+                # 同屏双人：每半屏视口宽 = 半屏，摄像机中心偏移应为半宽（否则玩家会贴在全屏中心）
+                if self.multiplayer_mode == "same_screen":
+                    self.camera = Camera(BASE_WIDTH // 2, BASE_HEIGHT)
+                    self.camera.shake_enabled = self.config.screen_shake
                 p1_w = getattr(self, 'selected_weapon_p1', None) or self.selected_weapon
                 p2_w = getattr(self, 'selected_weapon_p2', None) or self.selected_weapon
                 p2_char = getattr(self, 'selected_char_p2', None)
@@ -1691,7 +1695,7 @@ class Game:
                 except Exception as e:
                     logger.warning(f"创建玩家2失败: {e}")
                     self.player2 = None
-                self.camera2 = Camera(BASE_WIDTH, BASE_HEIGHT)
+                self.camera2 = Camera(BASE_WIDTH // 2, BASE_HEIGHT)  # 同屏半屏视口宽=半宽
                 self.camera2.shake_enabled = self.config.screen_shake
                 self._setup_multiplayer_controls()
             else:
@@ -2800,10 +2804,11 @@ class Game:
                     self._on_enemy_death(enemy)
 
         # 核爆：对玩家也有轻微自伤（远处），增加真实感
-        if has_nuke and self.player:
-            pdist = math.hypot(self.player.x - x, self.player.y - y)
-            if pdist < explosion_radius * 0.5:
-                self.player.take_damage(20)  # 轻微自伤
+        if has_nuke:
+            for _p in self._alive_players():
+                pdist = math.hypot(_p.x - x, _p.y - y)
+                if pdist < explosion_radius * 0.5:
+                    _p.take_damage(20)  # 轻微自伤
 
     def _spawn_nuke_mushroom(self, x, y):
         """核爆冲天蘑菇云单独渲染：底部火球 + 冲天烟柱 + 顶部蘑菇帽"""
@@ -5232,9 +5237,10 @@ class Game:
         if not hasattr(self, 'enemy_throwables'):
             self.enemy_throwables = []
         for g in self.enemy_throwables[:]:
-            # 实时追踪玩家当前位置（投掷物会调整方向砸向玩家，显著提高命中率）
-            dxp = self.player.x - g["x"]
-            dyp = self.player.y - g["y"]
+            # 实时追踪最近的存活玩家（投掷物会调整方向砸向玩家，显著提高命中率）
+            _tgt = min(self._alive_players(), key=lambda p: math.hypot(p.x - g["x"], p.y - g["y"]), default=self.player)
+            dxp = _tgt.x - g["x"]
+            dyp = _tgt.y - g["y"]
             dp = math.hypot(dxp, dyp)
             if dp > 1:
                 spd = 260
@@ -5257,10 +5263,14 @@ class Game:
             else:
                 self.particles.spawn(g["x"], g["y"], GRAY, 1, (3, 6), (-2, 2), (0.3, 0.6))
             
-            # 检测命中玩家（判定范围加大，保证能砸中移动中的玩家）
-            player_dist = math.hypot(g["x"] - self.player.x, g["y"] - self.player.y)
-            if player_dist < 40:
-                self._detonate_enemy_throwable(g)
+            # 检测命中玩家（P1/P2 双判定，判定范围加大，保证能砸中移动中的玩家）
+            hit = False
+            for _p in self._alive_players():
+                if math.hypot(g["x"] - _p.x, g["y"] - _p.y) < 40:
+                    self._detonate_enemy_throwable(g)
+                    hit = True
+                    break
+            if hit:
                 self.enemy_throwables.remove(g)
                 continue
             
@@ -5288,42 +5298,44 @@ class Game:
                 "timer": 5.0, "damage_timer": 0.0,
                 "from_enemy": True,
             })
-            # 直接伤害玩家
-            player_dist = math.hypot(x - self.player.x, y - self.player.y)
-            if player_dist < 90:
-                self.player.take_damage(int(damage * 0.5), damage_type="fire")
-                self.player.buff_manager.add_buff(BuffType.BURN, duration=3.0)
+            # 直接伤害玩家（P1/P2 双判定）
+            for _p in self._alive_players():
+                if math.hypot(x - _p.x, y - _p.y) < 90:
+                    _p.take_damage(int(damage * 0.5), damage_type="fire")
+                    _p.buff_manager.add_buff(BuffType.BURN, duration=3.0)
 
         elif gtype == "acid":
             # 酸液瓶：腐蚀+持续伤害
             self.assets.play_sound("poison_splash")
             self.particles.spawn_explosion(x, y, POISON_GREEN, 50)
-            player_dist = math.hypot(x - self.player.x, y - self.player.y)
-            if player_dist < 80:
-                self.player.take_damage(int(damage), damage_type="melee")
-                self.player.buff_manager.add_buff(BuffType.CORROSION, duration=5.0)
-                self.player.buff_manager.add_buff(BuffType.POISON, duration=4.0)
+            for _p in self._alive_players():
+                if math.hypot(x - _p.x, y - _p.y) < 80:
+                    _p.take_damage(int(damage), damage_type="melee")
+                    _p.buff_manager.add_buff(BuffType.CORROSION, duration=5.0)
+                    _p.buff_manager.add_buff(BuffType.POISON, duration=4.0)
 
         elif gtype == "curse":
             # 诅咒瓶：多种debuff
             self.assets.play_sound("curse_cast")
             self.particles.spawn_explosion(x, y, PURPLE, 40)
-            player_dist = math.hypot(x - self.player.x, y - self.player.y)
-            if player_dist < 80:
-                self.player.take_damage(int(damage * 0.7), damage_type="magic")
-                self.player.buff_manager.add_buff(BuffType.CURSE, duration=6.0)
-                self.player.buff_manager.add_buff(BuffType.WEAKEN, duration=5.0)
+            for _p in self._alive_players():
+                if math.hypot(x - _p.x, y - _p.y) < 80:
+                    _p.take_damage(int(damage * 0.7), damage_type="magic")
+                    _p.buff_manager.add_buff(BuffType.CURSE, duration=6.0)
+                    _p.buff_manager.add_buff(BuffType.WEAKEN, duration=5.0)
 
         else:  # rock
             # 石块：物理伤害+眩晕
             self.assets.play_sound("rock_impact")
             self.camera.shake(10, 0.6)
+            if self.camera2:
+                self.camera2.shake(10, 0.6)
             self.particles.spawn_explosion(x, y, GRAY, 30)
-            player_dist = math.hypot(x - self.player.x, y - self.player.y)
-            if player_dist < 60:
-                self.player.take_damage(int(damage), damage_type="melee")
-                if random.random() < 0.4:
-                    self.player.buff_manager.add_buff(BuffType.STUN, duration=1.0)
+            for _p in self._alive_players():
+                if math.hypot(x - _p.x, y - _p.y) < 60:
+                    _p.take_damage(int(damage), damage_type="melee")
+                    if random.random() < 0.4:
+                        _p.buff_manager.add_buff(BuffType.STUN, duration=1.0)
 
     def _spawn_horde_rewards(self):
         """尸潮过后根据规模刷新奖励"""
@@ -5409,10 +5421,11 @@ class Game:
                     if dist < zone["radius"]:
                         enemy.take_damage(15)
                         enemy.apply_buff(BuffType.BURN, duration=3.0)
-                # 玩家也会被烧（敌方火区对玩家造成伤害）
-                pdist = math.hypot(self.player.x - zone["x"], self.player.y - zone["y"])
-                if pdist < zone["radius"]:
-                    self.player.take_damage(5, damage_type="fire")
+                # 玩家也会被烧（敌方火区对玩家造成伤害，P1/P2 双判定）
+                for _p in self._alive_players():
+                    pdist = math.hypot(_p.x - zone["x"], _p.y - zone["y"])
+                    if pdist < zone["radius"]:
+                        _p.take_damage(5, damage_type="fire")
             if zone["timer"] <= 0:
                 self.fire_zones.remove(zone)
 
@@ -5759,15 +5772,18 @@ class Game:
             self._ach_check_timer = 0.5
         self._update_black_holes(dt)
         self._update_medic_pods(dt)
+        # 双人救援：每帧结算倒地/救援（全倒地时在此结束游戏）
+        if self.is_multiplayer_active() and self._update_rescue(dt):
+            self._trigger_multiplayer_game_over()
 
     def _update_rescue(self, dt):
         """双人救援系统：倒地→队友救援复活（同屏靠近自动救援 / 网络 8 秒自动复活）；全倒地则结束"""
         p1, p2 = self.player, self.player2
         if not p1 or not p2:
             return False
-        # 1) 触发倒地：hp<=0 且未倒地 → 倒地（不立即死亡）
+        # 1) 触发倒地：hp<=0 且未倒地 → 倒地（不立即死亡；alive 可能已被 take_damage 置 False，必须照常倒地）
         for p in (p1, p2):
-            if p.hp <= 0 and not p.downed and getattr(p, 'alive', True):
+            if p.hp <= 0 and not p.downed:
                 p.downed = True
                 p.alive = False
                 p.downed_timer = 0.0
@@ -5807,6 +5823,69 @@ class Game:
                     pass
         # 3) 双人全部倒地 → 游戏结束
         return bool((p1.downed or not p1.alive) and (p2.downed or not p2.alive))
+
+    def _alive_players(self):
+        """返回存活的玩家列表（单人=[P1]，双人=[P1,P2]）"""
+        ps = [self.player]
+        if self.player2:
+            ps.append(self.player2)
+        return [p for p in ps if p is not None and getattr(p, 'alive', True) and not getattr(p, 'downed', False)]
+
+    def _damage_players_near(self, x, y, radius, damage, dtype="melee", from_front=True, shake_cam=None):
+        """对半径内所有存活玩家造成伤害（双人双判定），shake_cam=(cam, intensity, dur) 可选震屏"""
+        hit_any = False
+        for p in self._alive_players():
+            if math.hypot(x - p.x, y - p.y) < radius:
+                p.take_damage(damage, damage_type=dtype, from_front=from_front, attack_x=x, attack_y=y)
+                hit_any = True
+        if hit_any and shake_cam:
+            cam, intensity, dur = shake_cam
+            if cam is not None:
+                cam.shake(intensity, dur)
+        return hit_any
+
+    def _enemy_collide_damage(self, enemy, player, camera):
+        """近战碰撞伤害（P1/P2 共用）：推挤、伤害、盾反、debuff、震屏"""
+        if (not enemy.grappled) and enemy.get_rect().colliderect(player.get_rect()):
+            dx = enemy.x - player.x
+            dy = enemy.y - player.y
+            dist = math.hypot(dx, dy)
+            if dist > 0:
+                min_dist = enemy.size + player.size + 2
+                if dist < min_dist:
+                    push_x = (dx / dist) * (min_dist - dist) * 0.5
+                    push_y = (dy / dist) * (min_dist - dist) * 0.5
+                    enemy.x += push_x
+                    enemy.y += push_y
+                    player.x -= push_x
+                    player.y -= push_y
+            if enemy.knockdown_timer <= 0:
+                angle_to_enemy = math.atan2(dy, dx)
+                facing_rad = math.radians(player.facing_angle)
+                angle_diff = abs(math.atan2(math.sin(angle_to_enemy - facing_rad),
+                                           math.cos(angle_to_enemy - facing_rad)))
+                from_front = angle_diff < math.pi / 3
+                if player.riot_gear.equipped and from_front:
+                    shield_rect = player.riot_gear.get_shield_rect(player.x, player.y)
+                    if shield_rect and shield_rect.colliderect(enemy.get_rect()):
+                        push_back = 15
+                        enemy.x += math.cos(angle_to_enemy) * push_back
+                        enemy.y += math.sin(angle_to_enemy) * push_back
+                        player.take_damage(enemy.damage, "melee", True, enemy.x, enemy.y)
+                    else:
+                        player.take_damage(enemy.damage, "melee", from_front, enemy.x, enemy.y)
+                else:
+                    player.take_damage(enemy.damage, "melee", from_front, enemy.x, enemy.y)
+                etype = enemy.enemy_type
+                if etype == EnemyType.ZOMBIE_FAST and random.random() < 0.25:
+                    player.buff_manager.add_buff(BuffType.BLEED, duration=4.0)
+                elif etype == EnemyType.ZOMBIE_TANK and random.random() < 0.3:
+                    player.buff_manager.add_buff(BuffType.FRACTURE, duration=5.0)
+                elif etype == EnemyType.ZOMBIE_NORMAL and random.random() < 0.1:
+                    player.buff_manager.add_buff(BuffType.BLEED, duration=3.0)
+                player.ensure_safe_position(self.world)
+                if self.config.screen_shake and camera is not None:
+                    camera.shake(6, 0.4)
 
     def _update_playing(self, dt):
         # 衰减吸血屏幕效果
@@ -6365,10 +6444,9 @@ class Game:
                         dist = math.hypot(other.x - enemy.x, other.y - enemy.y)
                         if dist < getattr(enemy, "explode_radius", 100):
                             other.take_damage(getattr(enemy, "explode_damage", 80) * (1 - dist / getattr(enemy, "explode_radius", 100)))
-                # 对玩家造成伤害
-                dist_to_player = math.hypot(self.player.x - enemy.x, self.player.y - enemy.y)
-                if dist_to_player < getattr(enemy, "explode_radius", 100):
-                    self.player.take_damage(getattr(enemy, "explode_damage", 80) * 0.5)
+                # 对玩家造成伤害（P1/P2 双判定）
+                self._damage_players_near(enemy.x, enemy.y, getattr(enemy, "explode_radius", 100),
+                                          getattr(enemy, "explode_damage", 80) * 0.5, dtype="aoe")
                 self._on_enemy_death(enemy)
                 continue
 
@@ -6377,29 +6455,27 @@ class Game:
                 # 龙某 AOE地面震荡攻击
                 aoe_radius = 190
                 aoe_damage = int(enemy.damage * 1.4)
-                dist_to_player = math.hypot(self.player.x - enemy.x, self.player.y - enemy.y)
-                if dist_to_player <= aoe_radius:
-                    self.player.take_damage(aoe_damage, damage_type="aoe", attack_x=enemy.x, attack_y=enemy.y)
+                self._damage_players_near(enemy.x, enemy.y, aoe_radius, aoe_damage, dtype="aoe")
                 self.camera.shake(int(6), 0.3)
+                if self.camera2:
+                    self.camera2.shake(int(6), 0.3)
 
             elif result == "boss_execution_slash":
                 # --------龙某【处决重劈】--------
                 exec_radius = 230
                 exec_dmg = int(enemy.damage * 3.2)
-                dist_pl = math.hypot(self.player.x - enemy.x, self.player.y - enemy.y)
-                if dist_pl <= exec_radius:
-                    self.player.take_damage(exec_dmg, damage_type="aoe", attack_x=enemy.x, attack_y=enemy.y)
-                self.camera.shake(int(18),0.9)
-                self.particles.spawn_explosion(enemy.x, enemy.y, CRIMSON,60)
+                self._damage_players_near(enemy.x, enemy.y, exec_radius, exec_dmg, dtype="aoe")
+                self.camera.shake(int(18), 0.9)
+                if self.camera2:
+                    self.camera2.shake(int(18), 0.9)
+                self.particles.spawn_explosion(enemy.x, enemy.y, CRIMSON, 60)
 
             elif result == "boss_execution_salvo":
                 # --------向某【处决霰弹爆发】近距离多段伤害--------
-                dist_pl = math.hypot(self.player.x - enemy.x, self.player.y - enemy.y)
-                pellet_count =12
-                pellet_dmg = int(enemy.damage*0.6)
+                pellet_count = 12
+                pellet_dmg = int(enemy.damage * 0.6)
                 for _ in range(pellet_count):
-                    if dist_pl <230:
-                        self.player.take_damage(pellet_dmg, damage_type="melee", attack_x=enemy.x, attack_y=enemy.y)
+                    self._damage_players_near(enemy.x, enemy.y, 230, pellet_dmg, dtype="melee")
                 self.camera.shake(int(16),0.8)
                 self.particles.spawn_explosion(enemy.x, enemy.y, ORANGE,55)
 
@@ -6407,10 +6483,10 @@ class Game:
                 # --------变异体【毁灭连招终结】超高伤害AOE--------
                 exec_radius = 240
                 exec_dmg = int(enemy.damage * 3.6)
-                dist_pl = math.hypot(self.player.x - enemy.x, self.player.y - enemy.y)
-                if dist_pl <= exec_radius:
-                    self.player.take_damage(exec_dmg, damage_type="aoe", attack_x=enemy.x, attack_y=enemy.y)
+                self._damage_players_near(enemy.x, enemy.y, exec_radius, exec_dmg, dtype="aoe")
                 self.camera.shake(22, 0.9)
+                if self.camera2:
+                    self.camera2.shake(22, 0.9)
                 self.particles.spawn_explosion(enemy.x, enemy.y, BLOOD_RED, 70)
                 self.particles.spawn_explosion(enemy.x, enemy.y, CRIMSON, 40)
 
@@ -6428,18 +6504,21 @@ class Game:
                             self._codex_unlock_toast(_cu, minion.enemy_type.name if hasattr(minion, "enemy_type") else minion.type.name)
                     except Exception:
                         pass
-                self.player.buff_manager.add_buff(BuffType.POISON, 10.0)
+                for p in self._alive_players():
+                    p.buff_manager.add_buff(BuffType.POISON, 10.0)
                 self.camera.shake(12, 0.6)
+                if self.camera2:
+                    self.camera2.shake(12, 0.6)
                 self.particles.spawn_explosion(enemy.x, enemy.y, PURPLE, 60)
 
             elif result == "boss_execution_titan":
                 # --------泰坦【泰坦之怒】超大范围地震--------
                 exec_radius = 320
                 exec_dmg = int(enemy.damage * 3.0)
-                dist_pl = math.hypot(self.player.x - enemy.x, self.player.y - enemy.y)
-                if dist_pl <= exec_radius:
-                    self.player.take_damage(exec_dmg, damage_type="aoe", attack_x=enemy.x, attack_y=enemy.y)
+                self._damage_players_near(enemy.x, enemy.y, exec_radius, exec_dmg, dtype="aoe")
                 self.camera.shake(30, 1.2)
+                if self.camera2:
+                    self.camera2.shake(30, 1.2)
                 self.particles.spawn_explosion(enemy.x, enemy.y, GRAY, 80)
                 self.particles.spawn_explosion(enemy.x, enemy.y, CHARCOAL, 50)
 
@@ -6448,10 +6527,10 @@ class Game:
                 # 龙某地震波：大范围环形AOE
                 slam_radius = 280
                 slam_dmg = int(enemy.damage * 1.8)
-                dist_pl = math.hypot(self.player.x - enemy.x, self.player.y - enemy.y)
-                if dist_pl <= slam_radius:
-                    self.player.take_damage(slam_dmg, damage_type="aoe", attack_x=enemy.x, attack_y=enemy.y)
+                self._damage_players_near(enemy.x, enemy.y, slam_radius, slam_dmg, dtype="aoe")
                 self.camera.shake(10, 0.5)
+                if self.camera2:
+                    self.camera2.shake(10, 0.5)
                 self.particles.spawn_explosion(enemy.x, enemy.y, ORANGE, 50)
                 # 环形冲击波粒子
                 for i in range(24):
@@ -6464,11 +6543,13 @@ class Game:
                     )
 
             elif result == "boss_charge_trail":
-                # 龙某狂暴冲锋拖尾+碰撞伤害
+                # 龙某狂暴冲锋拖尾+碰撞伤害（P1/P2 双判定）
                 self.particles.spawn_particle(enemy.x, enemy.y, 0, 0, CRIMSON, 0.3, 12)
-                dist_pl = math.hypot(self.player.x - enemy.x, self.player.y - enemy.y)
-                if dist_pl < enemy.size + self.player.size + 5:
-                    self.player.take_damage(int(enemy.damage * 0.8), damage_type="melee", attack_x=enemy.x, attack_y=enemy.y)
+                for p in self._alive_players():
+                    dist_pl = math.hypot(self.player.x - enemy.x, self.player.y - enemy.y) if p is self.player \
+                        else math.hypot(p.x - enemy.x, p.y - enemy.y)
+                    if dist_pl < enemy.size + p.size + 5:
+                        p.take_damage(int(enemy.damage * 0.8), damage_type="melee", attack_x=enemy.x, attack_y=enemy.y)
 
             elif result == "boss_summon_melee":
                 # 龙某召唤普通僵尸
@@ -6528,52 +6609,63 @@ class Game:
             elif result == "wang_grenade":
                 # 枪榴弹：范围爆炸对玩家造成伤害+击退
                 self.camera.shake(12, 0.6)
+                if self.camera2:
+                    self.camera2.shake(12, 0.6)
                 self.assets.play_sound("explosion")
                 self.particles.spawn_explosion(enemy.x, enemy.y, FIRE_ORANGE, 60)
-                gdist = math.hypot(self.player.x - enemy.x, self.player.y - enemy.y)
-                if gdist < 230:
-                    self.player.take_damage(int(enemy.damage * 2.2), damage_type="explosion", attack_x=enemy.x, attack_y=enemy.y)
-                    if gdist > 0:
-                        self.player.x += (self.player.x - enemy.x) / gdist * 40
-                        self.player.y += (self.player.y - enemy.y) / gdist * 40
+                for p in self._alive_players():
+                    gdist = math.hypot(p.x - enemy.x, p.y - enemy.y)
+                    if gdist < 230:
+                        p.take_damage(int(enemy.damage * 2.2), damage_type="explosion", attack_x=enemy.x, attack_y=enemy.y)
+                        if gdist > 0:
+                            p.x += (p.x - enemy.x) / gdist * 40
+                            p.y += (p.y - enemy.y) / gdist * 40
 
             elif result == "wang_scythe_sweep":
                 # 死神镰刀：大范围横扫，玩家受伤+强击退（紫色刀光弧斩可见）
                 self.camera.shake(15, 0.7)
+                if self.camera2:
+                    self.camera2.shake(15, 0.7)
                 self.assets.play_sound("melee_swing")
                 self.particles.spawn_explosion(enemy.x, enemy.y, CRIMSON, 70)
-                s_ang = math.atan2(self.player.y - enemy.y, self.player.x - enemy.x)
+                _tgt = min(self._alive_players(), key=lambda p: math.hypot(p.x - enemy.x, p.y - enemy.y), default=self.player)
+                s_ang = math.atan2(_tgt.y - enemy.y, _tgt.x - enemy.x)
                 for _off in (-0.5, 0.0, 0.5):
                     self.slash_arcs.append(SlashArc(
                         enemy.x, enemy.y, s_ang + _off, 240 + abs(_off) * 90,
                         (196, 100, 240), lifetime=0.45, kind="scythe",
                         start_radius=40, end_angle_offset=1.1))
-                sdist = math.hypot(self.player.x - enemy.x, self.player.y - enemy.y)
-                if sdist < 290:
-                    self.player.take_damage(int(enemy.damage * 2.4), damage_type="melee", attack_x=enemy.x, attack_y=enemy.y)
-                    if sdist > 0:
-                        self.player.x += (self.player.x - enemy.x) / sdist * 55
-                        self.player.y += (self.player.y - enemy.y) / sdist * 55
+                for p in self._alive_players():
+                    sdist = math.hypot(p.x - enemy.x, p.y - enemy.y)
+                    if sdist < 290:
+                        p.take_damage(int(enemy.damage * 2.4), damage_type="melee", attack_x=enemy.x, attack_y=enemy.y)
+                        if sdist > 0:
+                            p.x += (p.x - enemy.x) / sdist * 55
+                            p.y += (p.y - enemy.y) / sdist * 55
 
             elif result == "wang_execution_scythe":
                 # 王某处决斩击：超高伤害AOE（血红满月斩 + 双镰刀弧）
                 self.camera.shake(20, 1.0)
+                if self.camera2:
+                    self.camera2.shake(20, 1.0)
                 self.assets.play_sound("melee_swing")
                 self.particles.spawn_explosion(enemy.x, enemy.y, CRIMSON, 90)
                 self.particles.spawn_explosion(enemy.x, enemy.y, BLOOD_RED, 60)
-                e_ang = math.atan2(self.player.y - enemy.y, self.player.x - enemy.x)
+                _tgt = min(self._alive_players(), key=lambda p: math.hypot(p.x - enemy.x, p.y - enemy.y), default=self.player)
+                e_ang = math.atan2(_tgt.y - enemy.y, _tgt.x - enemy.x)
                 self.slash_arcs.append(SlashArc(
                     enemy.x, enemy.y, e_ang, 330, CRIMSON,
                     lifetime=0.6, kind="scythe", start_radius=60, end_angle_offset=6.2))
                 self.slash_arcs.append(SlashArc(
                     enemy.x, enemy.y, e_ang + math.pi, 260, (210, 90, 240),
                     lifetime=0.5, kind="scythe", start_radius=30, end_angle_offset=6.2))
-                edist = math.hypot(self.player.x - enemy.x, self.player.y - enemy.y)
-                if edist < 280:
-                    self.player.take_damage(int(enemy.damage * 4.0), damage_type="aoe", attack_x=enemy.x, attack_y=enemy.y)
-                    if edist > 0:
-                        self.player.x += (self.player.x - enemy.x) / edist * 80
-                        self.player.y += (self.player.y - enemy.y) / edist * 80
+                for p in self._alive_players():
+                    edist = math.hypot(p.x - enemy.x, p.y - enemy.y)
+                    if edist < 280:
+                        p.take_damage(int(enemy.damage * 4.0), damage_type="aoe", attack_x=enemy.x, attack_y=enemy.y)
+                        if edist > 0:
+                            p.x += (p.x - enemy.x) / edist * 80
+                            p.y += (p.y - enemy.y) / edist * 80
 
             elif result == "boss_smoke":
                 # 向某烟雾弹：在玩家位置生成减速烟雾区域
@@ -6609,10 +6701,12 @@ class Game:
                 for _ in range(dash_steps):
                     enemy.x += fd[0] * 8
                     enemy.y += fd[1] * 8
-                    pd = math.hypot(self.player.x - enemy.x, self.player.y - enemy.y)
-                    if pd < enemy.size + self.player.size + 4:
-                        self.player.take_damage(int(enemy.damage * 1.5), damage_type="melee", attack_x=enemy.x, attack_y=enemy.y)
-                        hit = True
+                    for p in self._alive_players():
+                        pd = math.hypot(p.x - enemy.x, p.y - enemy.y)
+                        if pd < enemy.size + p.size + 4:
+                            p.take_damage(int(enemy.damage * 1.5), damage_type="melee", attack_x=enemy.x, attack_y=enemy.y)
+                            hit = True
+                    if hit:
                         break
                 if hit:
                     self.camera.shake(4, 0.2)
@@ -6621,9 +6715,7 @@ class Game:
             elif result == "tank_slam":
                 # 坦克重击AOE
                 slam_r = 70
-                dist_pl = math.hypot(self.player.x - enemy.x, self.player.y - enemy.y)
-                if dist_pl <= slam_r:
-                    self.player.take_damage(int(enemy.damage * 1.3), damage_type="aoe", attack_x=enemy.x, attack_y=enemy.y)
+                self._damage_players_near(enemy.x, enemy.y, slam_r, int(enemy.damage * 1.3), dtype="aoe")
                 self.camera.shake(5, 0.25)
                 self.particles.spawn_explosion(enemy.x, enemy.y, GRAY, 25)
 
@@ -6647,30 +6739,35 @@ class Game:
                 self.particles.spawn_explosion(enemy.x, enemy.y, PURPLE, 20)
 
             elif result == "shield_charge":
-                # 盾兵冲锋碰撞伤害
-                dist_pl = math.hypot(self.player.x - enemy.x, self.player.y - enemy.y)
-                if dist_pl < enemy.size + self.player.size + 10:
-                    self.player.take_damage(int(enemy.damage * 1.5), damage_type="melee", attack_x=enemy.x, attack_y=enemy.y)
+                # 盾兵冲锋碰撞伤害（P1/P2 双判定）
+                for p in self._alive_players():
+                    dist_pl = math.hypot(p.x - enemy.x, p.y - enemy.y)
+                    if dist_pl < enemy.size + p.size + 10:
+                        p.take_damage(int(enemy.damage * 1.5), damage_type="melee", attack_x=enemy.x, attack_y=enemy.y)
                 self.particles.spawn_particle(enemy.x, enemy.y, 0, 0, CHARCOAL, 0.3, 10)
 
             # === 新普通僵尸技能 ===
             elif result == "leaper_strike":
                 # 跳跃僵尸扑击（前摇结束后扑向玩家+落地伤害）
                 ld = getattr(enemy, "leap_dir", (1, 0))
-                leap_dist = min(math.hypot(self.player.x - enemy.x, self.player.y - enemy.y), getattr(enemy, "leap_range", 200))
+                # 扑向最近的存活玩家
+                _tgt = min(self._alive_players(), key=lambda p: math.hypot(p.x - enemy.x, p.y - enemy.y), default=self.player)
+                leap_dist = min(math.hypot(_tgt.x - enemy.x, _tgt.y - enemy.y), getattr(enemy, "leap_range", 200))
                 enemy.x += ld[0] * leap_dist
                 enemy.y += ld[1] * leap_dist
-                dist_pl = math.hypot(self.player.x - enemy.x, self.player.y - enemy.y)
-                if dist_pl < enemy.size + self.player.size + 15:
-                    self.player.take_damage(int(enemy.damage * getattr(enemy, "leap_damage_mult", 2.0)), damage_type="melee", attack_x=enemy.x, attack_y=enemy.y)
+                for p in self._alive_players():
+                    dist_pl = math.hypot(p.x - enemy.x, p.y - enemy.y)
+                    if dist_pl < enemy.size + p.size + 15:
+                        p.take_damage(int(enemy.damage * getattr(enemy, "leap_damage_mult", 2.0)), damage_type="melee", attack_x=enemy.x, attack_y=enemy.y)
                 self.assets.play_sound("zombie_leap")
                 self.particles.spawn_explosion(enemy.x, enemy.y, ORANGE, 12)
 
             elif result == "wraith_fear":
                 # 怨灵恐惧
-                dist_pl = math.hypot(self.player.x - enemy.x, self.player.y - enemy.y)
-                if dist_pl < 120:
-                    self.player.buff_manager.add_buff(BuffType.FEAR, 2.0)
+                for p in self._alive_players():
+                    dist_pl = math.hypot(p.x - enemy.x, p.y - enemy.y)
+                    if dist_pl < 120:
+                        p.buff_manager.add_buff(BuffType.FEAR, 2.0)
                 self.assets.play_sound("fear_scream")
                 self.particles.spawn_explosion(enemy.x, enemy.y, PURPLE, 15)
 
@@ -6678,27 +6775,28 @@ class Game:
             elif result == "elite_heavy_slam":
                 # 精英蛮兵重击
                 slam_r = 80
-                dist_pl = math.hypot(self.player.x - enemy.x, self.player.y - enemy.y)
-                if dist_pl <= slam_r:
-                    self.player.take_damage(int(enemy.damage * getattr(enemy, "heavy_damage_mult", 2.5)), damage_type="aoe", attack_x=enemy.x, attack_y=enemy.y)
+                self._damage_players_near(enemy.x, enemy.y, slam_r,
+                                          int(enemy.damage * getattr(enemy, "heavy_damage_mult", 2.5)), dtype="aoe")
                 self.camera.shake(6, 0.3)
                 self.assets.play_sound("elite_heavy_attack")
                 self.particles.spawn_explosion(enemy.x, enemy.y, DARK_RED, 20)
 
             elif result == "elite_assassin_dash":
                 # 精英刺客冲刺
-                dist_pl = math.hypot(self.player.x - enemy.x, self.player.y - enemy.y)
-                if dist_pl < enemy.size + self.player.size + 10:
-                    self.player.take_damage(int(enemy.damage * getattr(enemy, "dash_damage_mult", 3.0)), damage_type="melee", attack_x=enemy.x, attack_y=enemy.y)
+                for p in self._alive_players():
+                    dist_pl = math.hypot(p.x - enemy.x, p.y - enemy.y)
+                    if dist_pl < enemy.size + p.size + 10:
+                        p.take_damage(int(enemy.damage * getattr(enemy, "dash_damage_mult", 3.0)), damage_type="melee", attack_x=enemy.x, attack_y=enemy.y)
                 self.assets.play_sound("elite_dash")
                 self.particles.spawn_particle(enemy.x, enemy.y, 0, 0, CYAN, 0.3, 12)
 
             # === 新Boss技能 ===
             elif result == "mutant_combo_hit":
                 # 变异体连招攻击
-                dist_pl = math.hypot(self.player.x - enemy.x, self.player.y - enemy.y)
-                if dist_pl < enemy.size + self.player.size + 20:
-                    self.player.take_damage(int(enemy.damage * 1.2), damage_type="melee", attack_x=enemy.x, attack_y=enemy.y)
+                for p in self._alive_players():
+                    dist_pl = math.hypot(p.x - enemy.x, p.y - enemy.y)
+                    if dist_pl < enemy.size + p.size + 20:
+                        p.take_damage(int(enemy.damage * 1.2), damage_type="melee", attack_x=enemy.x, attack_y=enemy.y)
                 self.assets.play_sound("boss_mutant_combo")
                 self.particles.spawn_explosion(enemy.x, enemy.y, BLOOD_RED, 15)
                 self.camera.shake(4, 0.15)
@@ -6706,9 +6804,8 @@ class Game:
             elif result == "mutant_combo_finisher":
                 # 变异体连招终结AOE
                 finisher_r = 120
-                dist_pl = math.hypot(self.player.x - enemy.x, self.player.y - enemy.y)
-                if dist_pl <= finisher_r:
-                    self.player.take_damage(int(enemy.damage * getattr(enemy, "combo_damage_mult", 2.5)), damage_type="aoe", attack_x=enemy.x, attack_y=enemy.y)
+                self._damage_players_near(enemy.x, enemy.y, finisher_r,
+                                          int(enemy.damage * getattr(enemy, "combo_damage_mult", 2.5)), dtype="aoe")
                 self.assets.play_sound("boss_mutant_combo", 1.5)
                 self.camera.shake(10, 0.4)
                 self.particles.spawn_explosion(enemy.x, enemy.y, BLOOD_RED, 40)
@@ -6732,34 +6829,34 @@ class Game:
 
             elif result == "queen_mind_control":
                 # 女王精神控制（恐惧）
-                dist_pl = math.hypot(self.player.x - enemy.x, self.player.y - enemy.y)
-                if dist_pl < 300:
-                    self.player.buff_manager.add_buff(BuffType.FEAR, 3.0)
+                for p in self._alive_players():
+                    dist_pl = math.hypot(p.x - enemy.x, p.y - enemy.y)
+                    if dist_pl < 300:
+                        p.buff_manager.add_buff(BuffType.FEAR, 3.0)
                 self.assets.play_sound("boss_queen_tentacle")
                 self.particles.spawn_explosion(self.player.x, self.player.y, PURPLE, 20)
 
             elif result == "queen_poison_cloud":
                 # 女王毒雾
-                self.player.buff_manager.add_buff(BuffType.POISON, 5.0)
+                for p in self._alive_players():
+                    p.buff_manager.add_buff(BuffType.POISON, 5.0)
                 self.particles.spawn_explosion(self.player.x, self.player.y, POISON_GREEN, 25)
 
             elif result == "queen_tentacle":
                 # 女王触手突袭
                 tentacle_r = 60
-                dist_pl = math.hypot(self.player.x - enemy.x, self.player.y - enemy.y)
-                if dist_pl <= tentacle_r:
-                    self.player.take_damage(int(enemy.damage * 1.5), damage_type="aoe", attack_x=enemy.x, attack_y=enemy.y)
+                self._damage_players_near(enemy.x, enemy.y, tentacle_r, int(enemy.damage * 1.5), dtype="aoe")
                 self.assets.play_sound("boss_queen_tentacle")
                 self.particles.spawn_explosion(self.player.x, self.player.y, PURPLE, 20)
 
             elif result == "titan_stomp":
                 # 泰坦地震踩踏
                 stomp_r = getattr(enemy, "stomp_radius", 150)
-                dist_pl = math.hypot(self.player.x - enemy.x, self.player.y - enemy.y)
-                if dist_pl <= stomp_r:
-                    self.player.take_damage(getattr(enemy, "stomp_damage", 120), damage_type="aoe", attack_x=enemy.x, attack_y=enemy.y)
+                self._damage_players_near(enemy.x, enemy.y, stomp_r, getattr(enemy, "stomp_damage", 120), dtype="aoe")
                 self.assets.play_sound("boss_titan_stomp")
                 self.camera.shake(15, 0.5)
+                if self.camera2:
+                    self.camera2.shake(15, 0.5)
                 self.particles.spawn_explosion(enemy.x, enemy.y, GRAY, 50)
                 self.particles.spawn_explosion(enemy.x, enemy.y, CHARCOAL, 30)
 
@@ -6825,54 +6922,13 @@ class Game:
             # 限制怪物在地图内
             enemy.x, enemy.y = self.world.clamp_position(enemy.x, enemy.y, enemy.size)
 
-            # 怪物与玩家碰撞（被钩爪拉回中的敌人无法造成任何伤害）
-            if (not enemy.grappled) and enemy.get_rect().colliderect(self.player.get_rect()):
-                dx = enemy.x - self.player.x
-                dy = enemy.y - self.player.y
-                dist = math.hypot(dx, dy)
-                if dist > 0:
-                    min_dist = enemy.size + self.player.size + 2
-                    if dist < min_dist:
-                        push_x = (dx / dist) * (min_dist - dist) * 0.5
-                        push_y = (dy / dist) * (min_dist - dist) * 0.5
-                        enemy.x += push_x
-                        enemy.y += push_y
-                        self.player.x -= push_x
-                        self.player.y -= push_y
+            # 怪物与玩家碰撞（被钩爪拉回中的敌人无法造成任何伤害）——P1/P2 双判定
+            self._enemy_collide_damage(enemy, self.player, self.camera)
+            if self.player2:
+                self._enemy_collide_damage(enemy, self.player2, self.camera2)
 
-                if enemy.knockdown_timer <= 0:
-                    angle_to_enemy = math.atan2(dy, dx)
-                    facing_rad = math.radians(self.player.facing_angle)
-                    angle_diff = abs(math.atan2(math.sin(angle_to_enemy - facing_rad),
-                                               math.cos(angle_to_enemy - facing_rad)))
-                    from_front = angle_diff < math.pi / 3
-
-                    if self.player.riot_gear.equipped and from_front:
-                        shield_rect = self.player.riot_gear.get_shield_rect(self.player.x, self.player.y)
-                        if shield_rect and shield_rect.colliderect(enemy.get_rect()):
-                            push_back = 15
-                            enemy.x += math.cos(angle_to_enemy) * push_back
-                            enemy.y += math.sin(angle_to_enemy) * push_back
-                            self.player.take_damage(enemy.damage, "melee", True, enemy.x, enemy.y)
-                        else:
-                            self.player.take_damage(enemy.damage, "melee", from_front, enemy.x, enemy.y)
-                    else:
-                        self.player.take_damage(enemy.damage, "melee", from_front, enemy.x, enemy.y)
-
-                    # 僵尸攻击施加debuff
-                    etype = enemy.enemy_type
-                    if etype == EnemyType.ZOMBIE_FAST and random.random() < 0.25:
-                        self.player.buff_manager.add_buff(BuffType.BLEED, duration=4.0)
-                    elif etype == EnemyType.ZOMBIE_TANK and random.random() < 0.3:
-                        self.player.buff_manager.add_buff(BuffType.FRACTURE, duration=5.0)
-                    elif etype == EnemyType.ZOMBIE_NORMAL and random.random() < 0.1:
-                        self.player.buff_manager.add_buff(BuffType.BLEED, duration=3.0)
-
-                    # 确保玩家被推动后不在障碍物内
-                    self.player.ensure_safe_position(self.world)
-
-                    if self.config.screen_shake:
-                        self.camera.shake(6, 0.4)
+            # 确保玩家被推动后不在障碍物内
+            self.player.ensure_safe_position(self.world)
 
             # 普通远程敌人攻击（选择最近玩家作为目标）
             if (not enemy.grappled) and getattr(enemy, "attack_range", 0) > 0 and not getattr(enemy, "is_boss", False):
@@ -7146,27 +7202,32 @@ class Game:
             if not proj.alive:
                 self.enemy_projectiles.remove(proj)
                 continue
-            if proj.get_rect().colliderect(self.player.get_rect()):
-                # 检测是否被盾牌阻挡
-                dx = proj.x - self.player.x
-                dy = proj.y - self.player.y
-                attack_angle = math.atan2(dy, dx)
-                facing_rad = math.radians(self.player.facing_angle)
-                angle_diff = abs(math.atan2(math.sin(attack_angle - facing_rad), 
-                                           math.cos(attack_angle - facing_rad)))
-                from_front = angle_diff < math.pi / 3
-
-                if self.player.riot_gear.equipped and from_front and not self.player.riot_gear.shield_broken:
-                    # 盾牌阻挡远程攻击
-                    self.player.riot_gear.take_damage(proj.damage * 0.3, "ranged", True, proj.x, proj.y)
-                    proj.alive = False
-                    self.particles.spawn(proj.x, proj.y, CYAN, 5, (2, 4), (-2, 2), (0.2, 0.5))
-                    self.floating_texts.append(FloatingText(proj.x, proj.y - 20, "格挡!", color=CYAN, lifetime=0.5))
-                else:
-                    self.player.take_damage(proj.damage, "ranged")
-                    proj.alive = False
-                    if self.config.screen_shake:
-                        self.camera.shake(2, 0.15)
+            hit_any = False
+            for _p in self._alive_players():
+                if proj.get_rect().colliderect(_p.get_rect()):
+                    hit_any = True
+                    # 检测是否被盾牌阻挡
+                    dx = proj.x - _p.x
+                    dy = proj.y - _p.y
+                    attack_angle = math.atan2(dy, dx)
+                    facing_rad = math.radians(_p.facing_angle)
+                    angle_diff = abs(math.atan2(math.sin(attack_angle - facing_rad),
+                                               math.cos(attack_angle - facing_rad)))
+                    from_front = angle_diff < math.pi / 3
+                    if _p.riot_gear.equipped and from_front and not _p.riot_gear.shield_broken:
+                        # 盾牌阻挡远程攻击
+                        _p.riot_gear.take_damage(proj.damage * 0.3, "ranged", True, proj.x, proj.y)
+                        proj.alive = False
+                        self.particles.spawn(proj.x, proj.y, CYAN, 5, (2, 4), (-2, 2), (0.2, 0.5))
+                        self.floating_texts.append(FloatingText(proj.x, proj.y - 20, "格挡!", color=CYAN, lifetime=0.5))
+                    else:
+                        _p.take_damage(proj.damage, "ranged")
+                        proj.alive = False
+                        if self.config.screen_shake:
+                            (self.camera if _p is self.player else self.camera2).shake(2, 0.15)
+                    break
+            if hit_any:
+                continue
 
         # 更新烟雾区域
         if hasattr(self, 'smoke_zones'):
@@ -7195,10 +7256,13 @@ class Game:
                 if grenade["timer"] <= 0:
                     self.particles.spawn_explosion(grenade["target_x"], grenade["target_y"], ORANGE, 50)
                     self.camera.shake(8, 0.4)
-                    dist_pl = math.hypot(self.player.x - grenade["target_x"], self.player.y - grenade["target_y"])
-                    if dist_pl < grenade["radius"]:
-                        dmg = grenade["damage"] * (1 - dist_pl / grenade["radius"])
-                        self.player.take_damage(int(dmg), damage_type="aoe", attack_x=grenade["target_x"], attack_y=grenade["target_y"])
+                    if self.camera2:
+                        self.camera2.shake(8, 0.4)
+                    for _p in self._alive_players():
+                        dist_pl = math.hypot(_p.x - grenade["target_x"], _p.y - grenade["target_y"])
+                        if dist_pl < grenade["radius"]:
+                            dmg = grenade["damage"] * (1 - dist_pl / grenade["radius"])
+                            _p.take_damage(int(dmg), damage_type="aoe", attack_x=grenade["target_x"], attack_y=grenade["target_y"])
                     self.grenades.remove(grenade)
 
         # 更新经验球
@@ -7322,12 +7386,18 @@ class Game:
                 "x": self.player.x, "y": self.player.y,
                 "obj": self.player, "is_local": True
             })
+        if self.player2 and self.player2.alive:
+            targets.append({
+                "id": "player2",
+                "x": self.player2.x, "y": self.player2.y,
+                "obj": self.player2, "is_local": False
+            })
         return targets
 
     def _damage_player_target(self, target, damage, damage_type="melee", attack_x=0, attack_y=0):
         """对玩家目标造成伤害（单人模式只有本地玩家）"""
-        if target["is_local"]:
-            self.player.take_damage(damage, damage_type=damage_type, attack_x=attack_x, attack_y=attack_y)
+        if target.get("obj") is not None:
+            target["obj"].take_damage(damage, damage_type=damage_type, attack_x=attack_x, attack_y=attack_y)
 
     def _update_grapple_collision(self):
         """更新钩爪碰撞检测 - 敌人/道具/经验球/文本资料/宝箱全部可勾"""
@@ -7862,9 +7932,7 @@ class Game:
             enemy.split_count += 1
             # 分裂溅射伤害
             splash_r = 80
-            dist_pl = math.hypot(self.player.x - enemy.x, self.player.y - enemy.y)
-            if dist_pl < splash_r:
-                self.player.take_damage(int(15 * (1 - dist_pl / splash_r)), damage_type="aoe", attack_x=enemy.x, attack_y=enemy.y)
+            self._damage_players_near(enemy.x, enemy.y, splash_r, 15, dtype="aoe")  # 溅射伤害（P1/P2）
             self.particles.spawn_explosion(enemy.x, enemy.y, BLOOD_RED, 25)
             for _ in range(2):
                 offset_x = random.uniform(-20, 20)
