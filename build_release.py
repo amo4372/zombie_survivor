@@ -39,6 +39,8 @@ ESSENTIAL_DIRS = [
     "mods",        # Mod目录（如果有）
     "zombie_pkg",      # v2.0.9：游戏逻辑包（由 game.py 拆分）
     "renderer_pkg",    # v2.0.9：渲染系统包（由 renderer.py 拆分）
+    "ui_pkg",          # v2.0.11：UI 组件包（由 ui.py 拆分）
+    "entities_pkg",    # v2.0.11：实体包（由 entities.py 拆分）
 ]
 
 # 排除的文件模式（即使在必要目录中也排除）
