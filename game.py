@@ -603,7 +603,12 @@ class Game:
             "throwable_switch": TouchButton(640 + 370, BASE_HEIGHT - 340, 42, "投掷", ORANGE),
             "throwable_caster": SkillCaster(640 + 415, BASE_HEIGHT - 120, 48),
         }
-        self.p2_selected_skill = None
+        self.p2_selected_skill = SkillType.GRENADE  # P2 基础技能默认手雷（与单机一致）
+        # P2 键控技能 U 长按预瞄状态（照 G 键模板）
+        self.key_u_press_start = 0
+        self.key_u_held = False
+        self.u_aim_started = False
+        self.key_u_long_threshold = 0.4
         self.p2_selected_throwable = "incendiary"
         self.p2_fire_held = False
         self._p2_finger_ids = set()  # P2 触控手指（右半屏）
@@ -810,6 +815,19 @@ class Game:
                 for name in ("shoot", "sprint", "skill_selector", "skill_caster", "throwable_switch", "throwable_caster"):
                     self.p2_controls[name].handle_touch(self.touch_events, self.scale)
             mx, my, shoot, skill, throw, sprint = self._get_p2_local_input()
+            # P2 键控技能 U 长按：预瞄瞄准（照 G 键模板）
+            if self.config.control_mode != ControlMode.TOUCH and self.key_u_held and self.p2_controls:
+                hold_t = time.time() - self.key_u_press_start
+                c2 = self.p2_controls
+                c2["skill_caster"].set_player_pos(p2.x, p2.y, self.camera2.x, self.camera2.y)
+                c2["skill_caster"].set_max_distance(self._get_skill_max_distance(self.p2_selected_skill or SkillType.GRENADE))
+                if not self.u_aim_started and hold_t >= self.key_u_long_threshold:
+                    self.u_aim_started = True
+                    c2["skill_caster"].is_aiming = True
+                if self.u_aim_started:
+                    aim_ang = math.radians(self._p2_auto_aim_angle(p2))
+                    c2["skill_caster"].set_aim_angle(aim_ang)
+                    c2["skill_caster"].set_distance_ratio(1.0)
             # 触控模式：P2 控件输入（右半屏）
             if self.config.control_mode == ControlMode.TOUCH and self.p2_controls:
                 joystick2 = self.p2_controls["joystick"]
@@ -824,13 +842,21 @@ class Game:
                     pass
                 if self.p2_controls["sprint"].pressed:
                     sprint = True
+                # 填充 P2 技能释放控件数据（长按/拖拽预瞄用）
+                c2sc = self.p2_controls["skill_caster"]
+                c2sc.set_player_pos(p2.x, p2.y, self.camera2.x, self.camera2.y)
+                c2sc.set_max_distance(self._get_skill_max_distance(self.p2_selected_skill or SkillType.GRENADE))
                 if self.p2_controls["skill_caster"].just_released:
                     skill = True
+                    # 触控长按/拖拽预瞄状态（handle_touch 会在 up 时重置 is_aiming）
+                    self._p2_cast_aimed = self.p2_controls["skill_caster"].was_aiming_on_release
+                    self._p2_cast_angle = self.p2_controls["skill_caster"].angle
+                    self._p2_cast_ratio = self.p2_controls["skill_caster"].distance_ratio
                 if self.p2_controls["throwable_caster"].just_released:
                     throw = True
                 # P2 技能切换（短按）
                 if self.p2_controls["skill_selector"].just_released:
-                    sts = p2.skill_tree.get_unlocked_active_skills()
+                    sts = self._get_unlocked_skills_for(p2)
                     if sts:
                         if self.p2_selected_skill not in sts:
                             self.p2_selected_skill = sts[0]
@@ -840,7 +866,7 @@ class Game:
                         skill_obj = p2.skill_tree.get_skill(self.p2_selected_skill)
                         self.floating_texts.append(FloatingText(
                             p2.x, p2.y - 40,
-                            f"P2技能: {skill_obj.name if skill_obj else '?'}", color=GOLD, lifetime=1.5))
+                            f"P2技能: {skill_obj.name if skill_obj else '空'}", color=GOLD, lifetime=1.5))
         # ===== 瞄准角度：触控摇杆 / 最近敌人 / 保持原朝向 =====
         angle = p2.facing_angle
         if self.config.control_mode == ControlMode.TOUCH and self.p2_controls:
@@ -871,11 +897,16 @@ class Game:
         if skill:
             st = self.p2_selected_skill
             if st is None:
-                sts = p2.skill_tree.get_unlocked_active_skills()
+                sts = self._get_unlocked_skills_for(p2)
                 if sts:
                     st = sts[0]
             if st:
-                self._use_skill_p2(st)
+                if getattr(self, '_p2_cast_aimed', False):
+                    # 触控长按/拖拽预瞄释放（方向+距离）
+                    self._use_skill_p2_aimed(st, getattr(self, '_p2_cast_angle', p2.facing_angle),
+                                             getattr(self, '_p2_cast_ratio', 1.0))
+                else:
+                    self._use_skill_p2(st)
         # ===== 投掷 =====
         if throw:
             self._throw_p2()
@@ -966,21 +997,115 @@ class Game:
             p2.active_skills[skill_type] = cd
             self.floating_texts.append(FloatingText(p2.x, p2.y - 45, "技能释放!", color=GOLD, lifetime=1.5))
 
+    def _use_skill_p2_aimed(self, skill_type, angle, distance_ratio=1.0):
+        """P2 带瞄准方向/距离的技能释放（触控长按拖拽/键控长按）"""
+        p2 = self.player2
+        if not p2:
+            return False
+        if not p2.can_act():
+            return False
+        if skill_type in p2.active_skills:
+            self.floating_texts.append(FloatingText(p2.x, p2.y - 40, "冷却中...", color=GRAY, lifetime=1.0))
+            return False
+        cd = 10.0 * p2.cooldown_mult
+        ok = False
+        if skill_type == SkillType.GRENADE:
+            actual_dist = self._get_skill_max_distance(SkillType.GRENADE) * max(0.1, distance_ratio)
+            tx = p2.x + math.cos(angle) * actual_dist
+            ty = p2.y + math.sin(angle) * actual_dist
+            self._throw_skill_grenade_p2(tx, ty, p2)
+            ok = True
+            cd = 8.0
+        elif skill_type == SkillType.RAILGUN_ANNIHILATION:
+            lv = self._legendary_skill_level(SkillType.RAILGUN_ANNIHILATION, p2)
+            dmg = (300 + 80 * (lv - 1)) * p2.damage_multiplier * p2.buff_manager.get_damage_mult()
+            width = {1: 40, 2: 40, 3: 55, 4: 70, 5: 85}[lv]
+            proj = Projectile(p2.x, p2.y, math.cos(angle) * 3, math.sin(angle) * 3,
+                              dmg, 1200, (140, 200, 245), 15,
+                              pierce=99, explosive=True, explosion_radius=90,
+                              is_laser=True, laser_width=width, laser_duration=0.85)
+            self.projectiles.append(proj)
+            ok = True
+            cd = 35.0
+        elif skill_type == SkillType.SCYTHE_DANCE:
+            ok = self._skill_p2_scythe_dance(p2)
+            cd = 30.0
+        elif skill_type == SkillType.MINIGUN_OVERDRIVE:
+            p2.overdrive_timer = 5.0
+            p2.overdrive_mult = 3.0
+            ok = True
+            cd = 25.0
+        elif skill_type == SkillType.SHOCKWAVE:
+            ok = True
+            for e in self.enemies:
+                if not getattr(e, 'alive', True):
+                    continue
+                if math.hypot(e.x - p2.x, e.y - p2.y) <= 200:
+                    e.take_damage(60 * p2.damage_multiplier, damage_type="aoe")
+                    e.knockdown_timer = 0.8
+            self.slash_arcs.append(SlashArc(p2.x, p2.y, 0, 200, (255, 220, 100), lifetime=0.4, kind="scythe",
+                                            start_radius=150, end_angle_offset=3.0))
+            cd = 12.0
+        else:
+            return self._use_skill_p2(skill_type)
+        if ok:
+            p2.active_skills[skill_type] = cd
+            self.floating_texts.append(FloatingText(p2.x, p2.y - 45, "技能释放!", color=GOLD, lifetime=1.5))
+        return ok
+
     def _skill_p2_scythe_dance(self, p2):
-        """P2 死神镰刀专属技能"""
-        radius = 320
-        dmg = 240 * p2.damage_multiplier * p2.buff_manager.get_damage_mult()
+        """P2 死神镰刀专属技能（等级随 P2 武器等级成长）"""
+        lv = self._legendary_skill_level(SkillType.SCYTHE_DANCE, p2)
+        seg = {1: 3, 2: 4, 3: 5, 4: 6, 5: 8}[lv]
+        radius = {1: 300, 2: 320, 3: 340, 4: 360, 5: 400}[lv]
+        dmg = 60 * seg * p2.damage_multiplier * p2.buff_manager.get_damage_mult()
         for e in list(self.enemies):
-            if not getattr(e, 'alive', True): continue
+            if not getattr(e, 'alive', True):
+                continue
             if math.hypot(e.x - p2.x, e.y - p2.y) <= radius:
                 e.take_damage(dmg, damage_type="aoe")
-        for i in range(5):
-            ang = (math.pi * 2 / 5) * i
+        for i in range(seg):
+            ang = (math.pi * 2 / seg) * i
             self.slash_arcs.append(SlashArc(p2.x, p2.y, ang, radius * 0.8, (190, 80, 230), lifetime=0.55,
                                             kind="scythe", start_radius=radius * 0.5, end_angle_offset=3.0))
         self.sweep_rings.append({"x": p2.x, "y": p2.y, "r": radius * 0.3, "max_r": radius,
                                  "color": (190, 80, 230), "width": 10, "life": 0.5, "max_life": 0.5})
         return True
+
+    def _throw_skill_grenade_p2(self, tx, ty, p2):
+        """P2 定向手雷：向目标点投掷（带附魔，与 P1 一致走 grenades_in_flight）"""
+        if not hasattr(self, 'grenades_in_flight'):
+            self.grenades_in_flight = []
+        dx = tx - p2.x
+        dy = ty - p2.y
+        total_dist = math.hypot(dx, dy)
+        speed = total_dist / 1.1 if total_dist > 0 else 300
+        if total_dist > 0:
+            vx = dx / total_dist * speed
+            vy = dy / total_dist * speed
+        else:
+            vx, vy = 0, -300
+        p2.facing_angle = math.degrees(math.atan2(dy, dx)) if total_dist > 0 else p2.facing_angle
+        skill = p2.skill_tree.get_skill(SkillType.GRENADE)
+        skill_level = skill.current_level if skill else 1
+        g_effects = ["frag"]
+        if skill_level >= 2:
+            g_effects.append("fire")
+        if skill_level >= 3:
+            g_effects.append("frost")
+        if skill_level >= 4:
+            g_effects.append("poison")
+        if skill_level >= 5:
+            g_effects.append("nuke")
+        self.grenades_in_flight.append({
+            "type": "frag",
+            "effects": g_effects,
+            "x": p2.x, "y": p2.y,
+            "vx": vx, "vy": vy,
+            "timer": 1.1,
+            "target_x": tx, "target_y": ty,
+        })
+        self.assets.play_sound("grenade_throw")
 
     def _spawn_grenade(self, x, y, angle_deg, player):
         """生成手雷（P2 用）"""
@@ -2120,15 +2245,38 @@ class Game:
             pass
         return None
 
-    def _get_unlocked_skills(self):
-        """获取已解锁的主动技能列表（基础 + 传说武器专属）"""
-        if not self.player:
+    def _sync_legendary_skill_level(self, player=None):
+        """传说专属技能等级与武器等级同步（player 缺省= P1）"""
+        pl = player if player is not None else self.player
+        if not pl:
+            return None
+        try:
+            w = pl.get_current_weapon()
+            ls = self.LEGENDARY_WEAPON_SKILLS.get(w.weapon_type.name)
+            if ls:
+                sk = pl.skill_tree.get_skill(ls)
+                if sk:
+                    sk.current_level = min(sk.max_level, max(1, int(getattr(w, 'level', 1))))
+                    return ls
+        except Exception:
+            pass
+        return None
+
+    def _get_unlocked_skills_for(self, player):
+        """获取某玩家的已解锁主动技能列表（基础手雷恒可用 + 技能树主动 + 传说武器专属）"""
+        if not player:
             return [SkillType.GRENADE]
-        skills = list(self.player.skill_tree.get_unlocked_active_skills())
-        ls = self._sync_legendary_skill_level()
+        skills = list(player.skill_tree.get_unlocked_active_skills())
+        if SkillType.GRENADE not in skills:
+            skills.insert(0, SkillType.GRENADE)
+        ls = self._sync_legendary_skill_level(player)
         if ls and ls not in skills:
             skills.append(ls)
         return skills
+
+    def _get_unlocked_skills(self):
+        """获取已解锁的主动技能列表（基础 + 传说武器专属）"""
+        return self._get_unlocked_skills_for(self.player)
 
     def _get_unlocked_skill_objects(self):
         """获取已解锁的主动技能对象列表（用于轮盘显示）"""
@@ -2166,7 +2314,8 @@ class Game:
         self._sync_legendary_skill_level()  # 传说专属技能等级与武器同步
 
         skill = self.player.skill_tree.get_skill(skill_type)
-        if not skill or skill.current_level == 0:
+        if not skill or (skill.current_level == 0 and skill_type != SkillType.GRENADE):
+            # 基础手雷天生可用（0级=基础破片），其余技能需解锁
             self.floating_texts.append(FloatingText(
                 self.player.x, self.player.y - 40, 
                 f"技能未解锁!", color=GRAY, lifetime=1.5
@@ -2236,7 +2385,8 @@ class Game:
         self._sync_legendary_skill_level()  # 传说专属技能等级与武器同步
 
         skill = self.player.skill_tree.get_skill(skill_type)
-        if not skill or skill.current_level == 0:
+        if not skill or (skill.current_level == 0 and skill_type != SkillType.GRENADE):
+            # 基础手雷天生可用（0级=基础破片），其余技能需解锁
             self.floating_texts.append(FloatingText(
                 self.player.x, self.player.y - 40, 
                 f"技能未解锁!", color=GRAY, lifetime=1.5
@@ -3192,10 +3342,12 @@ class Game:
         return True
 
     # ========== 传说级武器专属技能 ==========
-    def _legendary_skill_level(self, skill_type):
-        """读取传说专属技能当前等级（与武器等级同步）"""
+    def _legendary_skill_level(self, skill_type, player=None):
+        """读取传说专属技能当前等级（与武器等级同步，施放前先同步一次）"""
         try:
-            sk = self.player.skill_tree.get_skill(skill_type)
+            pl = player if player is not None else self.player
+            self._sync_legendary_skill_level(pl)
+            sk = pl.skill_tree.get_skill(skill_type)
             if sk:
                 return max(1, min(sk.max_level, sk.current_level))
         except Exception:
@@ -3911,7 +4063,7 @@ class Game:
                         skill = self.player.skill_tree.get_skill(self.selected_skill)
                         self.floating_texts.append(FloatingText(
                             self.player.x, self.player.y - 40,
-                            f"技能: {skill.name if skill else '?'}", color=GOLD, lifetime=1.5
+                            f"技能: {skill.name if skill else '空'}", color=GOLD, lifetime=1.5
                         ))
             elif key == pygame.K_t:
                 # T：打开技能树
@@ -3936,6 +4088,15 @@ class Game:
                 # E：切换投掷物类型
                 if self.player.can_act():
                     self._cycle_throwable()
+            elif key == pygame.K_u:
+                # U：P2 技能（短按快放，长按预瞄释放）
+                if self.multiplayer_mode == "same_screen" and self.player2:
+                    import time as _t
+                    self.key_u_press_start = _t.time()
+                    self.key_u_held = True
+                    self.u_aim_started = False
+                    if self.p2_controls:
+                        self.p2_controls["skill_caster"].is_aiming = False
             elif key == pygame.K_f:
                     pass
             elif key == pygame.K_ESCAPE:
@@ -4060,6 +4221,38 @@ class Game:
                 self._throw_grenade_aimed(angle, ratio)
 
             self.q_aim_started = False
+
+        elif key == pygame.K_u:
+            # U键释放：P2 技能（短按快放，长按预瞄释放）
+            if self.multiplayer_mode != "same_screen" or not self.player2:
+                return
+            import time as _t
+            hold_time = _t.time() - self.key_u_press_start
+            self.key_u_held = False
+            if self.p2_controls:
+                self.p2_controls["skill_caster"].is_aiming = False
+            if not self.player2.can_act():
+                self.u_aim_started = False
+                return
+            st = self.p2_selected_skill
+            if st is None:
+                sts = self._get_unlocked_skills_for(self.player2)
+                if sts:
+                    st = sts[0]
+            if not st:
+                self.u_aim_started = False
+                return
+            if hold_time < self.key_u_long_threshold:
+                # 短按快放（当前朝向）
+                self._use_skill_p2(st)
+            else:
+                # 长按：按预瞄方向+距离释放
+                c2 = self.p2_controls
+                if self.u_aim_started:
+                    self._use_skill_p2_aimed(st, c2["skill_caster"].angle, c2["skill_caster"].distance_ratio)
+                else:
+                    self._use_skill_p2_aimed(st, math.radians(self.player2.facing_angle), 1.0)
+            self.u_aim_started = False
 
     def _toggle_riot_gear(self):
         """切换防爆套装（带动画保护）"""
@@ -6076,7 +6269,7 @@ class Game:
                         skill = self.player.skill_tree.get_skill(self.selected_skill)
                         self.floating_texts.append(FloatingText(
                             self.player.x, self.player.y - 40,
-                            f"技能: {skill.name if skill else '?'}", color=GOLD, lifetime=1.5
+                            f"技能: {skill.name if skill else '空'}", color=GOLD, lifetime=1.5
                         ))
 
             # === 武器轮盘处理 ===

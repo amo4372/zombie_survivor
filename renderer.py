@@ -2545,6 +2545,11 @@ class Renderer:
             self.screen = orig_screen.subsurface(rect)
             self._draw_playing_core(player, camera)
             self.screen = orig_screen
+            # P2 键控技能 U 长按预瞄（右半屏；照 P1 G 键模板）
+            if idx == 1 and self.game.config.control_mode == ControlMode.KEYBOARD:
+                c2 = self.game.p2_controls
+                if c2 and c2["skill_caster"].is_aiming:
+                    c2["skill_caster"]._draw_aim_preview(self.screen, self.game.p2_selected_skill or SkillType.GRENADE, self.game.scale)
             # 分屏 HUD
             self._draw_hud_split(player, label, rect)
         # 中线与标签
@@ -2688,8 +2693,8 @@ class Renderer:
             # 技能（与单机同款：显示技能名）
             _sk = g.selected_skill
             _sobj = pl.skill_tree.get_skill(_sk) if _sk else None
-            g.skill_selector.draw(self.screen, fs, _sobj.name if _sobj else "技", _sobj.icon_color if _sobj else BLUE, scale)
-            g.skill_caster.draw(self.screen, fs, _sk, _sobj.name if _sobj else "放", _sobj.icon_color if _sobj else ORANGE, scale)
+            g.skill_selector.draw(self.screen, fs, _sobj.name if _sobj else "空", _sobj.icon_color if _sobj else BLUE, scale)
+            g.skill_caster.draw(self.screen, fs, _sk, _sobj.name if _sobj else "空", _sobj.icon_color if _sobj else ORANGE, scale)
             # 投掷（与单机同款：缩写+数量角标）
             _tt = g.selected_throwable
             _t_abbr = {"incendiary": "燃", "smoke": "烟", "cluster": "束", "emp": "E"}.get(_tt, "投")
@@ -2721,8 +2726,8 @@ class Renderer:
             c2["sprint"].draw(self.screen, fs, scale)
             _sk = getattr(g, 'p2_selected_skill', None)
             _sobj = pl.skill_tree.get_skill(_sk) if _sk else None
-            c2["skill_selector"].draw(self.screen, fs, _sobj.name if _sobj else "技", _sobj.icon_color if _sobj else BLUE, scale)
-            c2["skill_caster"].draw(self.screen, fs, _sk, _sobj.name if _sobj else "放", _sobj.icon_color if _sobj else ORANGE, scale)
+            c2["skill_selector"].draw(self.screen, fs, _sobj.name if _sobj else "空", _sobj.icon_color if _sobj else BLUE, scale)
+            c2["skill_caster"].draw(self.screen, fs, _sk, _sobj.name if _sobj else "空", _sobj.icon_color if _sobj else ORANGE, scale)
             _tt = getattr(g, 'p2_selected_throwable', "incendiary")
             _t_abbr = {"incendiary": "燃", "smoke": "烟", "cluster": "束", "emp": "E"}.get(_tt, "投")
             _t_col = g.throwable_colors.get(_tt, ORANGE)
@@ -2991,13 +2996,13 @@ class Renderer:
 
             if hasattr(self.game, 'skill_selector') and self.game.skill_selector:
                 skill = player.skill_tree.get_skill(self.game.selected_skill)
-                skill_name = skill.name if skill else "?"
+                skill_name = skill.name if skill else "空"
                 skill_color = skill.icon_color if skill else BLUE
                 self.game.skill_selector.draw(self.screen, self.game.font_small, skill_name, skill_color, scale)
 
             if hasattr(self.game, 'skill_caster') and self.game.skill_caster:
                 skill = player.skill_tree.get_skill(self.game.selected_skill)
-                skill_name = skill.name if skill else "放"
+                skill_name = skill.name if skill else "空"
                 skill_color = skill.icon_color if skill else ORANGE
                 self.game.skill_caster.draw(self.screen, self.game.font_small, 
                     self.game.selected_skill, skill_name, skill_color, scale)
@@ -3295,7 +3300,7 @@ class Renderer:
                 curr_idx = unlocked_skills.index(self.game.selected_skill) if self.game.selected_skill in unlocked_skills else -1
                 next_skill_type = unlocked_skills[(curr_idx + 1) % len(unlocked_skills)]
                 next_skill = player.skill_tree.get_skill(next_skill_type)
-                next_skill_name = next_skill.name if next_skill else "?"
+                next_skill_name = next_skill.name if next_skill else "空"
                 ns_text = self.game.font_small.render(f"Tab切换: {next_skill_name}", True, AMBER)
                 self.screen.blit(ns_text, (int(12*scale), hint_y))
                 hint_y += int(18 * scale)
