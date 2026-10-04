@@ -37,6 +37,8 @@ ESSENTIAL_FILES = [
 ESSENTIAL_DIRS = [
     "assets",      # 游戏资源（图片、音效、音乐）
     "mods",        # Mod目录（如果有）
+    "zombie_pkg",      # v2.0.9：游戏逻辑包（由 game.py 拆分）
+    "renderer_pkg",    # v2.0.9：渲染系统包（由 renderer.py 拆分）
 ]
 
 # 排除的文件模式（即使在必要目录中也排除）

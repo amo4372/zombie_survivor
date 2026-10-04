@@ -1216,6 +1216,7 @@ class DamageNumber:
         self.damage = damage
         self.damage_type = damage_type
         self.is_crit = is_crit
+        self._surf_cache = None  # 渲染缓存：字体surface只生成一次，避免大伤害时每帧重渲染
         # 暴击优先用暴击色
         if is_crit:
             self.color = self.TYPE_COLORS["crit"]
@@ -1254,16 +1255,18 @@ class DamageNumber:
 
     def draw(self, screen, font, camera_x=0, camera_y=0, scale=1.0):
         alpha = int(255 * self.lifetime)
-        # 暴击显示!，其余纯数字
-        text = f"{int(self.damage)}" + ("!" if self.is_crit else "")
-        text_surf = font.render(text, True, self.color)
-        # 根据size_mult缩放表面
-        if self.size_mult != 1.0:
+        # 字体surface缓存：首次渲染一次，之后每帧只set_alpha（避免大伤害时每帧font.render+smoothscale卡顿）
+        if self._surf_cache is None:
             import pygame
-            orig_w, orig_h = text_surf.get_size()
-            new_w = max(4, int(orig_w * self.size_mult))
-            new_h = max(4, int(orig_h * self.size_mult))
-            text_surf = pygame.transform.smoothscale(text_surf, (new_w, new_h))
+            text = f"{int(self.damage)}" + ("!" if self.is_crit else "")
+            text_surf = font.render(text, True, self.color)
+            if self.size_mult != 1.0:
+                orig_w, orig_h = text_surf.get_size()
+                new_w = max(4, int(orig_w * self.size_mult))
+                new_h = max(4, int(orig_h * self.size_mult))
+                text_surf = pygame.transform.smoothscale(text_surf, (new_w, new_h))
+            self._surf_cache = text_surf
+        text_surf = self._surf_cache
         text_surf.set_alpha(alpha)
         px = int((self.x - camera_x) * scale)
         py = int((self.y - camera_y) * scale)
@@ -1292,6 +1295,7 @@ class FloatingText:
         self.lifetime = lifetime
         self.max_lifetime = lifetime
         self.vy = -1.5
+        self._surf_cache = None
 
     def update(self, dt):
         self.y += self.vy * dt * 60
@@ -1299,7 +1303,9 @@ class FloatingText:
 
     def draw(self, screen, font, camera_x=0, camera_y=0, scale=1.0):
         alpha = int(255 * (self.lifetime / self.max_lifetime))
-        text_surf = font.render(self.text, True, self.color)
+        if self._surf_cache is None:
+            self._surf_cache = font.render(self.text, True, self.color)
+        text_surf = self._surf_cache
         text_surf.set_alpha(alpha)
         px = int((self.x - camera_x) * scale)
         py = int((self.y - camera_y) * scale)
@@ -1392,6 +1398,8 @@ class Particle:
 
 
 class ParticleSystem:
+    MAX_PARTICLES = 1200  # v2.0.9：粒子总数上限，防止大规模AOE/大伤害时粒子爆炸导致卡顿
+
     def __init__(self):
         self.particles = []
         self.death_auras = []
@@ -1422,6 +1430,8 @@ class ParticleSystem:
         except (TypeError, ValueError, IndexError):
             lo, hi = 2, 6
         for _ in range(count):
+            if len(self.particles) >= self.MAX_PARTICLES:
+                return  # 达上限丢弃新增粒子，保证渲染/更新有界
             size = random.randint(lo, hi)
             vx = random.uniform(*velocity_range)
             vy = random.uniform(*velocity_range)
@@ -1430,6 +1440,8 @@ class ParticleSystem:
 
     def spawn_particle(self, x, y, vx, vy, color, lifetime, size):
         """生成单个粒子，带固定速度（用于环形冲击波、拖尾等定向效果）"""
+        if len(self.particles) >= self.MAX_PARTICLES:
+            return
         self.particles.append(Particle(x, y, color, size, (vx, vy), lifetime))
 
     def spawn_explosion(self, x, y, color, count=20):
@@ -1447,6 +1459,8 @@ class ParticleSystem:
         """生成治疗粒子（绿色向上飘动）"""
         count = self._density(count)
         for _ in range(count):
+            if len(self.particles) >= self.MAX_PARTICLES:
+                return
             size = random.randint(3, 7)
             vx = random.uniform(-1.5, 1.5)
             vy = random.uniform(-4, -1.5)
