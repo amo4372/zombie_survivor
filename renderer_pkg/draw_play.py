@@ -254,6 +254,23 @@ class PlayMixin:
 
         # 绘制剧情收集物（故事模式）
         if self.game.config.game_mode == GameMode.STORY:
+            # v2.0.11 幸存者 NPC（青色标记 + 呼吸光圈）
+            npc = getattr(self.game, 'survivor_npc', None)
+            if npc and npc.get("active"):
+                nix = int((npc["x"] - cam_x) * scale)
+                niy = int((npc["y"] - cam_y) * scale)
+                np_pulse = math.sin(pygame.time.get_ticks() / 180) * 0.25 + 1.0
+                np_size = int(14 * scale * np_pulse)
+                np_glow = pygame.Surface((np_size * 4, np_size * 4), pygame.SRCALPHA)
+                pygame.draw.circle(np_glow, (120, 220, 255, 70), (np_size * 2, np_size * 2), np_size * 2)
+                self.screen.blit(np_glow, (nix - np_size * 2, niy - np_size * 2))
+                pygame.draw.circle(self.screen, (120, 220, 255), (nix, niy), np_size, max(1, int(scale)))
+                pygame.draw.circle(self.screen, (200, 240, 255), (nix, niy), int(np_size * 0.6))
+                pygame.draw.circle(self.screen, (60, 120, 160), (nix, niy), max(1, int(2 * scale)))
+                # 头顶"幸存者"标签
+                tag = self.game.font.render("幸存者", True, (120, 220, 255))
+                self.screen.blit(tag, (nix - tag.get_width() // 2, niy - np_size - int(18 * scale)))
+
             for item in self.game.story_fragment_items:
                 ix = int((item["x"] - cam_x) * scale)
                 iy = int((item["y"] - cam_y) * scale)
@@ -566,18 +583,74 @@ class PlayMixin:
             dt_surf = pygame.font.SysFont("arial", max(10, int(12 * scale))).render(dist_text, True, (255, 180, 0))
             self.screen.blit(dt_surf, (int(tx) + 10, int(ty) - 20))
             
-        # =========【新增】成就解锁右上角toast提示 =========
+        # =========【v2.0.11 成就/图鉴解锁 toast：徽章式 + 滑入 + 粒子光效】========
         scale = self.game.scale
+        try:
+            import time as _time
+            _now = _time.time()
+        except Exception:
+            _now = 0
         toast_y = int(20 * scale)
-        for toast in self.game.ach_toast_queue:
-            text = f"成就解锁：{toast['desc']}"
-            surf = self.game.font.render(text, True, GOLD)
-            w,h = surf.get_size()
-            bg_rect = pygame.Rect(int(self.game.scaled_width - w - 20*scale), toast_y, w+20*scale, h+10*scale)
-            pygame.draw.rect(self.screen, (*CHARCOAL[:3], 210), bg_rect, border_radius=6)
-            pygame.draw.rect(self.screen, GOLD, bg_rect, max(1,int(scale)), border_radius=6)
-            self.screen.blit(surf, (bg_rect.x + int(10*scale), bg_rect.y + int(5*scale)))
-            toast_y += int(h+14*scale)
+        for toast in list(self.game.ach_toast_queue):
+            born = toast.get("born", _now)
+            age = _now - born
+            if age < 0:
+                age = 0
+            remain = toast.get("timer", 4.0) - age
+            if remain <= 0:
+                self.game.ach_toast_queue.remove(toast)
+                continue
+            # 滑入动画（前 0.3s 从右滑入）+ 尾部淡出（后 25% 时间）
+            slide = min(1.0, age / 0.3)
+            fade = min(1.0, remain / max(0.001, toast.get("timer", 4.0) * 0.25))
+            alpha = int(235 * min(slide * 1.2, 1.0) * fade)
+            kind = toast.get("kind", "ach")
+            name = toast.get("name", toast.get("desc", "成就"))
+            sub = "成就达成！" if kind != "codex" else "图鉴收录"
+            # 徽章尺寸
+            bw = int(300 * scale)
+            bh = int(64 * scale)
+            bx = int(self.game.scaled_width - bw - 16 * scale) + int((1 - slide) * 60 * scale)
+            by = toast_y
+            # 阴影
+            pygame.draw.rect(self.screen, (0, 0, 0, 110), (bx + 3, by + 4, bw, bh), border_radius=int(12 * scale))
+            # 主体：深色渐变底（两段叠加模拟渐变）
+            pygame.draw.rect(self.screen, (*CHARCOAL, alpha), (bx, by, bw, bh), border_radius=int(12 * scale))
+            pygame.draw.rect(self.screen, (40, 32, 60, alpha), (bx + 2, by + 2, bw - 4, bh - 8), border_radius=int(10 * scale))
+            # 金色边框 + 顶部亮线
+            pygame.draw.rect(self.screen, (*GOLD, alpha), (bx, by, bw, bh), max(1, int(scale)), border_radius=int(12 * scale))
+            pygame.draw.line(self.screen, (255, 230, 150, alpha), (bx + int(14 * scale), by + 2), (bx + bw - int(14 * scale), by + 2), max(1, int(scale)))
+            # 左侧图标区：金色描边圆 + 星形
+            ic = int(26 * scale)
+            cx = bx + int(34 * scale)
+            cy = by + bh // 2
+            pygame.draw.circle(self.screen, (*GOLD, alpha), (cx, cy), ic, max(1, int(scale)))
+            pygame.draw.circle(self.screen, (40, 30, 20, alpha), (cx, cy), ic - max(2, int(scale)))
+            star_r = ic - max(5, int(scale))
+            for k in range(5):
+                ang1 = -1.5708 + k * 1.2566
+                ang2 = ang1 + 0.6283
+                p1 = (cx + int(star_r * 0.92 * math.cos(ang1)), cy + int(star_r * 0.92 * math.sin(ang1)))
+                p2 = (cx + int(star_r * 0.42 * math.cos(ang2)), cy + int(star_r * 0.42 * math.sin(ang2)))
+                p3 = (cx + int(star_r * 0.92 * math.cos(ang1 + 1.2566)), cy + int(star_r * 0.92 * math.sin(ang1 + 1.2566)))
+                pygame.draw.polygon(self.screen, (255, 215, 90, alpha), [p1, p2, p3])
+            # 文字：标题（成就名）+ 副标题
+            title_s = max(14, int(17 * scale))
+            sub_s = max(10, int(12 * scale))
+            t_surf = self.game.font.render(name, True, (255, 230, 160))
+            t_surf.set_alpha(alpha)
+            self.screen.blit(t_surf, (bx + int(72 * scale), by + int(8 * scale)))
+            s_surf = self.game.font.render(sub, True, (200, 200, 210))
+            s_surf.set_alpha(alpha)
+            self.screen.blit(s_surf, (bx + int(72 * scale), by + int(34 * scale)))
+            # 粒子光效：3 颗金色光点沿边框浮动
+            for k in range(3):
+                ph = (_now * 2.2 + k * 2.1) % 1.0
+                px = bx + int(ph * bw)
+                py = by + bh // 2 + int((0.5 - abs(ph - 0.5)) * bh * 1.6)
+                pygame.draw.circle(self.screen, (255, 220, 120, alpha), (px, py), max(1, int(2.2 * scale)))
+            toast_y += int(bh + 10 * scale)
+
 
         # Mod 钩子：自定义HUD渲染
         try:

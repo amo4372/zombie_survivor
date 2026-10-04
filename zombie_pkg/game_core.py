@@ -110,7 +110,11 @@ class Config:
         self.mp_p1_layout = {}  # 双人模式 P1 触控布局（独立于单机）
         self.p2_hud_layout = {}  # 双人模式 P2 触控布局
         self.hud_layout_version = 0  # HUD 布局方案版本：v2.0.6 起=2（双人默认布局大改，旧布局需重置）
-        self.config_file = "config.json"
+        # v2.0.11：配置文件统一存入 data/ 目录，并迁移旧 config.json
+        from .data_io import get_base_dir, get_data_dir, migrate_legacy
+        _base_root = get_base_dir()
+        migrate_legacy(_base_root, "config.json")
+        self.config_file = os.path.join(get_data_dir(_base_root), "config.json")
         self.load()
         # v2.0.6 布局版本升级：旧版双人布局（v2.0.2 前全屏坐标）会堆叠/缺摇杆，重置为默认并持久化
         if self.hud_layout_version < 2:
@@ -437,6 +441,14 @@ class GameCore:
         self.assets.set_sound_volume(self.config.sound_volume)
         self.assets.set_music_volume(self.config.music_volume)
 
+        # v2.0.11：存档路径统一 data/ 专门文件夹（旧平铺存档自动迁移）
+        from .data_io import get_data_dir, migrate_legacy
+        _data_dir = get_data_dir(base_path)
+        migrate_legacy(base_path, "savegame.zss")
+        migrate_legacy(base_path, "savegame.json")
+        self.savegame_path = os.path.join(_data_dir, "savegame.zss")
+        self.savegame_json_path = os.path.join(_data_dir, "savegame.json")
+
         # 全局记录系统
         self.records = GameRecords(base_path)
         # 首张故事地图默认解锁（供局外直接选图）
@@ -452,6 +464,8 @@ class GameCore:
         self._ach_touch_last_y = None
         #成就解锁toast队列
         self.ach_toast_queue = []
+        # v2.0.11 资源完整性自愈请求标记（后台校验置位，主循环消费）
+        self._repair_requested = False
         # 实时成就检查节流计时器
         self._ach_check_timer = 0.0
         #成就返回按钮
@@ -787,6 +801,19 @@ class GameCore:
             if self.state == GameState.PLAYING or self._last_state == GameState.PLAYING:
                 self._reset_touch_state()
         self._last_state = self.state
+
+        # v2.0.11 资源完整性自愈：后台校验发现缺失/损坏 → 自动进入修复（进更新界面）
+        if getattr(self, '_repair_requested', False):
+            self._repair_requested = False
+            self.state = GameState.UPDATE
+            try:
+                import updater as _up
+                _up.repair_assets(
+                    progress_cb=None,
+                    status_cb=lambda s: setattr(self, 'update_status_text', s),
+                )
+            except Exception:
+                self.state = GameState.MENU
 
         # 时间减缓效果
         if hasattr(self, 'time_slow_active') and self.time_slow_active:

@@ -15,3 +15,6 @@ build_encrypted.py
 # 发布包构建产物（上传到 GitHub Releases，不入库）
 releases/
 *.zip
+
+# v2.0.11 玩家数据目录（运行时生成）
+data/

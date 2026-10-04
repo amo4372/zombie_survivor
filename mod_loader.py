@@ -98,7 +98,17 @@ _loaded_mods: List[ModInfo] = []
 _mods_enabled: Dict[str, bool] = {}
 
 # 配置文件路径
-_MODS_CONFIG = os.path.join(os.path.dirname(__file__), "mods_config.json")
+# v2.0.11：mod 配置统一存入 data/ 目录（旧平铺配置自动迁移）
+# v2.0.11：mod 配置统一存入 data/ 目录（旧平铺配置自动迁移；内联避免包循环依赖）
+_SAFE_ROOT = os.path.dirname(os.path.abspath(__file__))
+_MODS_CONFIG = os.path.join(_SAFE_ROOT, "data", "mods_config.json")
+try:
+    os.makedirs(os.path.join(_SAFE_ROOT, "data"), exist_ok=True)
+    _old_cfg = os.path.join(_SAFE_ROOT, "mods_config.json")
+    if os.path.exists(_old_cfg) and not os.path.exists(_MODS_CONFIG):
+        os.replace(_old_cfg, _MODS_CONFIG)
+except Exception:
+    pass
 _MODS_DIR = os.path.join(os.path.dirname(__file__), "mods")
 
 
@@ -214,6 +224,8 @@ def load_mod(mod_path: str) -> Optional[ModInfo]:
         )
         
         # 调用 register 函数
+        # v2.0.11：注入当前 mod id，供 mod_api 数据存储 API 使用
+        mod_api._current_mod_id = mod_id
         try:
             module.register(mod_hooks)
             # 如果 register 中设置了 info 属性
@@ -223,6 +235,7 @@ def load_mod(mod_path: str) -> Optional[ModInfo]:
                 mod_info.author = module.info.get("author", mod_info.author)
                 mod_info.description = module.info.get("description", mod_info.description)
         except Exception as e:
+            mod_api._current_mod_id = None
             print(f"[Mod] {mod_id} register 错误: {e}")
             return None
         
@@ -330,6 +343,7 @@ class ModAPI:
     def __init__(self):
         self._game = None
         self._hooks = mod_hooks
+        self._current_mod_id = None  # v2.0.11：加载中 mod 的 id（数据存储上下文）
     
     def _bind_game(self, game):
         """内部方法：绑定游戏实例"""
@@ -642,6 +656,95 @@ class ModAPI:
 
 
 # 全局 API 实例
+    # === v2.0.11 Mod 数据存储（data/mods/<mod_id>/ 独立目录，随游戏 data/ 统一管理） ===
+    def get_data_dir(self, mod_id=None):
+        """获取本 mod 专属数据目录（data/mods/<mod_id>/），自动创建。
+        不传 mod_id 时使用加载时记录的当前 mod id。"""
+        import os as _os
+        if mod_id is None:
+            mod_id = getattr(self, "_current_mod_id", None) or "unknown"
+        base = _os.path.dirname(_os.path.abspath(__file__))
+        d = _os.path.join(base, "data", "mods", mod_id)
+        try:
+            _os.makedirs(d, exist_ok=True)
+        except Exception:
+            pass
+        return d
+
+    def save_json(self, name, data, mod_id=None):
+        """保存 JSON 数据到本 mod 数据目录（自动补 .json 后缀）。"""
+        import os as _os, json as _json
+        fn = name if name.endswith(".json") else name + ".json"
+        path = _os.path.join(self.get_data_dir(mod_id), fn)
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                _json.dump(data, f, ensure_ascii=False, indent=2)
+            return True
+        except Exception:
+            return False
+
+    def load_json(self, name, default=None, mod_id=None):
+        """读取本 mod 的 JSON 数据；不存在或损坏返回 default（默认 {}）。"""
+        import os as _os, json as _json
+        fn = name if name.endswith(".json") else name + ".json"
+        path = _os.path.join(self.get_data_dir(mod_id), fn)
+        if _os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    return _json.load(f)
+            except Exception:
+                pass
+        return default if default is not None else {}
+
+    def save_file(self, name, data_bytes, mod_id=None):
+        """保存二进制文件到本 mod 数据目录。"""
+        import os as _os
+        path = _os.path.join(self.get_data_dir(mod_id), name)
+        try:
+            with open(path, "wb") as f:
+                f.write(data_bytes)
+            return True
+        except Exception:
+            return False
+
+    def load_file(self, name, mod_id=None):
+        """读取本 mod 的二进制文件；不存在返回 None。"""
+        import os as _os
+        path = _os.path.join(self.get_data_dir(mod_id), name)
+        if _os.path.exists(path):
+            try:
+                with open(path, "rb") as f:
+                    return f.read()
+            except Exception:
+                pass
+        return None
+
+    def list_data(self, mod_id=None):
+        """列出本 mod 数据目录下所有文件。"""
+        import os as _os
+        d = self.get_data_dir(mod_id)
+        try:
+            return sorted(_os.listdir(d))
+        except Exception:
+            return []
+
+
+def get_mod_data_dir(mod_id):
+    """模块级便捷函数：获取指定 mod 的数据目录。"""
+    return mod_api.get_data_dir(mod_id)
+
+
+def save_mod_json(mod_id, name, data):
+    """模块级便捷函数：保存指定 mod 的 JSON 数据。"""
+    return mod_api.save_json(name, data, mod_id=mod_id)
+
+
+def load_mod_json(mod_id, name, default=None):
+    """模块级便捷函数：读取指定 mod 的 JSON 数据。"""
+    return mod_api.load_json(name, default, mod_id=mod_id)
+
+
+
 mod_api = ModAPI()
 # 将全局 API 绑定到全局钩子（mod 注册时即可使用 mod_api）
 mod_hooks.mod_api = mod_api

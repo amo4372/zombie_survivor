@@ -247,6 +247,9 @@ class StoryMixin:
             if current_minute >= trigger_min:
                 self._trigger_special_event(event_name)
 
+        # 3.5 幸存者 NPC（v2.0.11 选项对话）
+        self._update_survivor_npc(current_minute)
+
         # 4. 地图时间到了，切换到下一张地图
         time_limit = self.map_config.get("time_limit", 1200)
         if self.map_time_elapsed >= time_limit:
@@ -322,6 +325,63 @@ class StoryMixin:
         ))
         self.camera.shake(15, 1.0)
         self.assets.play_sound("boss_appear")
+
+    # ========== v2.0.11 幸存者 NPC 选项对话（1/2/3） ==========
+    def _spawn_survivor_npc(self):
+        """在玩家附近刷新一名幸存者 NPC"""
+        angle = random.uniform(0, math.pi * 2)
+        dist = random.uniform(250, 420)
+        self.survivor_npc = {
+            "x": self.player.x + math.cos(angle) * dist,
+            "y": self.player.y + math.sin(angle) * dist,
+            "name": "幸存者",
+            "active": True,
+        }
+        self.floating_texts.append(FloatingText(
+            self.survivor_npc["x"], self.survivor_npc["y"] - 40,
+            "幸存者！", color=(120, 220, 255), lifetime=3.0))
+
+    def _update_survivor_npc(self, current_minute):
+        """更新幸存者 NPC：生成 + 靠近触发对话"""
+        if not hasattr(self, 'survivor_npc') or self.survivor_npc is None:
+            if current_minute >= 0.8:
+                self._spawn_survivor_npc()
+            return
+        npc = self.survivor_npc
+        if not npc.get("active"):
+            return
+        dist = math.hypot(self.player.x - npc["x"], self.player.y - npc["y"])
+        if dist < 70:
+            self._start_survivor_dialogue()
+
+    def _start_survivor_dialogue(self):
+        """幸存者选项对话：1 补给 / 2 情报 / 3 结伴"""
+        npc = self.survivor_npc
+        if not npc or not npc.get("active"):
+            return
+        npc["active"] = False
+        map_lines = {
+            MapType.SCHOOL: "我从教学楼二楼逃出来的，那边已经全是...它们了。",
+            MapType.STREET: "街上的便利店还有吃的，但晚上会有大群游荡。",
+            MapType.DOWNTOWN: "市中心那帮当兵的，听说撤走前炸了桥。",
+            MapType.SUBURB: "郊外那些大个子的变异体，别跟它们硬碰硬。",
+            MapType.NUCLEAR_PLANT: "核电站方向一直有奇怪的绿光...别靠近那里。",
+        }
+        tip = map_lines.get(self.current_map, "这世道，活着就是胜利。")
+        dialogues = [
+            {"speaker": npc.get("name", "幸存者"), "text": "嘘！小声点！你也是活下来的？"},
+            {"speaker": npc.get("name", "幸存者"), "text": tip},
+            {"speaker": npc.get("name", "幸存者"), "text": "你想怎么办？", "choices": [
+                {"text": "给我点吃的（回复生命+40）", "effect": {"type": "heal", "value": 40}},
+                {"text": "打听附近的情报", "effect": {"type": "info", "value": "往北的便利店有个广播站，那边可能还有人。"}},
+                {"text": "一起走（获得30金币）", "effect": {"type": "coin", "value": 30}},
+            ]},
+            {"speaker": npc.get("name", "幸存者"), "text": "（点头）活下去，比什么都强。保重。"},
+        ]
+        self.dialogue.start_dialogue(dialogues, None)
+        self.state = GameState.DIALOGUE
+        self.assets.play_sound("pickup")
+        logger.info("幸存者选项对话开始")
 
     def _advance_to_next_map(self):
         """切换到下一张地图（通关当前地图，解锁下一张）"""
@@ -501,18 +561,54 @@ class StoryMixin:
         return -1
 
     def _apply_choice_effect(self, effect):
-        ending_map = {
-            "save_both": "perfect",
-            "save_long": "save_long",
-            "save_xiang": "save_xiang",
-            "save_none": "tragic",
-            "kill_both": "kill_both",
-            "let_go": "let_go"
-        }
-        self.ending_type = ending_map.get(effect, "kill_both")
-        # 记录结局
-        if self.session:
-            self.session.set_ending(self.ending_type)
+        """应用对话选项效果（v2.0.11：支持字符串结局 / dict 通用效果）"""
+        if not effect:
+            return
+        # 旧式结局字符串（兼容）
+        if isinstance(effect, str):
+            ending_map = {
+                "save_both": "perfect",
+                "save_long": "save_long",
+                "save_xiang": "save_xiang",
+                "save_none": "tragic",
+                "kill_both": "kill_both",
+                "let_go": "let_go"
+            }
+            self.ending_type = ending_map.get(effect, "kill_both")
+            if self.session:
+                self.session.set_ending(self.ending_type)
+            return
+        # v2.0.11 通用效果字典
+        if isinstance(effect, dict):
+            et = effect.get("type", "")
+            val = effect.get("value", 0)
+            try:
+                if et == "ending":
+                    self.ending_type = str(val)
+                    if self.session:
+                        self.session.set_ending(self.ending_type)
+                    logger.info(f"对话结局: {self.ending_type}")
+                elif et == "heal" and self.player:
+                    amt = int(val)
+                    self.player.heal(amt)
+                    self.floating_texts.append(FloatingText(
+                        self.player.x, self.player.y - 50, f"+{amt} 生命", color=(80, 255, 120), lifetime=2.0))
+                    self.assets.play_sound("pickup")
+                elif et == "coin" and self.records:
+                    amt = int(val)
+                    self.records.add_coins(amt)
+                    self.floating_texts.append(FloatingText(
+                        self.player.x, self.player.y - 50,
+                        f"+{amt} 金币" if amt >= 0 else f"{amt} 金币", color=GOLD, lifetime=2.0))
+                    self.assets.play_sound("coin")
+                elif et == "info":
+                    msg = str(val)
+                    self.floating_texts.append(FloatingText(
+                        self.player.x, self.player.y - 60, msg, color=CYAN, lifetime=3.5))
+                elif et == "buff" and self.player:
+                    self.player.apply_buff(str(val), effect.get("duration", 10.0))
+            except Exception as e:
+                logger.warning(f"对话效果应用失败: {e}")
 
     # ========== 技能系统 ==========
     # 传说级武器 → 专属技能映射（持有对应武器自动解锁，等级随武器等级成长）

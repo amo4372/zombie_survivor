@@ -11,7 +11,12 @@ logger = GameLogger()
 class GameRecords:
     """全局游戏记录管理器 - 持久化存储所有游戏数据"""
     def __init__(self, base_path="."):
-        self.file_path = os.path.join(base_path, RECORDS_FILE)
+        # v2.0.11：存档统一存入游戏根 data/ 专门文件夹（旧平铺存档自动迁移）
+        from zombie_pkg.data_io import get_data_dir, migrate_legacy
+        if base_path == ".":
+            base_path = os.path.dirname(os.path.abspath(__file__))
+        migrate_legacy(base_path, RECORDS_FILE)
+        self.file_path = os.path.join(get_data_dir(base_path), RECORDS_FILE)
         self.data = self._load()
         self._ensure_structure()
 

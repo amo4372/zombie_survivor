@@ -241,13 +241,13 @@ class RecordsMixin:
             # 加密保存（多层加密）
             json_bytes = json.dumps(save_data, ensure_ascii=False, indent=2).encode('utf-8')
             encrypted = _save_encrypt(json_bytes)
-            with open("savegame.zss", "wb") as f:
+            with open(self.savegame_path, "wb") as f:
                 f.write(encrypted)
             # 删除旧的明文存档（如果存在）
             import os
-            if os.path.exists("savegame.json"):
+            if os.path.exists(self.savegame_json_path):
                 try:
-                    os.remove("savegame.json")
+                    os.remove(self.savegame_json_path)
                 except:
                     pass
             logger.info(f"对局状态已加密保存 ({len(json_bytes)}B -> {len(encrypted)}B)")
@@ -329,7 +329,7 @@ class RecordsMixin:
     def has_saved_game(self):
         """检查是否存在存档（优先加密存档，兼容明文旧存档）"""
         import os
-        return os.path.exists("savegame.zss") or os.path.exists("savegame.json")
+        return os.path.exists(self.savegame_path) or os.path.exists(self.savegame_json_path)
 
     def load_game_state(self):
         """加载存档并开始游戏（从存档恢复）"""
@@ -339,8 +339,8 @@ class RecordsMixin:
                 return False
             import os
             # 优先加载加密存档，兼容明文旧存档
-            if os.path.exists("savegame.zss"):
-                with open("savegame.zss", "rb") as f:
+            if os.path.exists(self.savegame_path):
+                with open(self.savegame_path, "rb") as f:
                     encrypted = f.read()
                 try:
                     decrypted = _save_decrypt(encrypted)
@@ -349,14 +349,14 @@ class RecordsMixin:
                 except Exception as e:
                     logger.log_exception(e)
                     logger.error("加密存档解密失败，尝试明文存档")
-                    if os.path.exists("savegame.json"):
-                        with open("savegame.json", "r", encoding="utf-8") as f:
+                    if os.path.exists(self.savegame_json_path):
+                        with open(self.savegame_json_path, "r", encoding="utf-8") as f:
                             save_data = json.load(f)
                     else:
                         return False
             else:
                 # 明文旧存档
-                with open("savegame.json", "r", encoding="utf-8") as f:
+                with open(self.savegame_json_path, "r", encoding="utf-8") as f:
                     save_data = json.load(f)
                 logger.info("加载明文旧存档")
             
@@ -544,7 +544,7 @@ class RecordsMixin:
     def delete_saved_game(self):
         """删除存档（游戏结束时调用）- 同时删除加密和明文存档"""
         import os
-        for save_file in ["savegame.zss", "savegame.json"]:
+        for save_file in [self.savegame_path, self.savegame_json_path]:
             try:
                 if os.path.exists(save_file):
                     os.remove(save_file)
@@ -558,7 +558,8 @@ class RecordsMixin:
             desc = ach.get("desc", key)
             # 实时弹出成就toast（右上角弹窗）
             try:
-                self.ach_toast_queue.append({"key": key, "desc": desc, "timer": 4.0})
+                self.ach_toast_queue.append({"key": key, "name": desc, "desc": desc,
+                                            "timer": 4.0, "kind": "ach", "born": time.time()})
             except Exception:
                 pass
             self.floating_texts.append(FloatingText(self.player.x, self.player.y - 60,
@@ -1053,4 +1054,5 @@ class RecordsMixin:
     def _codex_unlock_toast(self, unlocked, label):
         """图鉴新解锁时实时弹出提示"""
         if unlocked:
-            self.ach_toast_queue.append({"key": "codex", "desc": f"图鉴解锁: {label}", "timer": 3.0})
+            self.ach_toast_queue.append({"key": "codex", "name": label, "desc": "已收录进图鉴",
+                                            "timer": 3.0, "kind": "codex", "born": time.time()})

@@ -9,7 +9,7 @@ MOD_DESCRIPTION = "敌人血量减半，玩家伤害翻倍，适合新手体验"
 
 
 def register(hooks):
-    """注册 mod 钩子"""
+    """注册 mod 钩子（hooks 为 ModHook 实例，v2.0.11 起可通过 hooks.mod_api 使用数据存储）"""
     
     def on_enemy_spawn(enemy):
         """敌人生成时血量减半"""
@@ -25,3 +25,13 @@ def register(hooks):
     hooks.register("on_player_damage", on_player_damage)
     
     print("[弱鸡模式] Mod 已加载 - 敌人血量减半，玩家受伤减半")
+
+    # === v2.0.11 演示：mod 数据存储（自动存到 data/mods/example_mod/） ===
+    try:
+        api = hooks.mod_api
+        stats = api.load_json("stats", default={"runs": 0})
+        stats["runs"] = stats.get("runs", 0) + 1
+        api.save_json("stats", stats)
+        print(f"[弱鸡模式] 数据存储演示: 第 {stats['runs']} 次运行")
+    except Exception as e:
+        print(f"[弱鸡模式] 数据存储演示失败: {e}")

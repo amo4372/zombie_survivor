@@ -183,7 +183,10 @@ def create_zip(version, files, changelog=""):
     # 生成完整性清单（覆盖全部打包文件）
     manifest = {"version": version, "files": {}}
     for full_path, rel_path in files:
-        manifest["files"][rel_path.replace(os.sep, "/")] = {
+        rel_s = rel_path.replace(os.sep, "/")
+        if rel_s == "assets/manifest.json":
+            continue  # 自引用：manifest 不校验自身
+        manifest["files"][rel_s] = {
             "md5": _md5(full_path),
             "size": os.path.getsize(full_path),
         }
@@ -200,6 +203,12 @@ def create_zip(version, files, changelog=""):
             zf.write(full_path, arcname)
             print(f"  [打包] {rel_path}")
     os.unlink(tmp_manifest.name)
+    # v2.0.11：同时写入本地 assets/manifest.json（开发/校验环境可用，已 gitignore）
+    try:
+        with open(os.path.join(PROJECT_DIR, "assets", "manifest.json"), "w", encoding="utf-8") as f:
+            json.dump(manifest, f, ensure_ascii=False)  # 与 zip 内 manifest 字节一致
+    except Exception:
+        pass
     print(f"  [清单] manifest.json ({len(manifest['files'])} 个文件 MD5+大小)")
 
     size_mb = os.path.getsize(zip_path) / (1024 * 1024)

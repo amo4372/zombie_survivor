@@ -285,6 +285,10 @@ def verify_assets(game_dir=None, manifest_rel="assets/manifest.json"):
         return missing, corrupted, "bad_manifest"
     entries = manifest.get("files", manifest)
     for rel, info in entries.items():
+        # v2.0.11：_pkg_compat.zip 是发布期"旧版更新器兼容自愈包"，仅存在于发布 zip，
+        # 本地/运行环境缺失属正常（游戏运行时包目录已存在），不计入完整性校验
+        if rel == "assets/_pkg_compat.zip":
+            continue
         fp = os.path.join(game_dir, rel)
         if not os.path.isfile(fp):
             missing.append(rel)
@@ -665,6 +669,60 @@ def perform_full_update(progress_cb=None, status_cb=None):
         restart_game()
 
     thread = threading.Thread(target=_update_thread, daemon=True)
+    thread.start()
+    return thread
+
+
+def repair_assets(progress_cb=None, status_cb=None):
+    """v2.0.11 资源完整性自愈：校验 manifest，缺失/损坏则自动下载完整包并应用补全。
+    复用下载缓存/断点续传，应用后重新校验并重启生效。在后台线程中运行。
+    """
+    def _repair_thread():
+        global UPDATE_STATE
+        try:
+            if status_cb:
+                status_cb("正在校验资源完整性...")
+            missing, corrupted, st = verify_assets()
+            if st == "ok" and not missing and not corrupted:
+                if status_cb:
+                    status_cb("资源完整，无需修复")
+                return
+            if status_cb:
+                status_cb(f"检测到 {len(missing)} 个缺失 / {len(corrupted)} 个损坏，正在下载修复包...")
+            # 下载最新发布包（不要求版本新于当前，仅用于补全缺失资源）
+            latest = check_for_updates(timeout=10)
+            if not latest:
+                if status_cb:
+                    status_cb(UPDATE_STATE.get("error", "获取修复包失败，请检查网络"))
+                return
+            _, download_url, _changelog = latest
+            zip_path = download_update(download_url, progress_callback=progress_cb)
+            if not zip_path:
+                if status_cb:
+                    status_cb(UPDATE_STATE.get("error", "下载修复包失败"))
+                return
+            if UPDATE_STATE.get("cache_reused"):
+                if status_cb:
+                    status_cb("已复用已下载的完整包，正在应用补全...")
+            elif status_cb:
+                status_cb("修复包下载完成，正在应用补全...")
+            success, count, new_version, pending_count = extract_and_apply_update(zip_path)
+            if not success:
+                if status_cb:
+                    status_cb(UPDATE_STATE.get("error", "应用修复失败"))
+                return
+            m2, c2, _st2 = verify_assets()
+            if status_cb:
+                status_cb(f"资源修复完成：缺失 {len(m2)} / 损坏 {len(c2)}，即将重启生效")
+            cleanup_cache()
+            time.sleep(2)
+            restart_game()
+        except Exception as e:
+            UPDATE_STATE["error"] = f"修复异常: {e}"
+            if status_cb:
+                status_cb(UPDATE_STATE["error"])
+
+    thread = threading.Thread(target=_repair_thread, daemon=True)
     thread.start()
     return thread
 

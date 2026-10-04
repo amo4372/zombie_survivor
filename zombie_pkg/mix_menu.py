@@ -195,6 +195,9 @@ class MenuMixin:
                     missing, corrupted, status = _up.verify_assets()
                     if status == "ok" and (missing or corrupted):
                         self.asset_issues = (missing[:5], corrupted[:5])
+                        # v2.0.11 资源完整性自愈：不完整 → 自动进入修复（跳过版本弹窗）
+                        self._repair_requested = True
+                        return
                 except Exception:
                     pass
                 # 2) 自动检查新版本
