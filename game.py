@@ -105,6 +105,7 @@ class Config:
         self.render_buff_effects = True  # 是否渲染buff等额外效果
         self.graphics_quality = "balanced"  # performance / balanced / quality
         self.enable_logging = True      # 游戏日志开关（用户可选）
+        self.update_auto_check = True   # 启动时自动检查更新并弹窗提示（用户可选）
         self.hud_layout = {}  # HUD触控按钮自定义布局：{控件名: [base_x, base_y]}（单机模式）
         self.mp_p1_layout = {}  # 双人模式 P1 触控布局（独立于单机）
         self.p2_hud_layout = {}  # 双人模式 P2 触控布局
@@ -139,6 +140,7 @@ class Config:
                     self.render_buff_effects = data.get("render_buff_effects", True)
                     self.graphics_quality = data.get("graphics_quality", "balanced")
                     self.enable_logging = data.get("enable_logging", True)
+                    self.update_auto_check = data.get("update_auto_check", True)
                     _hl = data.get("hud_layout", {})
                     if isinstance(_hl, dict):
                         self.hud_layout = {k: list(v) for k, v in _hl.items() if isinstance(v, (list, tuple)) and len(v) == 2}
@@ -165,6 +167,7 @@ class Config:
             "render_buff_effects": self.render_buff_effects,
             "graphics_quality": self.graphics_quality,
             "enable_logging": self.enable_logging,
+            "update_auto_check": self.update_auto_check,
             "hud_layout": self.hud_layout,
             "mp_p1_layout": self.mp_p1_layout,
             "p2_hud_layout": self.p2_hud_layout,
@@ -226,6 +229,15 @@ class Game:
             base_path = os.path.dirname(sys.executable)
         else:
             base_path = os.path.dirname(os.path.abspath(__file__))
+        # v2.0.8：启动时先应用上次更新被占用而延迟替换的文件（字体/音频等），
+        # 必须在 FontManager 加载任何字体之前执行，避免 ttf 被旧文件占用导致热更新失败
+        try:
+            _pending = updater.apply_pending_updates(base_path)
+            if _pending > 0:
+                logger.info(f"已应用 {_pending} 个延迟替换文件（上次更新被占用）")
+        except Exception as e:
+            logger.warning(f"应用延迟替换失败: {e}")
+
         FontManager.init(base_path)
 
         self.config = Config()
@@ -353,6 +365,9 @@ class Game:
         self.dev_buttons = []            # 局内调试面板按钮
         self._DEV_PASSWORD = "dev4372"   # 开发者密码
         self.update_status_text = ""     # 主菜单提示文本
+        self.update_notice = None        # 自动检查发现的新版本弹窗 (latest_version, changelog)
+        self.update_notice_dismissed = False  # 用户已点"稍后"
+        self.asset_issues = None        # 资源完整性检查结果 (missing, corrupted) 或 None
 
         #键鼠相关【新版：Tab/R只有短按；G支持短按快放 / 长按瞄准】
         self.key_g_press_start = 0.0
@@ -1160,6 +1175,57 @@ class Game:
         except Exception:
             pass
 
+    def _start_auto_update_check(self):
+        """启动时后台检查更新 + 资源完整性（不阻塞进入菜单）"""
+        def _worker():
+            try:
+                # 1) 资源完整性校验（后台）
+                try:
+                    import updater as _up
+                    missing, corrupted, status = _up.verify_assets()
+                    if status == "ok" and (missing or corrupted):
+                        self.asset_issues = (missing[:5], corrupted[:5])
+                except Exception:
+                    pass
+                # 2) 自动检查新版本
+                if not self.config.update_auto_check:
+                    return
+                if self.update_notice_dismissed:
+                    return
+                try:
+                    import updater as _up
+                    _up.clear_release_notes_cache()
+                    result = _up.check_for_updates(timeout=8)
+                    if result:
+                        latest, url, changelog = result
+                        if _up.is_newer_version(latest, self.current_version_str):
+                            self.update_notice = (latest, changelog)
+                except Exception:
+                    pass
+            except Exception:
+                pass
+        import threading
+        t = threading.Thread(target=_worker, daemon=True)
+        t.start()
+
+    def _dismiss_update_notice(self):
+        """用户点『稍后』：本次运行不再弹窗"""
+        self.update_notice_dismissed = True
+        self.update_notice = None
+
+    def _apply_update_now(self):
+        """用户点『立即更新』：进入更新界面并自动开始下载应用"""
+        self.update_notice = None
+        self.state = GameState.UPDATE
+        try:
+            import updater as _up
+            _up.perform_full_update(
+                progress_cb=None,
+                status_cb=lambda s: setattr(self, 'update_status_text', s),
+            )
+        except Exception:
+            pass
+
     def _setup_menus(self):
         cx = BASE_WIDTH // 2 - 100
         self.menu_buttons = [
@@ -1270,6 +1336,11 @@ class Game:
         self.update_notes_text = "正在加载更新说明..."
         self.current_version_str = updater.get_current_version()
         logger.info("菜单按钮初始化完成")
+        # v2.0.8：启动时自动检查更新（后台线程，不阻塞菜单）
+        try:
+            self._start_auto_update_check()
+        except Exception:
+            pass
 
     def save_game_state(self):
         """保存当前对局状态到文件（退出时自动调用）"""

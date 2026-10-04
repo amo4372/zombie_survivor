@@ -22,8 +22,9 @@ GITHUB_USER = "amo4372"
 GITHUB_REPO = "zombie_survivor"  # 仓库名，可根据实际修改
 GH_PROXY = "https://gh-proxy.com/"
 VERSION_FILE = "version.txt"
-UPDATE_CACHE_DIR = "_update_cache"
-BACKUP_DIR = "_update_backup"
+_UPDATER_DIR = os.path.dirname(os.path.abspath(__file__))
+UPDATE_CACHE_DIR = os.path.join(_UPDATER_DIR, "_update_cache")
+BACKUP_DIR = os.path.join(_UPDATER_DIR, "_update_backup")
 
 # 更新状态
 UPDATE_STATE = {
@@ -38,6 +39,11 @@ UPDATE_STATE = {
     "download_speed": 0,  # bytes/s
     "downloaded_bytes": 0,
     "total_bytes": 0,
+    "apply_progress": 0.0,   # 应用阶段进度 0-1
+    "apply_phase": "",       # 应用阶段文字（解压/写入/校验）
+    "applied_count": 0,
+    "pending_count": 0,      # 延迟替换文件数（被占用，重启后生效）
+    "cache_reused": False,   # 是否复用了已下载的缓存包
     "error": None,
     "changelog": "",
     "download_url": "",
@@ -166,37 +172,210 @@ def check_for_updates(timeout=10):
     return None
 
 
-def download_update(download_url, progress_callback=None):
+USER_DATA_FILES = {
+    "config.json", "game_records.json", "game_records.zss", "savegame.json", "savegame.zss",
+    "codex_unlocks.json", "mods_config.json", "skill_tree_unlock.json",
+    "game_log.txt", "_update_cache", "_update_backup", "releases", "dist_encrypted",
+    "__pycache__", ".git",
+}
+
+
+def _compute_md5(file_path, chunk=65536):
+    """计算文件 MD5（十六进制小写）"""
+    import hashlib
+    h = hashlib.md5()
+    with open(file_path, "rb") as f:
+        while True:
+            data = f.read(chunk)
+            if not data:
+                break
+            h.update(data)
+    return h.hexdigest()
+
+
+def apply_pending_updates(game_dir=None):
+    """启动时把被占用而延迟替换的文件（*.pending_update）替换到位。
+
+    游戏主进程在加载字体/音频等资产前调用；返回替换成功的文件数。
     """
-    下载更新包，带进度条
+    if game_dir is None:
+        game_dir = os.path.dirname(os.path.abspath(__file__))
+    replaced = 0
+    for root, dirs, files in os.walk(game_dir):
+        dirs[:] = [d for d in dirs if d not in ("_update_cache", "_update_backup", "__pycache__", ".git")]
+        for fname in files:
+            if fname.endswith(".pending_update"):
+                pending_path = os.path.join(root, fname)
+                target_path = pending_path[: -len(".pending_update")]
+                try:
+                    os.makedirs(os.path.dirname(target_path), exist_ok=True)
+                    os.replace(pending_path, target_path)
+                    replaced += 1
+                except Exception:
+                    try:
+                        os.remove(pending_path)
+                    except Exception:
+                        pass
+    return replaced
+
+
+def _write_retry(dst, data, retries=3):
+    """写文件，遇占用/权限错误重试；仍失败则写 *.pending_update 延迟替换（Windows 字体/音频占用兜底）。
+
+    返回 "ok" 或 "pending"。
+    """
+    last_err = None
+    for attempt in range(retries):
+        try:
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            tmp = dst + ".tmp_write"
+            with open(tmp, "wb") as f:
+                f.write(data)
+            os.replace(tmp, dst)
+            return "ok"
+        except (PermissionError, OSError) as e:
+            last_err = e
+            if attempt < retries - 1:
+                time.sleep(0.5)
+    # 仍失败：写延迟替换文件（不抛错，重启后生效）
+    try:
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        pending = dst + ".pending_update"
+        with open(pending, "wb") as f:
+            f.write(data)
+        return "pending"
+    except Exception:
+        raise PermissionError(
+            f"无法写入文件: {dst}\n原因: {last_err}\n"
+            f"请尝试：1.完全退出游戏后重新更新 2.以管理员身份运行 3.关闭杀毒软件实时保护/添加白名单"
+        )
+
+
+def _zip_entry_rel(name, prefix):
+    """把 zip 内条目名转换为相对游戏目录路径（剥掉顶层版本目录前缀）"""
+    rel = name
+    if prefix and rel.startswith(prefix):
+        rel = rel[len(prefix):]
+    return rel.lstrip("/\\")
+
+
+def _detect_zip_prefix(names):
+    """探测 zip 顶层目录前缀（如 zombie_survivor_v2.0.8/），无则返回空串"""
+    for name in names:
+        if name.endswith("/"):
+            continue
+        first_seg = name.split("/", 1)[0]
+        if "/" in name and (("zombie" in first_seg.lower()) or ("_v" in first_seg.lower()) or first_seg.endswith("_v")):
+            return first_seg + "/"
+    return ""
+
+
+def verify_assets(game_dir=None, manifest_rel="assets/manifest.json"):
+    """资源完整性校验：读 manifest.json（相对路径→md5），返回 (缺失列表, 损坏列表)"""
+    if game_dir is None:
+        game_dir = os.path.dirname(os.path.abspath(__file__))
+    manifest_path = os.path.join(game_dir, manifest_rel)
+    missing, corrupted = [], []
+    if not os.path.exists(manifest_path):
+        return missing, corrupted, "no_manifest"
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            manifest = json.load(f)
+    except Exception:
+        return missing, corrupted, "bad_manifest"
+    entries = manifest.get("files", manifest)
+    for rel, info in entries.items():
+        fp = os.path.join(game_dir, rel)
+        if not os.path.isfile(fp):
+            missing.append(rel)
+            continue
+        if isinstance(info, dict) and info.get("md5"):
+            try:
+                if _compute_md5(fp) != info["md5"]:
+                    corrupted.append(rel)
+            except Exception:
+                corrupted.append(rel)
+    return missing, corrupted, "ok"
+
+
+def _zip_is_complete(zip_path, expect_version=None):
+    """校验缓存 zip 完整可用（结构 + 版本匹配）。返回 bool"""
+    try:
+        if not os.path.isfile(zip_path):
+            return False
+        if not zipfile.is_zipfile(zip_path):
+            return False
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            if zf.testzip() is not None:
+                return False
+            if expect_version is not None:
+                prefix = _detect_zip_prefix(zf.namelist())
+                for name in zf.namelist():
+                    if name.endswith("version.txt"):
+                        try:
+                            content = zf.read(name).decode("utf-8", "ignore").strip()
+                            if content.lstrip("v") == expect_version.lstrip("v"):
+                                return True
+                        except Exception:
+                            return False
+                        break
+                return False
+        return True
+    except Exception:
+        return False
+
+
+def download_update(download_url, progress_callback=None, version=None):
+    """
+    下载更新包，带进度条；支持复用已下载缓存、断点续传（.part）。
     返回: 下载的文件路径 或 None
     """
     global UPDATE_STATE
     UPDATE_STATE["downloading"] = True
     UPDATE_STATE["download_progress"] = 0.0
+    UPDATE_STATE["cache_reused"] = False
     UPDATE_STATE["error"] = None
 
     try:
-        # 确保缓存目录存在
         os.makedirs(UPDATE_CACHE_DIR, exist_ok=True)
-        output_path = os.path.join(UPDATE_CACHE_DIR, "update_package.zip")
+        ver_suffix = version or get_current_version()
+        output_path = os.path.join(UPDATE_CACHE_DIR, f"update_package_v{ver_suffix}.zip")
+        part_path = output_path + ".part"
 
-        # 走代理
+        # 1) 缓存复用：已有完整且版本匹配的包 → 直接返回，不重复下载
+        if _zip_is_complete(output_path, expect_version=ver_suffix):
+            UPDATE_STATE["downloading"] = False
+            UPDATE_STATE["download_progress"] = 1.0
+            UPDATE_STATE["cache_reused"] = True
+            UPDATE_STATE["total_bytes"] = os.path.getsize(output_path)
+            UPDATE_STATE["downloaded_bytes"] = UPDATE_STATE["total_bytes"]
+            return output_path
+
+        # 2) 断点续传：复用已下载的部分文件
         proxied_url = _gh_proxy_url(download_url)
-
-        req = urllib.request.Request(proxied_url, headers={
-            "User-Agent": "ZombieSurvivor-Updater/1.0",
-        })
-
+        headers = {"User-Agent": "ZombieSurvivor-Updater/1.0"}
+        resume_from = 0
+        if os.path.exists(part_path) and os.path.getsize(part_path) > 0:
+            resume_from = os.path.getsize(part_path)
+            headers["Range"] = f"bytes={resume_from}-"
+            # 目标为最终 zip 时直接续写 part
+        req = urllib.request.Request(proxied_url, headers=headers)
         with urllib.request.urlopen(req, timeout=60) as resp:
             total_size = int(resp.headers.get('Content-Length', 0))
+            if resp.status == 206:
+                total_size = resume_from + total_size
+            elif resp.status == 200 and resume_from > 0:
+                # 服务端不支持 Range，重下
+                resume_from = 0
+                total_size = int(resp.headers.get('Content-Length', 0))
             UPDATE_STATE["total_bytes"] = total_size
-            downloaded = 0
+            downloaded = resume_from
             start_time = time.time()
             last_update = start_time
             chunk_size = 8192
 
-            with open(output_path, 'wb') as f:
+            mode = "ab" if (resume_from > 0 and resp.status == 206) else "wb"
+            with open(part_path, mode) as f:
                 while True:
                     chunk = resp.read(chunk_size)
                     if not chunk:
@@ -204,31 +383,30 @@ def download_update(download_url, progress_callback=None):
                     f.write(chunk)
                     downloaded += len(chunk)
                     UPDATE_STATE["downloaded_bytes"] = downloaded
-
-                    # 计算进度和速度
                     if total_size > 0:
                         progress = downloaded / total_size
                         UPDATE_STATE["download_progress"] = progress
-
-                        # 每秒更新一次速度
                         now = time.time()
                         if now - last_update >= 0.5:
                             elapsed = now - start_time
                             if elapsed > 0:
                                 UPDATE_STATE["download_speed"] = int(downloaded / elapsed)
                             last_update = now
-
-                        # 调用回调
                         if progress_callback:
                             try:
                                 progress_callback(progress, downloaded, total_size)
-                            except:
+                            except Exception:
                                 pass
                         if _progress_callback:
                             try:
                                 _progress_callback(progress, downloaded, total_size)
-                            except:
+                            except Exception:
                                 pass
+
+        # 3) 完整性校验后重命名
+        if not _zip_is_complete(part_path):
+            raise Exception("下载的更新包不完整（MD5/结构校验失败），将重新下载")
+        os.replace(part_path, output_path)
 
         UPDATE_STATE["downloading"] = False
         UPDATE_STATE["download_progress"] = 1.0
@@ -239,137 +417,147 @@ def download_update(download_url, progress_callback=None):
         UPDATE_STATE["downloading"] = False
         return None
 
-
-def extract_and_apply_update(zip_path, game_dir=None):
+def extract_and_apply_update(zip_path, game_dir=None, progress_cb=None):
     """
-    解压更新包并应用（热更新）
-    策略：备份当前文件 -> 解压新文件覆盖 -> 验证 -> 删除备份
+    解压更新包并全量镜像应用（热更新）
+    - 全量镜像：zip 内全部文件（除用户数据）逐文件写入，任何目录/文件类型都覆盖
+    - 占用兜底：字体/音频等被进程占用时写入 *.pending_update，重启后替换
+    - 清理旧 .py：删除新版 zip 中已不存在的旧版顶层 .py（避免旧逻辑更新不全的残留）
+    - 进度：apply_progress（0-1）+ 阶段文字
     """
     global UPDATE_STATE
     UPDATE_STATE["extracting"] = True
+    UPDATE_STATE["apply_progress"] = 0.0
+    UPDATE_STATE["apply_phase"] = "正在解压更新包..."
     UPDATE_STATE["error"] = None
+    UPDATE_STATE["pending_count"] = 0
 
     if game_dir is None:
         game_dir = os.path.dirname(os.path.abspath(__file__))
 
     try:
-        # 1. 备份当前关键文件
-        backup_path = os.path.join(game_dir, BACKUP_DIR)
-        if os.path.exists(backup_path):
-            shutil.rmtree(backup_path, ignore_errors=True)
-        os.makedirs(backup_path, exist_ok=True)
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            names = zf.namelist()
+            prefix = _detect_zip_prefix(names)
+            file_entries = [(n, _zip_entry_rel(n, prefix)) for n in names if not n.endswith("/")]
+            # 过滤用户数据
+            file_entries = [(n, rel) for n, rel in file_entries
+                            if rel not in USER_DATA_FILES
+                            and not rel.startswith("_update_cache")
+                            and not rel.startswith("_update_backup")
+                            and not rel.startswith("__pycache__")
+                            and not rel.startswith("releases")
+                            and not rel.startswith("dist_encrypted")
+                            and not rel.startswith(".git")]
+            total = max(1, len(file_entries))
+            applied_count = 0
+            pending_count = 0
 
-        def _copy_retry(src, dst, retries=3):
-            """复制文件，遇到占用/权限错误重试（等待文件解锁），仍失败则给出明确中文原因"""
-            last_err = None
-            for attempt in range(retries):
+            # 阶段1：解压校验（读取所有条目，快速校验 zip 完整）
+            UPDATE_STATE["apply_phase"] = "正在校验更新包..."
+            for i, (name, rel) in enumerate(file_entries):
                 try:
-                    os.makedirs(os.path.dirname(dst), exist_ok=True)
-                    shutil.copy2(src, dst)
-                    return True
-                except (PermissionError, OSError) as e:
-                    last_err = e
-                    if attempt < retries - 1:
-                        time.sleep(0.6)
-            raise PermissionError(
-                f"无法写入文件: {dst}\n"
-                f"原因: {last_err}\n"
-                f"请依次尝试：\n"
-                f"1. 完全退出游戏后重新点击「下载并更新」\n"
-                f"2. 以管理员身份运行游戏再更新\n"
-                f"3. 检查游戏目录/文件是否被设为『只读』，或 U 盘/移动硬盘的写保护开关\n"
-                f"4. 临时关闭杀毒软件/Windows Defender 实时保护（或添加游戏目录白名单）\n"
-                f"5. 检查 F 盘剩余空间与磁盘状态（可运行 chkdsk F: 检查）"
-            )
+                    zf.read(name)
+                except Exception as e:
+                    raise Exception(f"更新包损坏: {name} ({e})")
+                if i % 40 == 0:
+                    UPDATE_STATE["apply_progress"] = 0.15 * (i / total)
 
-        # 备份所有.py文件、version.txt 与资源目录(assets)
-        backup_files = []
-        for f in os.listdir(game_dir):
-            fpath = os.path.join(game_dir, f)
-            if os.path.isfile(fpath) and (f.endswith('.py') or f == 'version.txt'):
-                shutil.copy2(fpath, os.path.join(backup_path, f))
-                backup_files.append(f)
-        # 备份资源目录（供回滚），存在才备份
-        src_assets = os.path.join(game_dir, "assets")
-        if os.path.isdir(src_assets):
-            dst_assets = os.path.join(backup_path, "assets")
-            shutil.copytree(src_assets, dst_assets, dirs_exist_ok=True)
+            # 阶段2前：备份小文件（.py/version.txt/manifest）供异常回滚
+            backup_path = os.path.join(game_dir, BACKUP_DIR)
+            if os.path.exists(backup_path):
+                shutil.rmtree(backup_path, ignore_errors=True)
+            os.makedirs(backup_path, exist_ok=True)
+            for _name, _rel in file_entries:
+                if _rel.endswith((".py",)) or _rel == "version.txt" or _rel == "manifest.json":
+                    _src = os.path.join(game_dir, _rel)
+                    if os.path.isfile(_src):
+                        try:
+                            os.makedirs(os.path.join(backup_path, os.path.dirname(_rel)), exist_ok=True)
+                            shutil.copy2(_src, os.path.join(backup_path, _rel))
+                        except Exception:
+                            pass
 
-        # 2. 解压更新包到临时目录
-        temp_dir = tempfile.mkdtemp(prefix="zombie_update_")
-        with zipfile.ZipFile(zip_path, 'r') as zf:
-            zf.extractall(temp_dir)
-
-        # 3. 找到更新包中的游戏文件（可能在子目录中）
-        update_files_dir = temp_dir
-        # 检查是否有子目录包含.py文件
-        for root, dirs, files in os.walk(temp_dir):
-            py_files = [f for f in files if f.endswith('.py')]
-            if py_files:
-                update_files_dir = root
-                break
-
-        # 4. 复制新文件覆盖
-        applied_count = 0
-        for f in os.listdir(update_files_dir):
-            src = os.path.join(update_files_dir, f)
-            dst = os.path.join(game_dir, f)
-            if os.path.isfile(src):
-                # 只覆盖.py、version.txt、.md 等文本文件，避免覆盖用户存档
-                if f.endswith('.py') or f == 'version.txt' or f.endswith('.md'):
-                    _copy_retry(src, dst)
+            # 阶段2：全量镜像写入
+            UPDATE_STATE["apply_phase"] = "正在写入文件..."
+            new_rel_set = set()
+            for i, (name, rel) in enumerate(file_entries):
+                data = zf.read(name)
+                dst = os.path.join(game_dir, rel)
+                res = _write_retry(dst, data)
+                if res == "pending":
+                    pending_count += 1
+                else:
                     applied_count += 1
+                new_rel_set.add(rel)
+                UPDATE_STATE["applied_count"] = applied_count
+                UPDATE_STATE["pending_count"] = pending_count
+                UPDATE_STATE["apply_progress"] = 0.15 + 0.75 * ((i + 1) / total)
+                if progress_cb:
+                    try:
+                        progress_cb(0.15 + 0.75 * ((i + 1) / total), applied_count, total)
+                    except Exception:
+                        pass
 
-        # 4.1 覆盖资源目录（图片/音乐/音效/字体）：仅当更新包内含 assets 时
-        up_assets = os.path.join(update_files_dir, "assets")
-        if os.path.isdir(up_assets):
-            game_assets = os.path.join(game_dir, "assets")
-            os.makedirs(game_assets, exist_ok=True)
-            for item in os.listdir(up_assets):
-                s = os.path.join(up_assets, item)
-                d = os.path.join(game_assets, item)
-                if os.path.isdir(s):
-                    shutil.copytree(s, d, dirs_exist_ok=True, copy_function=shutil.copy2)
-                elif os.path.isfile(s):
-                    _copy_retry(s, d)
-                applied_count += 1
+            # 阶段3：清理旧版遗留的顶层 .py（不在新包内的旧文件，防止旧逻辑更新不全残留）
+            UPDATE_STATE["apply_phase"] = "正在清理旧版残留文件..."
+            removed = 0
+            for f in os.listdir(game_dir):
+                fpath = os.path.join(game_dir, f)
+                if os.path.isfile(fpath) and (f.endswith('.py') or f in ('README.md', 'requirements.txt')):
+                    if f not in new_rel_set:
+                        try:
+                            os.remove(fpath)
+                            removed += 1
+                        except Exception:
+                            pass
+            UPDATE_STATE["apply_progress"] = 0.92
 
-        # 5. 验证新版本号
-        new_version = get_current_version()
+            # 阶段4：资源完整性校验（manifest.json）
+            UPDATE_STATE["apply_phase"] = "正在校验资源完整性..."
+            missing, corrupted, status = verify_assets(game_dir)
+            if status == "ok" and (missing or corrupted):
+                UPDATE_STATE["apply_phase"] = f"资源校验：{len(missing)}缺失/{len(corrupted)}损坏（重启后将修复）"
+            elif status == "ok":
+                UPDATE_STATE["apply_phase"] = "资源完整性校验通过"
+            elif status == "no_manifest":
+                UPDATE_STATE["apply_phase"] = "本版本更新包无完整性清单"
+            UPDATE_STATE["apply_progress"] = 1.0
+
+        # 验证新版本号（从目标游戏目录读取）
+        new_version = "0.0.0"
+        try:
+            with open(os.path.join(game_dir, "version.txt"), encoding="utf-8") as _vf:
+                new_version = _vf.read().strip()
+        except Exception:
+            new_version = get_current_version()
         if new_version == "0.0.0":
             raise Exception("更新后版本号无效")
 
-        # 6. 清理临时文件和备份（更新成功后）
-        shutil.rmtree(temp_dir, ignore_errors=True)
-        # 保留备份，下次启动时删除
         UPDATE_STATE["current_version"] = new_version
         UPDATE_STATE["extracting"] = False
         UPDATE_STATE["update_available"] = False
+        UPDATE_STATE["pending_count"] = pending_count
 
-        return True, applied_count, new_version
+        return True, applied_count, new_version, pending_count
 
     except Exception as e:
         UPDATE_STATE["error"] = f"应用更新失败: {str(e)}"
         UPDATE_STATE["extracting"] = False
-
-        # 回滚：从备份恢复（文件 + 资源目录）
+        # 回滚小文件（.py/version.txt/manifest）
         try:
             backup_path = os.path.join(game_dir, BACKUP_DIR)
-            if os.path.exists(backup_path):
-                for f in os.listdir(backup_path):
-                    src = os.path.join(backup_path, f)
-                    dst = os.path.join(game_dir, f)
-                    if os.path.isfile(src):
-                        shutil.copy2(src, dst)
-                # 恢复资源目录
-                b_assets = os.path.join(backup_path, "assets")
-                if os.path.isdir(b_assets):
-                    g_assets = os.path.join(game_dir, "assets")
-                    shutil.copytree(b_assets, g_assets, dirs_exist_ok=True)
-        except:
+            if os.path.isdir(backup_path):
+                for root, dirs, files in os.walk(backup_path):
+                    for fname in files:
+                        bsrc = os.path.join(root, fname)
+                        rel = os.path.relpath(bsrc, backup_path)
+                        bdst = os.path.join(game_dir, rel)
+                        os.makedirs(os.path.dirname(bdst), exist_ok=True)
+                        shutil.copy2(bsrc, bdst)
+        except Exception:
             pass
-
-        return False, 0, None
+        return False, 0, None, 0
 
 
 def cleanup_backup():
@@ -444,24 +632,29 @@ def perform_full_update(progress_cb=None, status_cb=None):
         if status_cb:
             status_cb(f"发现新版本 v{latest_version}，开始下载...")
 
-        # 2. 下载
-        zip_path = download_update(download_url, progress_callback=progress_cb)
+        # 2. 下载（复用缓存/断点续传）
+        zip_path = download_update(download_url, progress_callback=progress_cb, version=latest_version)
         if not zip_path:
             if status_cb:
                 status_cb(UPDATE_STATE.get("error", "下载失败"))
             return
-
-        if status_cb:
+        if UPDATE_STATE.get("cache_reused"):
+            if status_cb:
+                status_cb("检测到已下载的更新包，直接应用（不重复下载）...")
+        elif status_cb:
             status_cb("下载完成，正在应用更新...")
 
-        # 3. 应用更新
-        success, count, new_version = extract_and_apply_update(zip_path)
+        # 3. 应用更新（全量镜像 + 占用延迟替换）
+        success, count, new_version, pending_count = extract_and_apply_update(zip_path)
         if not success:
             if status_cb:
                 status_cb(UPDATE_STATE.get("error", "应用更新失败，已回滚"))
             return
 
-        if status_cb:
+        if pending_count > 0:
+            if status_cb:
+                status_cb(f"更新成功！已应用 {count} 个文件，{pending_count} 个占用文件将在重启后生效，新版本 v{new_version}，即将重启...")
+        elif status_cb:
             status_cb(f"更新成功！已应用 {count} 个文件，新版本 v{new_version}，即将重启...")
 
         # 4. 清理缓存

@@ -178,6 +178,62 @@ class Renderer:
         mouse_pos = pygame.mouse.get_pos()
         mouse_pressed = pygame.mouse.get_pressed()
 
+        # ---- v2.0.8：自动检查到新版本 → 弹窗提示（优先于菜单按钮响应） ----
+        from ui import Button
+        update_notice = getattr(self.game, 'update_notice', None)
+        asset_issues = getattr(self.game, 'asset_issues', None)
+        if update_notice:
+            latest_ver, changelog = update_notice
+            panel_w, panel_h = int(560 * scale), int(360 * scale)
+            panel_x = (sw - panel_w) // 2
+            panel_y = int(180 * scale)
+            overlay = pygame.Surface((self.game.scaled_width, self.game.scaled_height), pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, 140))
+            self.screen.blit(overlay, (0, 0))
+            pygame.draw.rect(self.screen, (30, 30, 40), (panel_x, panel_y, panel_w, panel_h), border_radius=12)
+            pygame.draw.rect(self.screen, GOLD, (panel_x, panel_y, panel_w, panel_h), 3, border_radius=12)
+            t = self.game.font_title.render("发现新版本 v" + str(latest_ver), True, GREEN)
+            self.screen.blit(t, t.get_rect(center=(sw // 2, panel_y + int(48 * scale))))
+            t2 = self.game.font.render("检测到新版本，是否立即更新？", True, WHITE)
+            self.screen.blit(t2, t2.get_rect(center=(sw // 2, panel_y + int(95 * scale))))
+            preview = ""
+            if changelog:
+                lines = [l for l in changelog.split("\n") if l.strip()]
+                preview = " | ".join(lines[:2])[:60]
+            if preview:
+                t3 = self.game.font_small.render(preview, True, LIGHT_GRAY)
+                self.screen.blit(t3, t3.get_rect(center=(sw // 2, panel_y + int(130 * scale))))
+            yes_btn = Button(sw // 2 - 160, panel_y + int(180 * scale), 130, 45, "立即更新", color=GREEN)
+            no_btn = Button(sw // 2 + 30, panel_y + int(180 * scale), 130, 45, "稍后", color=GRAY)
+            if yes_btn.update(mouse_pos, mouse_pressed, self.game.touch_events, scale):
+                self.game.logger.info("弹窗：立即更新")
+                self.game._apply_update_now()
+            elif no_btn.update(mouse_pos, mouse_pressed, self.game.touch_events, scale):
+                self.game.logger.info("弹窗：稍后")
+                self.game._dismiss_update_notice()
+            yes_btn.draw(self.screen, self.game.font_large, scale)
+            no_btn.draw(self.screen, self.game.font_large, scale)
+            notes_btn = Button(sw // 2 - 65, panel_y + int(250 * scale), 130, 40, "更新说明", color=CYAN)
+            if notes_btn.update(mouse_pos, mouse_pressed, self.game.touch_events, scale):
+                self.game.update_notice = None
+                self.game.state = GameState.UPDATE_NOTES
+                self.game._open_update_notes()
+            notes_btn.draw(self.screen, self.game.font_large, scale)
+        elif asset_issues:
+            missing_n = len(asset_issues[0])
+            corrupted_n = len(asset_issues[1])
+            warn = self.game.font_small.render(
+                f"资源完整性异常：{missing_n} 缺失 / {corrupted_n} 损坏（建议在『检查更新』中重新更新）",
+                True, YELLOW,
+            )
+            self.screen.blit(warn, warn.get_rect(center=(sw // 2, int(115 * scale))))
+
+        if update_notice:
+            # 弹窗存在时：菜单按钮仅绘制不响应，避免穿透点击
+            for i, btn in enumerate(self.game.menu_buttons):
+                btn.draw(self.screen, self.game.font_large, scale)
+            return
+
         for i, btn in enumerate(self.game.menu_buttons):
             # 两列布局：左列 i=0..5，右列 i=6..10，避免11个按钮单列溢出720逻辑高
             if i < 6:
@@ -865,6 +921,10 @@ class Renderer:
         is_downloading = status.get("downloading", False)
         is_extracting = status.get("extracting", False)
         progress = status.get("download_progress", 0.0)
+        apply_progress = status.get("apply_progress", 0.0)
+        apply_phase = status.get("apply_phase", "")
+        pending_count = status.get("pending_count", 0)
+        cache_reused = status.get("cache_reused", False)
         error = status.get("error")
         changelog = status.get("changelog", "")
         update_available = status.get("update_available", False)
@@ -888,7 +948,9 @@ class Renderer:
                 True, CYAN
             )
         elif is_extracting:
-            status_text = self.game.font.render("正在应用更新...", True, YELLOW)
+            pct2 = int(apply_progress * 100)
+            phase_txt = apply_phase or "正在应用更新..."
+            status_text = self.game.font.render(f"{phase_txt} {pct2}%", True, YELLOW)
         elif update_available and latest_ver:
             status_text = self.game.font.render(f"发现新版本: v{latest_ver}", True, GREEN)
         elif latest_ver and not update_available:
@@ -920,6 +982,30 @@ class Renderer:
             pct_text = self.game.font_small.render(f"{int(progress * 100)}%", True, WHITE)
             pct_rect = pct_text.get_rect(center=(sw // 2, bar_y + bar_height // 2))
             self.screen.blit(pct_text, pct_rect)
+
+        # 应用阶段进度条（is_extracting 或应用进行中）
+        if is_extracting or (apply_progress > 0 and apply_progress < 1):
+            bar_width = int(400 * scale)
+            bar_height = int(25 * scale)
+            bar_x = (sw - bar_width) // 2
+            bar_y = int(260 * scale)
+            pygame.draw.rect(self.screen, DARK_GRAY, (bar_x, bar_y, bar_width, bar_height), border_radius=5)
+            fill_width = int(bar_width * apply_progress)
+            if fill_width > 0:
+                pygame.draw.rect(self.screen, (255, 170, 60), (bar_x, bar_y, fill_width, bar_height), border_radius=5)
+            pygame.draw.rect(self.screen, WHITE, (bar_x, bar_y, bar_width, bar_height), 2, border_radius=5)
+            pct2_text = self.game.font_small.render(f"应用 {int(apply_progress * 100)}%", True, WHITE)
+            pct2_rect = pct2_text.get_rect(center=(sw // 2, bar_y + bar_height // 2))
+            self.screen.blit(pct2_text, pct2_rect)
+            if pending_count > 0:
+                pend_txt = self.game.font_small.render(
+                    f"{pending_count} 个被占用文件将在重启后自动生效", True, LIGHT_GRAY)
+                self.screen.blit(pend_txt, pend_txt.get_rect(center=(sw // 2, bar_y + bar_height + 20)))
+
+        # 复用缓存提示
+        if cache_reused and not is_downloading and not is_extracting:
+            cache_txt = self.game.font_small.render("已复用已下载的更新包（未重复下载）", True, CYAN)
+            self.screen.blit(cache_txt, cache_txt.get_rect(center=(sw // 2, int(320 * scale))))
 
         # 更新日志
         if changelog and update_available:

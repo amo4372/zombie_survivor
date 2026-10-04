@@ -133,18 +133,47 @@ def collect_files():
     return files_to_pack
 
 
+def _md5(file_path, chunk=65536):
+    """计算文件 MD5（十六进制小写）"""
+    import hashlib
+    h = hashlib.md5()
+    with open(file_path, 'rb') as f:
+        while True:
+            data = f.read(chunk)
+            if not data:
+                break
+            h.update(data)
+    return h.hexdigest()
+
+
 def create_zip(version, files, changelog=""):
-    """创建发布zip包"""
+    """创建发布zip包（内含 manifest.json 资源完整性清单：相对路径→md5+size）"""
+    import tempfile
     os.makedirs(os.path.join(PROJECT_DIR, OUTPUT_DIR), exist_ok=True)
     zip_name = f"zombie_survivor_v{version}_update.zip"
     zip_path = os.path.join(PROJECT_DIR, OUTPUT_DIR, zip_name)
 
+    # 生成完整性清单（覆盖全部打包文件）
+    manifest = {"version": version, "files": {}}
+    for full_path, rel_path in files:
+        manifest["files"][rel_path.replace(os.sep, "/")] = {
+            "md5": _md5(full_path),
+            "size": os.path.getsize(full_path),
+        }
+    tmp_manifest = tempfile.NamedTemporaryFile('w', suffix='.json', encoding='utf-8', delete=False)
+    json.dump(manifest, tmp_manifest, ensure_ascii=False)
+    tmp_manifest.close()
+    # manifest 放 assets/ 内：旧版本更新器 copytree assets 时也会一并带过去，保证资源校验可用
+    manifest_arcname = os.path.join(f"zombie_survivor_v{version}", "assets", "manifest.json")
     with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+        zf.write(tmp_manifest.name, manifest_arcname)
         for full_path, rel_path in files:
             # 在zip中创建顶层目录
             arcname = os.path.join(f"zombie_survivor_v{version}", rel_path)
             zf.write(full_path, arcname)
             print(f"  [打包] {rel_path}")
+    os.unlink(tmp_manifest.name)
+    print(f"  [清单] manifest.json ({len(manifest['files'])} 个文件 MD5+大小)")
 
     size_mb = os.path.getsize(zip_path) / (1024 * 1024)
     print(f"\n[完成] 发布包已生成: {zip_name}")
