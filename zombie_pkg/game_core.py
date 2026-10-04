@@ -229,7 +229,8 @@ class GameCore:
         if getattr(sys, 'frozen', False):
             base_path = os.path.dirname(sys.executable)
         else:
-            base_path = os.path.dirname(os.path.abspath(__file__))
+            # v2.0.9 包结构：game_core.py 位于 zombie_pkg/ 子包，上溯一级为仓库根
+            base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         # v2.0.8：启动时先应用上次更新被占用而延迟替换的文件（字体/音频等），
         # 必须在 FontManager 加载任何字体之前执行，避免 ttf 被旧文件占用导致热更新失败
         try:
