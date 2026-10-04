@@ -148,6 +148,31 @@ def _md5(file_path, chunk=65536):
     return h.hexdigest()
 
 
+def add_pkg_compat(files_to_pack):
+    """v2.0.10 兼容旧版平铺更新器：把 zombie_pkg/renderer_pkg 打成
+    assets/_pkg_compat.zip 一并发布（旧版更新器必复制 assets 目录），
+    包结构新版本启动时若发现包目录缺失，会从该 zip 自愈解包。
+    """
+    import tempfile
+    compat_tmp = tempfile.NamedTemporaryFile('wb', suffix='.zip', delete=False)
+    compat_tmp.close()
+    with zipfile.ZipFile(compat_tmp.name, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for d in ("zombie_pkg", "renderer_pkg"):
+            dpath = os.path.join(PROJECT_DIR, d)
+            if not os.path.isdir(dpath):
+                continue
+            for root, dirs, filenames in os.walk(dpath):
+                dirs[:] = [x for x in dirs if not should_exclude(x)]
+                for fn in filenames:
+                    full = os.path.join(root, fn)
+                    rel = os.path.relpath(full, PROJECT_DIR)
+                    if not should_exclude(rel):
+                        zf.write(full, rel)
+    files_to_pack.append((compat_tmp.name, "assets/_pkg_compat.zip"))
+    print(f"  [兼容] assets/_pkg_compat.zip（包结构自愈包，供旧版平铺更新器升级）")
+    return files_to_pack
+
+
 def create_zip(version, files, changelog=""):
     """创建发布zip包（内含 manifest.json 资源完整性清单：相对路径→md5+size）"""
     import tempfile
@@ -232,6 +257,8 @@ def main():
     # 收集文件
     print(f"\n[收集] 正在收集必要文件...")
     files = collect_files()
+    # v2.0.10 兼容旧版平铺更新器
+    files = add_pkg_compat(files)
     print(f"[收集] 共 {len(files)} 个文件")
 
     if args.dry_run:
