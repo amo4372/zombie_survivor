@@ -2667,29 +2667,75 @@ class Renderer:
                 self._draw_touch_controls_split(g, left=False)
 
     def _draw_touch_controls_split(self, g, left):
-        """把触控控件画进对应半屏（left=True 用 P1 控件；否则 P2 控件，坐标无需平移）"""
+        """把触控控件画进对应半屏（left=True 用 P1 控件；否则 P2 控件），与单机触控 UI 同款"""
         scale = g.scale
+        fs = g.font_small
         if left:
+            pl = g.player
             g.joystick.draw(self.screen, scale)
-            g.aim_button.draw(self.screen, g.font, scale)
-            g.skill_selector.draw(self.screen, g.font, scale=scale)
-            g.skill_caster.draw(self.screen, g.font, scale=scale)
-            g.throwable_switch_btn.draw(self.screen, g.font, scale)
-            g.throwable_caster.draw(self.screen, g.font, scale=scale)
-            for name, b in g.touch_buttons.items():
-                if name in ("shoot", "pause", "sprint"):
-                    b.draw(self.screen, g.font, scale)
+            g.aim_button.draw(self.screen, fs, scale)
+            # 射击（防爆套装→肘击，与单机一致）
+            sb = g.touch_buttons.get("shoot")
+            if sb and pl.riot_gear.equipped:
+                _ol, _oc = sb.label, sb.color
+                sb.label, sb.color = "肘击", PURPLE
+                sb.draw(self.screen, fs, scale)
+                sb.label, sb.color = _ol, _oc
+            else:
+                sb.draw(self.screen, fs, scale)
+            g.touch_buttons.get("pause").draw(self.screen, fs, scale)
+            g.touch_buttons.get("sprint").draw(self.screen, fs, scale)
+            # 技能（与单机同款：显示技能名）
+            _sk = g.selected_skill
+            _sobj = pl.skill_tree.get_skill(_sk) if _sk else None
+            g.skill_selector.draw(self.screen, fs, _sobj.name if _sobj else "技", _sobj.icon_color if _sobj else BLUE, scale)
+            g.skill_caster.draw(self.screen, fs, _sk, _sobj.name if _sobj else "放", _sobj.icon_color if _sobj else ORANGE, scale)
+            # 投掷（与单机同款：缩写+数量角标）
+            _tt = g.selected_throwable
+            _t_abbr = {"incendiary": "燃", "smoke": "烟", "cluster": "束", "emp": "E"}.get(_tt, "投")
+            _t_col = g.throwable_colors.get(_tt, ORANGE)
+            g.throwable_switch_btn.draw(self.screen, fs, scale)
+            g.throwable_caster.draw(self.screen, fs, None, _t_abbr, _t_col, scale)
+            _t_count = getattr(pl, 'throwables', {}).get(_tt, 0)
+            if _t_count > 0:
+                _bx, _by, _br = g.throwable_caster.get_scaled_pos(scale)
+                _bt = fs.render(str(_t_count), True, WHITE)
+                _bb = pygame.Surface((_bt.get_width() + 8, _bt.get_height() + 4), pygame.SRCALPHA)
+                _bb.fill((0, 0, 0, 180))
+                self.screen.blit(_bb, (int(_bx + _br - _bt.get_width() - 4), int(_by - _br + 2)))
+                self.screen.blit(_bt, (int(_bx + _br - _bt.get_width()), int(_by - _br + 4)))
         else:
             c2 = g.p2_controls
+            pl = g.player2
             c2["joystick"].draw(self.screen, scale)
-            c2["aim"].draw(self.screen, g.font, scale)
-            c2["skill_selector"].draw(self.screen, g.font, scale=scale)
-            c2["skill_caster"].draw(self.screen, g.font, scale=scale)
-            c2["throwable_switch"].draw(self.screen, g.font, scale)
-            c2["throwable_caster"].draw(self.screen, g.font, scale=scale)
-            for name, b in c2.items():
-                if name in ("shoot", "pause", "sprint"):
-                    b.draw(self.screen, g.font, scale)
+            c2["aim"].draw(self.screen, fs, scale)
+            sb = c2.get("shoot")
+            if sb and pl.riot_gear.equipped:
+                _ol, _oc = sb.label, sb.color
+                sb.label, sb.color = "肘击", PURPLE
+                sb.draw(self.screen, fs, scale)
+                sb.label, sb.color = _ol, _oc
+            else:
+                sb.draw(self.screen, fs, scale)
+            c2["pause"].draw(self.screen, fs, scale)
+            c2["sprint"].draw(self.screen, fs, scale)
+            _sk = getattr(g, 'p2_selected_skill', None)
+            _sobj = pl.skill_tree.get_skill(_sk) if _sk else None
+            c2["skill_selector"].draw(self.screen, fs, _sobj.name if _sobj else "技", _sobj.icon_color if _sobj else BLUE, scale)
+            c2["skill_caster"].draw(self.screen, fs, _sk, _sobj.name if _sobj else "放", _sobj.icon_color if _sobj else ORANGE, scale)
+            _tt = getattr(g, 'p2_selected_throwable', "incendiary")
+            _t_abbr = {"incendiary": "燃", "smoke": "烟", "cluster": "束", "emp": "E"}.get(_tt, "投")
+            _t_col = g.throwable_colors.get(_tt, ORANGE)
+            c2["throwable_switch"].draw(self.screen, fs, scale)
+            c2["throwable_caster"].draw(self.screen, fs, None, _t_abbr, _t_col, scale)
+            _t_count = getattr(pl, 'throwables', {}).get(_tt, 0)
+            if _t_count > 0:
+                _bx, _by, _br = c2["throwable_caster"].get_scaled_pos(scale)
+                _bt = fs.render(str(_t_count), True, WHITE)
+                _bb = pygame.Surface((_bt.get_width() + 8, _bt.get_height() + 4), pygame.SRCALPHA)
+                _bb.fill((0, 0, 0, 180))
+                self.screen.blit(_bb, (int(_bx + _br - _bt.get_width() - 4), int(_by - _br + 2)))
+                self.screen.blit(_bt, (int(_bx + _br - _bt.get_width()), int(_by - _br + 4)))
 
     def _draw_playing_core(self, player, camera):
         if not self.game.world or not player:
