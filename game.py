@@ -272,6 +272,8 @@ class Game:
         self.skill_selector = None
         self.skill_caster = None
         self.skill_card_selector = SkillCardSelector()
+        self.pending_upgrade_for = None  # 同屏双人：当前升级的玩家 "P1"/"P2"
+        self.hud_layout_feedback = None  # HUD布局保存/重置的屏幕反馈提示
         self.skill_tree_renderer = SkillTreeRenderer()
         # 加载 mod
         try:
@@ -563,29 +565,29 @@ class Game:
 
     # ===== 多人模式：P2 控件与玩家 =====
     def _setup_multiplayer_controls(self):
-        """同屏双人：P1 控件移到左半屏，新建 P2 控件（右半屏）"""
+        """同屏双人：P1 控件移到左半屏，新建 P2 控件（右半屏）；默认布局各自半屏内分散，避免误触"""
         # P1 控件重定位（左半屏 0-640 逻辑坐标）
-        self.joystick = VirtualJoystick(140, BASE_HEIGHT - 120, 70)
-        self.aim_button = AimButton(490, BASE_HEIGHT - 145, 62)
-        self.touch_buttons["shoot"] = TouchButton(490, BASE_HEIGHT - 145, 62, "射击", RED)
+        self.joystick = VirtualJoystick(130, BASE_HEIGHT - 120, 70)
+        self.aim_button = AimButton(500, BASE_HEIGHT - 150, 62)
+        self.touch_buttons["shoot"] = TouchButton(500, BASE_HEIGHT - 150, 62, "射击", RED)
         self.touch_buttons["pause"] = TouchButton(60, 55, 38, "II", GRAY)
-        self.touch_buttons["sprint"] = TouchButton(240, BASE_HEIGHT - 130, 40, "疾跑", AMBER)
-        self.skill_selector = SkillSelector(480, BASE_HEIGHT - 320, 42)
-        self.skill_caster = SkillCaster(550, BASE_HEIGHT - 145, 52)
-        self.throwable_switch_btn = TouchButton(380, BASE_HEIGHT - 320, 42, "投掷", ORANGE)
-        self.throwable_caster = SkillCaster(430, BASE_HEIGHT - 145, 48)
+        self.touch_buttons["sprint"] = TouchButton(220, BASE_HEIGHT - 135, 40, "疾跑", AMBER)
+        self.skill_selector = SkillSelector(490, BASE_HEIGHT - 340, 42)
+        self.skill_caster = SkillCaster(590, BASE_HEIGHT - 100, 52)
+        self.throwable_switch_btn = TouchButton(370, BASE_HEIGHT - 340, 42, "投掷", ORANGE)
+        self.throwable_caster = SkillCaster(415, BASE_HEIGHT - 120, 48)
         # 注意：双人模式禁用已保存的全屏 HUD 布局（会覆盖 P1 控件回右半屏与 P2 重叠）
         # P2 控件（右半屏 640-1280 逻辑坐标）
         self.p2_controls = {
-            "joystick": VirtualJoystick(640 + 140, BASE_HEIGHT - 120, 70),
-            "aim": AimButton(640 + 490, BASE_HEIGHT - 145, 62),
-            "shoot": TouchButton(640 + 490, BASE_HEIGHT - 145, 62, "射击", RED),
+            "joystick": VirtualJoystick(640 + 130, BASE_HEIGHT - 120, 70),
+            "aim": AimButton(640 + 500, BASE_HEIGHT - 150, 62),
+            "shoot": TouchButton(640 + 500, BASE_HEIGHT - 150, 62, "射击", RED),
             "pause": TouchButton(640 + 60, 55, 38, "II", GRAY),
-            "sprint": TouchButton(640 + 240, BASE_HEIGHT - 130, 40, "疾跑", AMBER),
-            "skill_selector": SkillSelector(640 + 480, BASE_HEIGHT - 320, 42),
-            "skill_caster": SkillCaster(640 + 550, BASE_HEIGHT - 145, 52),
-            "throwable_switch": TouchButton(640 + 380, BASE_HEIGHT - 320, 42, "投掷", ORANGE),
-            "throwable_caster": SkillCaster(640 + 430, BASE_HEIGHT - 145, 48),
+            "sprint": TouchButton(640 + 220, BASE_HEIGHT - 135, 40, "疾跑", AMBER),
+            "skill_selector": SkillSelector(640 + 490, BASE_HEIGHT - 340, 42),
+            "skill_caster": SkillCaster(640 + 580, BASE_HEIGHT - 100, 52),
+            "throwable_switch": TouchButton(640 + 370, BASE_HEIGHT - 340, 42, "投掷", ORANGE),
+            "throwable_caster": SkillCaster(640 + 415, BASE_HEIGHT - 120, 48),
         }
         self.p2_selected_skill = None
         self.p2_selected_throwable = "incendiary"
@@ -3364,6 +3366,7 @@ class Game:
 
         # 技能卡选择界面
         if self.state == GameState.SKILL_SELECT:
+            _up_pl = self.player2 if getattr(self, 'pending_upgrade_for', None) == "P2" and self.player2 else self.player
             for event in all_events:
                 if event.type == pygame.QUIT:
                     self.running = False
@@ -3374,11 +3377,11 @@ class Game:
                         )
                         self._update_scale()
                 elif event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_1 and len(self.player.skill_cards) > 0:
+                    if event.key == pygame.K_1 and len(_up_pl.skill_cards) > 0:
                         self._select_skill_card(0)
-                    elif event.key == pygame.K_2 and len(self.player.skill_cards) > 1:
+                    elif event.key == pygame.K_2 and len(_up_pl.skill_cards) > 1:
                         self._select_skill_card(1)
-                    elif event.key == pygame.K_3 and len(self.player.skill_cards) > 2:
+                    elif event.key == pygame.K_3 and len(_up_pl.skill_cards) > 2:
                         self._select_skill_card(2)
                 elif event.type == pygame.MOUSEBUTTONDOWN:
                     if event.button == 1:
@@ -5538,17 +5541,20 @@ class Game:
                                             random.uniform(0.1, 0.3), max(1, size // 2))
 
     def _select_skill_card(self, index):
-        """选择技能卡"""
-        if 0 <= index < len(self.player.skill_cards):
-            skill = self.player.skill_cards[index]
+        """选择技能卡（双人：作用于当前升级的玩家）"""
+        player = self.player2 if getattr(self, 'pending_upgrade_for', None) == "P2" and self.player2 else self.player
+        if 0 <= index < len(player.skill_cards):
+            skill = player.skill_cards[index]
             self._apply_skill_card(skill)
 
     def _apply_skill_card(self, skill):
-        """应用选中的技能卡"""
-        if self.player.skill_tree.upgrade_skill(skill.skill_type):
+        """应用选中的技能卡（双人：作用于当前升级的玩家）"""
+        player = self.player2 if getattr(self, 'pending_upgrade_for', None) == "P2" and self.player2 else self.player
+        tag = getattr(self, 'pending_upgrade_for', "P1") or "P1"
+        if player.skill_tree.upgrade_skill(skill.skill_type):
             self.floating_texts.append(FloatingText(
-                self.player.x, self.player.y - 40, 
-                f"升级: {skill.name}!", color=GOLD, lifetime=2.0
+                player.x, player.y - 40, 
+                f"{tag} 升级: {skill.name}!", color=GOLD, lifetime=2.0
             ))
             # 记录技能升级
             if self.session:
@@ -5562,9 +5568,9 @@ class Game:
                     self.session.set_has_enchant("poison", True)
             # 肾上腺素：应用体力加成
             if skill.skill_type == SkillType.ADRENALINE:
-                ad_skill = self.player.skill_tree.get_skill(SkillType.ADRENALINE)
+                ad_skill = player.skill_tree.get_skill(SkillType.ADRENALINE)
                 if ad_skill:
-                    self.player.riot_gear.adrenaline_level = ad_skill.current_level
+                    player.riot_gear.adrenaline_level = ad_skill.current_level
             # 播放音效
             self.assets.play_sound("skill_select")
         # 升级后检查组合技
@@ -5572,8 +5578,9 @@ class Game:
             self._check_combos()
         except Exception:
             pass
-        self.player.pending_level_up = False
-        self.player.skill_cards = []
+        player.pending_level_up = False
+        player.skill_cards = []
+        self.pending_upgrade_for = None
         self.skill_card_selector.hide()
         self.state = GameState.PLAYING
 
@@ -6221,18 +6228,29 @@ class Game:
         if self.config.game_mode == GameMode.STORY:
             self._update_story_mode(dt)
 
-        # 检查升级选择
-        if self.player.pending_level_up and self.state != GameState.SKILL_SELECT:
-            if self.player.skill_cards:
-                self.state = GameState.SKILL_SELECT
-                self.skill_card_selector.show(self.player.skill_cards)
-                # 记录升级
-                if self.session:
-                    self.session.add_level_up()
-                # 播放升级音效
-                self.assets.play_sound("level_up")
-            else:
-                self.player.pending_level_up = False
+        # 检查升级选择（同屏双人：P1/P2 各自升级，半屏显示并标注是谁）
+        if self.state != GameState.SKILL_SELECT:
+            for _pl, _tag in ((self.player, "P1"), (self.player2, "P2")):
+                if not _pl or not _pl.pending_level_up:
+                    continue
+                if _pl.skill_cards:
+                    self.state = GameState.SKILL_SELECT
+                    self.pending_upgrade_for = _tag
+                    _region = None
+                    if self.is_multiplayer_active() and self.multiplayer_mode == "same_screen":
+                        _half = max(320, self.scaled_width // 2)
+                        _region = pygame.Rect(0 if _tag == "P1" else self.scaled_width - _half, 0, _half, self.scaled_height)
+                    self.skill_card_selector.show(_pl.skill_cards, region=_region,
+                                                  title=f"{_tag} 升级！选择你的强化",
+                                                  subtitle=f"{_tag} 等级 {_pl.level} → 选择技能卡")
+                    # 记录升级
+                    if self.session:
+                        self.session.add_level_up()
+                    # 播放升级音效
+                    self.assets.play_sound("level_up")
+                else:
+                    _pl.pending_level_up = False
+                break
 
         # 自动射击 / 盾肘击【修改】
         auto_shoot = False
@@ -7368,10 +7386,10 @@ class Game:
         if self.config.game_mode == GameMode.ENDLESS:
             if self.boss_kills["long"] >= 3 and self.boss_kills["xiang"] >= 3:
                 self._final_dialogue()
-        # 更新成就toast提示队列
+        # 更新成就toast提示队列（此处无帧dt，用固定步长清理过期项）
         remove_list = []
         for toast in self.ach_toast_queue:
-            toast["timer"] -= dt
+            toast["timer"] -= 0.1
             if toast["timer"] <= 0:
                 remove_list.append(toast)
         for t in remove_list:

@@ -924,7 +924,7 @@ class WeaponSwitchButton(TouchButton):
 
 
 class SkillCardSelector:
-    """技能卡选择界面"""
+    """技能卡选择界面（支持同屏双人：只在对应玩家半屏区域显示并标注是谁升级）"""
     def __init__(self):
         self.visible = False
         self.cards = []
@@ -932,32 +932,54 @@ class SkillCardSelector:
         self.card_rects = []
         self.animation_timer = 0
         self.animation_duration = 0.3
+        self.region = None          # pygame.Rect 或 None（None=全屏）
+        self.title = "选择一项技能"
+        self.subtitle = "升级！选择你的强化"
 
-    def show(self, skills):
+    def show(self, skills, region=None, title="选择一项技能", subtitle="升级！选择你的强化"):
         self.visible = True
         self.cards = skills
         self.selected_index = -1
         self.animation_timer = 0
+        self.region = region
+        self.title = title
+        self.subtitle = subtitle
 
     def hide(self):
         self.visible = False
         self.cards = []
         self.selected_index = -1
+        self.region = None
+
+    def _get_region(self):
+        if self.region is not None:
+            return self.region
+        w = pygame.display.get_surface().get_width()
+        h = pygame.display.get_surface().get_height()
+        return pygame.Rect(0, 0, w, h)
 
     def handle_input(self, mouse_pos, mouse_pressed, touch_events, scale=1.0):
         if not self.visible:
             return None
 
         self.card_rects = []
-        sw = pygame.display.get_surface().get_width()
-        sh = pygame.display.get_surface().get_height()
+        region = self._get_region()
+        sw = region.width
+        sh = region.height
+        rx = region.x
+        ry = region.y
 
         card_w = int(230 * scale)
         card_h = int(400 * scale)
         gap = int(25 * scale)
         total_width = len(self.cards) * card_w + (len(self.cards) - 1) * gap
-        start_x = (sw - total_width) // 2
-        start_y = (sh - card_h) // 2 + int(10 * scale)
+        # 卡片过宽时按区域缩放卡片宽度
+        if total_width > sw - int(20 * scale):
+            card_w = int((sw - int(20 * scale) - (len(self.cards) - 1) * gap) / len(self.cards))
+            card_w = max(140, card_w)
+            total_width = len(self.cards) * card_w + (len(self.cards) - 1) * gap
+        start_x = rx + (sw - total_width) // 2
+        start_y = ry + (sh - card_h) // 2 + int(10 * scale)
 
         for i, skill in enumerate(self.cards):
             rect = pygame.Rect(start_x + i * (card_w + gap), start_y, card_w, card_h)
@@ -982,21 +1004,24 @@ class SkillCardSelector:
         if not self.visible:
             return
 
-        sw = screen.get_width()
-        sh = screen.get_height()
+        region = self._get_region()
+        sw = region.width
+        sh = region.height
+        rx = region.x
+        ry = region.y
 
-        # 暗色背景遮罩
+        # 暗色背景遮罩（只盖对应区域）
         overlay = pygame.Surface((sw, sh), pygame.SRCALPHA)
         overlay.fill((*VOID_BLACK[:3], 220))
-        screen.blit(overlay, (0, 0))
+        screen.blit(overlay, (rx, ry))
 
-        # 标题
-        title = large_font.render("选择一项技能", True, GOLD)
-        title_rect = title.get_rect(center=(sw // 2, int(80 * scale)))
+        # 标题（含是谁升级）
+        title = large_font.render(self.title, True, GOLD)
+        title_rect = title.get_rect(center=(rx + sw // 2, ry + int(70 * scale)))
         screen.blit(title, title_rect)
 
-        subtitle = font.render("升级！选择你的强化", True, GRAY)
-        subtitle_rect = subtitle.get_rect(center=(sw // 2, int(115 * scale)))
+        subtitle = font.render(self.subtitle, True, GRAY)
+        subtitle_rect = subtitle.get_rect(center=(rx + sw // 2, ry + int(105 * scale)))
         screen.blit(subtitle, subtitle_rect)
 
         # 绘制技能卡 - 增大卡片高度保证内容完整显示
@@ -1004,8 +1029,12 @@ class SkillCardSelector:
         card_h = int(400 * scale)
         gap = int(25 * scale)
         total_width = len(self.cards) * card_w + (len(self.cards) - 1) * gap
-        start_x = (sw - total_width) // 2
-        start_y = (sh - card_h) // 2 + int(10 * scale)
+        if total_width > sw - int(20 * scale):
+            card_w = int((sw - int(20 * scale) - (len(self.cards) - 1) * gap) / len(self.cards))
+            card_w = max(140, card_w)
+            total_width = len(self.cards) * card_w + (len(self.cards) - 1) * gap
+        start_x = rx + (sw - total_width) // 2
+        start_y = ry + (sh - card_h) // 2 + int(10 * scale)
 
         for i, skill in enumerate(self.cards):
             x = start_x + i * (card_w + gap)

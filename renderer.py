@@ -2160,10 +2160,12 @@ class Renderer:
         if self._clicked(save_r, mouse_pos, mouse_pressed, touches, "hud_save"):
             self.game._save_hud_layout(target)
             self.game.hud_edit_dirty = False
+            self.game.hud_layout_feedback = {"text": f"{target} 布局已保存 ✓", "expire": pygame.time.get_ticks() + 1800}
         if self._clicked(reset_r, mouse_pos, mouse_pressed, touches, "hud_reset"):
             self.game._reset_hud_layout(target)
             self._hud_edit_load_target(target)
             self.game.hud_edit_dirty = False
+            self.game.hud_layout_feedback = {"text": f"{target} 布局已重置为默认", "expire": pygame.time.get_ticks() + 1800}
         if self._clicked(back_r, mouse_pos, mouse_pressed, touches, "hud_back"):
             if getattr(self.game, "hud_edit_dirty", False):
                 # 未保存返回：恢复为已保存布局（或默认）
@@ -2173,6 +2175,13 @@ class Renderer:
                     self.game._setup_touch_controls()
                     self.game._apply_hud_layout()
             self.game.state = GameState.SETTINGS
+        # ===== 保存/重置强反馈提示 =====
+        fb = getattr(self.game, "hud_layout_feedback", None)
+        if fb and pygame.time.get_ticks() < fb["expire"]:
+            fb_txt = self.game.font_large.render(fb["text"], True, (80, 230, 120))
+            pygame.draw.rect(self.screen, (20, 60, 30), fb_txt.get_rect(center=(sw // 2, int(sh - 70 * scale))).inflate(24, 12), border_radius=8)
+            pygame.draw.rect(self.screen, (80, 230, 120), fb_txt.get_rect(center=(sw // 2, int(sh - 70 * scale))).inflate(24, 12), 2, border_radius=8)
+            self.screen.blit(fb_txt, fb_txt.get_rect(center=(sw // 2, int(sh - 70 * scale))))
 
     def _hud_edit_load_target(self, target):
         """切换HUD编辑目标时，把对应布局载入控件（无自定义则回默认）"""
@@ -2552,11 +2561,25 @@ class Renderer:
         half_w = rect.width
         bx = rect.x + int(half_w * 0.2)
         bar_w = int(half_w * 0.6)
-        # ===== 顶部：时间（P1 显示）与波次 =====
+        # ===== 顶部：时间/尸潮倒计时（P1）与波次（P2） =====
+        hm = getattr(g, 'horde_manager', None)
         if label == "P1":
-            tl = max(0, int(getattr(g, 'time_left', 0)))
-            t_txt = g.font.render(f"{tl // 60:02d}:{tl % 60:02d}", True, WHITE)
-            self.screen.blit(t_txt, t_txt.get_rect(midtop=(rect.x + half_w // 2, rect.y + int(4 * scale))))
+            try:
+                t_text, is_cd = hm.get_time_display() if hm else ("00:00", True)
+                t_color = RED if (is_cd and int(t_text.split(":")[0]) * 60 + int(t_text.split(":")[1]) < 30) else WHITE
+                t_txt = g.font.render(t_text, True, t_color)
+                self.screen.blit(t_txt, t_txt.get_rect(midtop=(rect.x + half_w // 2, rect.y + int(4 * scale))))
+            except Exception:
+                tl = max(0, int(getattr(g, 'time_left', 0)))
+                t_txt = g.font.render(f"{tl // 60:02d}:{tl % 60:02d}", True, WHITE)
+                self.screen.blit(t_txt, t_txt.get_rect(midtop=(rect.x + half_w // 2, rect.y + int(4 * scale))))
+        else:
+            if hm and getattr(hm, 'is_horde_active', lambda: False)():
+                w_txt = g.font.render("尸潮!", True, RED)
+            else:
+                wv = getattr(g, 'wave_count', 0)
+                w_txt = g.font.render(f"波次 {wv}", True, (150, 220, 255))
+            self.screen.blit(w_txt, w_txt.get_rect(midtop=(rect.x + half_w // 2, rect.y + int(4 * scale))))
         # ===== 血条 =====
         hp_pct = max(0, player.hp) / max(1, player.max_hp)
         bar_h = int(14 * scale)
@@ -2574,16 +2597,27 @@ class Renderer:
             pygame.draw.rect(self.screen, (120, 200, 255), (exb.x, exb.y, int(exb.w * exp_pct), exb.h))
             lv = g.font_small.render(f"Lv.{player.level}", True, (150, 220, 255))
             self.screen.blit(lv, (rect.x + int(half_w * 0.82), rect.y + int(38 * scale)))
+        # ===== 体力条 =====
+        if hasattr(player, 'stamina') and player.max_stamina > 0:
+            st_ratio = max(0.0, min(1.0, player.stamina / player.max_stamina))
+            stb = pygame.Rect(bx, rect.y + int(53 * scale), bar_w, int(4 * scale))
+            st_color = (70, 170, 255)
+            if getattr(player, 'stamina_exhausted', False):
+                st_color = (220, 70, 70)
+            pygame.draw.rect(self.screen, (20, 25, 40), stb)
+            pygame.draw.rect(self.screen, st_color, (stb.x, stb.y, int(stb.w * st_ratio), stb.h))
+            st_txt = g.font_small.render(f"体力 {int(player.stamina)}/{int(player.max_stamina)}", True, st_color)
+            self.screen.blit(st_txt, (bx, rect.y + int(57 * scale)))
         # ===== 武器 + 弹药 =====
         w = player.get_current_weapon() if hasattr(player, 'get_current_weapon') else None
         if w:
             wname = getattr(w, 'display_name', None) or getattr(w, 'name', '?')
             w_txt = g.font_small.render(f"{wname}", True, GOLD)
-            self.screen.blit(w_txt, (bx, rect.y + int(54 * scale)))
+            self.screen.blit(w_txt, (bx, rect.y + int(64 * scale)))
             ammo = getattr(w, 'current_ammo', None)
             if ammo is not None and ammo != "∞":
                 a_txt = g.font_small.render(f"弹药 {ammo}/{getattr(w, 'max_ammo', '?')}", True, (210, 210, 215))
-                self.screen.blit(a_txt, (bx, rect.y + int(68 * scale)))
+                self.screen.blit(a_txt, (bx, rect.y + int(78 * scale)))
         # ===== 技能栏（当前技能 + 冷却） =====
         sk = getattr(g, 'p2_selected_skill', None) if label == "P2" else getattr(g, 'selected_skill', None)
         if sk and hasattr(player, 'skill_tree'):
@@ -2595,11 +2629,20 @@ class Renderer:
                     s_txt = g.font_small.render(f"技能: {sname} ({cd_left:.0f}s)", True, (180, 180, 190))
                 else:
                     s_txt = g.font_small.render(f"技能: {sname}", True, (150, 230, 150))
-                self.screen.blit(s_txt, (bx, rect.y + int(82 * scale)))
+                self.screen.blit(s_txt, (bx, rect.y + int(92 * scale)))
+        # ===== Buff 简览 =====
+        try:
+            _buffs = player.buff_manager.get_active_buffs()
+            if _buffs:
+                _bnames = [getattr(b, 'name', str(b.buff_type))[:6] for b in _buffs[:3]]
+                b_txt = g.font_small.render("Buff: " + "·".join(_bnames), True, (200, 160, 255))
+                self.screen.blit(b_txt, (bx, rect.y + int(106 * scale)))
+        except Exception:
+            pass
         # ===== 得分 =====
         if hasattr(player, 'score'):
             sc = g.font_small.render(f"分数 {player.score}", True, (240, 230, 150))
-            self.screen.blit(sc, (rect.x + int(half_w * 0.82), rect.y + int(54 * scale)))
+            self.screen.blit(sc, (rect.x + int(half_w * 0.82), rect.y + int(64 * scale)))
         # ===== 键位提示（键盘模式） =====
         if g.config.control_mode == ControlMode.KEYBOARD:
             if label == "P1":
@@ -2607,15 +2650,15 @@ class Renderer:
             else:
                 hint = "方向键移动 · J射击 · U技能 · O投掷 · Shift疾跑"
             ht = g.font_small.render(hint, True, (200, 200, 215))
-            self.screen.blit(ht, (rect.x + half_w // 2 - ht.get_width() // 2, rect.y + int(96 * scale)))
+            self.screen.blit(ht, (rect.x + half_w // 2 - ht.get_width() // 2, rect.y + int(120 * scale)))
         # ===== 倒地状态：显示救援进度条 =====
         if getattr(player, 'downed', False):
-            pygame.draw.rect(self.screen, (80, 70, 20), (bx, rect.y + int(112 * scale), bar_w, int(10 * scale)))
+            pygame.draw.rect(self.screen, (80, 70, 20), (bx, rect.y + int(132 * scale), bar_w, int(10 * scale)))
             prog = max(0.0, min(1.0, getattr(player, 'rescue_progress', 0) / 2.5))
-            pygame.draw.rect(self.screen, (240, 220, 80), (bx, rect.y + int(112 * scale), int(bar_w * prog), int(10 * scale)))
-            pygame.draw.rect(self.screen, (255, 255, 255), (bx, rect.y + int(112 * scale), bar_w, int(10 * scale)), 1)
+            pygame.draw.rect(self.screen, (240, 220, 80), (bx, rect.y + int(132 * scale), int(bar_w * prog), int(10 * scale)))
+            pygame.draw.rect(self.screen, (255, 255, 255), (bx, rect.y + int(132 * scale), bar_w, int(10 * scale)), 1)
             dtxt = g.font_small.render("倒地 · 队友靠近救援", True, (240, 230, 120))
-            self.screen.blit(dtxt, (bx, rect.y + int(124 * scale)))
+            self.screen.blit(dtxt, (bx, rect.y + int(144 * scale)))
         # ===== 触控控件（仅触控模式） =====
         if g.config.control_mode == ControlMode.TOUCH and not g.is_network_client_render():
             if label == "P1":
