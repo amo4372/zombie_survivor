@@ -22,6 +22,8 @@ class RLEnemyAI:
         self.model_path = model_path
         self.enabled = False
         self.sess = None
+        self._cache = {}            # id(enemy) -> (下次决策时间, vx, vy, skill)：决策节流缓存
+        self._DECIDE_INTERVAL = 0.15
         self._input_name = None
         self.obs_dim = 22   # v2.0.14.1: +投掷冷却
         # 遥测统计（开发者面板/数据导出用）
@@ -71,8 +73,9 @@ class RLEnemyAI:
         dy = (enemy.y - player.y) / ARENA_H
         dist = math.hypot(enemy.x - player.x, enemy.y - player.y) / math.hypot(ARENA_W, ARENA_H)
         facing = getattr(player, "facing_angle", 0.0)
-        side_w = min(abs(enemy.x), 400.0) / 200.0
-        side_h = min(abs(enemy.y), 400.0) / 200.0
+        # 与训练端一致：到最近墙距离 / 半宽（0=贴墙，1=场中央）
+        side_w = min(enemy.x, ARENA_W - enemy.x) / (ARENA_W / 2)
+        side_h = min(enemy.y, ARENA_H - enemy.y) / (ARENA_H / 2)
         rays = []
         for deg in (0, 45, 90, 135, 180, 225, 270, 315):
             rays.append(self._ray_dist(enemy, world, math.radians(deg), 400.0))
@@ -119,10 +122,17 @@ class RLEnemyAI:
         """返回 (vx, vy, attack)；不可用时返回 (None, None, False) 表示回退原 AI"""
         if not self.ready:
             return None, None, False
+        now = _now()
+        key = id(enemy)
+        hit = self._cache.get(key)
+        if hit is not None and now < hit[0]:
+            return hit[1], hit[2], hit[3]
         try:
             tm = None
             if teammates:
-                tm = min(teammates, key=lambda e: math.hypot(e.x - enemy.x, e.y - enemy.y))
+                tm = min((e for e in teammates if e is not enemy),
+                         key=lambda e: math.hypot(e.x - enemy.x, e.y - enemy.y),
+                         default=None)
             t0 = _now()
             obs = self.make_obs(enemy, player, world, tm)
             if self.sess is not None:
@@ -152,9 +162,14 @@ class RLEnemyAI:
             if act == 9:
                 return 0.0, 0.0, skill
             ang = (act - 1) * (math.pi / 4)
-            return math.cos(ang), math.sin(ang), skill
+            res = (math.cos(ang), math.sin(ang), skill)
         except Exception:
-            return None, None, False
+            res = (None, None, False)
+        if res[0] is not None:
+            self._cache[key] = (now + self._DECIDE_INTERVAL, res[0], res[1], res[2])
+            if len(self._cache) > 512:          # 防缓存膨胀（怪重生/新 id 自然淘汰）
+                self._cache.clear()
+        return res
 
     def save_stats(self, path):
         """导出遥测数据（决策/技能/延迟），供开发者面板与离线分析"""

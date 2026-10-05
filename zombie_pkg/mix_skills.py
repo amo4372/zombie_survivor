@@ -203,12 +203,10 @@ class SkillsMixin:
         return None
 
     def _get_unlocked_skills_for(self, player):
-        """获取某玩家的已解锁主动技能列表（基础手雷恒可用 + 技能树主动 + 传说武器专属）"""
+        """获取某玩家的已解锁主动技能列表（技能树主动 + 传说武器专属；初始无技能，手雷需技能树解锁）"""
         if not player:
-            return [SkillType.GRENADE]
+            return []
         skills = list(player.skill_tree.get_unlocked_active_skills())
-        if SkillType.GRENADE not in skills:
-            skills.insert(0, SkillType.GRENADE)
         ls = self._sync_legendary_skill_level(player)
         if ls and ls not in skills:
             skills.append(ls)
@@ -254,8 +252,8 @@ class SkillsMixin:
         self._sync_legendary_skill_level()  # 传说专属技能等级与武器同步
 
         skill = self.player.skill_tree.get_skill(skill_type)
-        if not skill or (skill.current_level == 0 and skill_type != SkillType.GRENADE):
-            # 基础手雷天生可用（0级=基础破片），其余技能需解锁
+        if not skill or skill.current_level == 0:
+            # 所有技能（含手雷）0级=未解锁，需先点技能树
             self.floating_texts.append(FloatingText(
                 self.player.x, self.player.y - 40, 
                 f"技能未解锁!", color=GRAY, lifetime=1.5
@@ -325,8 +323,8 @@ class SkillsMixin:
         self._sync_legendary_skill_level()  # 传说专属技能等级与武器同步
 
         skill = self.player.skill_tree.get_skill(skill_type)
-        if not skill or (skill.current_level == 0 and skill_type != SkillType.GRENADE):
-            # 基础手雷天生可用（0级=基础破片），其余技能需解锁
+        if not skill or skill.current_level == 0:
+            # 所有技能（含手雷）0级=未解锁，需先点技能树
             self.floating_texts.append(FloatingText(
                 self.player.x, self.player.y - 40, 
                 f"技能未解锁!", color=GRAY, lifetime=1.5
