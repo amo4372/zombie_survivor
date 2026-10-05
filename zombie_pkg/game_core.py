@@ -881,6 +881,13 @@ class GameCore:
                 dt *= 0.3
 
         if self.state == GameState.PLAYING:
+            # v2.0.17：RL 批处理推理（每帧一次矩阵前向 + argmax 确定性，替代逐怪即时推理防卡顿/随机游走）
+            if getattr(self, "rl_ai", None) is not None and getattr(self.rl_ai, "ready", False):
+                try:
+                    _ps = [self.player] + ([self.player2] if getattr(self, "player2", None) else [])
+                    self.rl_ai.flush_batch(world=self, enemies=self.enemies, players=_ps)
+                except Exception:
+                    pass
             self._update_playing(dt)
             # 主机广播世界快照给客户端
             if self.multiplayer_mode == "network" and self.net_role == "host" and self.net_started:

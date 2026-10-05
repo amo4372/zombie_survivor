@@ -23,7 +23,8 @@ class RLEnemyAI:
         self.enabled = False
         self.sess = None
         self._cache = {}            # id(enemy) -> (下次决策时间, vx, vy, skill)：决策节流缓存
-        self._DECIDE_INTERVAL = 0.15
+        self._dirty = set()         # 待批量重算的敌人 id（主循环每帧 flush 一次批前向）
+        self._DECIDE_INTERVAL = 0.2   # 决策节流：同怪 0.2s 内复用上次动作
         self._input_name = None
         self.obs_dim = 22   # v2.0.14.1: +投掷冷却
         # 遥测统计（开发者面板/数据导出用）
@@ -119,7 +120,9 @@ class RLEnemyAI:
 
     # ---------- 决策 ----------
     def decide(self, enemy, player, world=None, teammates=None):
-        """返回 (vx, vy, attack)；不可用时返回 (None, None, False) 表示回退原 AI"""
+        """返回 (vx, vy, attack)；缓存命中直接返回；过期则标记待批处理并返回上次动作。
+        真正的推理由主循环每帧 flush_batch() 批量执行（一帧一次矩阵前向，argmax 确定性）。
+        不可用/首帧无缓存 → (None, None, False) 回退原 AI。"""
         if not self.ready:
             return None, None, False
         now = _now()
@@ -127,49 +130,86 @@ class RLEnemyAI:
         hit = self._cache.get(key)
         if hit is not None and now < hit[0]:
             return hit[1], hit[2], hit[3]
+        self._dirty.add(key)          # 过期 → 待批处理
+        if hit is not None:
+            return hit[1], hit[2], hit[3]   # 沿用上次动作直到批处理刷新
+        return None, None, False
+
+    def flush_batch(self, world=None, enemies=None, players=None):
+        """主循环每帧调用：对过期敌人一次批量前向（numpy/onnx 矩阵批），argmax 确定性决策。
+        - 每怪以其最近玩家为参照（单机=唯一玩家；同屏双人=各自就近）
+        - 队友取同批内最近的其他存活敌人（排除自身）"""
+        if not self.ready or not self._dirty:
+            return
+        now = _now()
+        ps = list(players or [])
+        ents = [e for e in (enemies or []) if id(e) in self._dirty and getattr(e, "alive", True)]
+        if not ents:
+            self._dirty.clear()
+            return
+        rows = []
+        for e in ents:
+            p = None
+            if ps:
+                p = min(ps, key=lambda pl: (pl.x - e.x) ** 2 + (pl.y - e.y) ** 2)
+            tm, best = None, float("inf")
+            for o in ents:
+                if o is e:
+                    continue
+                d = (o.x - e.x) ** 2 + (o.y - e.y) ** 2
+                if d < best:
+                    best, tm = d, o
+            rows.append(self.make_obs(e, p, world, tm))
+        X = self._np.vstack(rows).astype(self._np.float32)
+        t0 = _now()
         try:
-            tm = None
-            if teammates:
-                tm = min((e for e in teammates if e is not enemy),
-                         key=lambda e: math.hypot(e.x - enemy.x, e.y - enemy.y),
-                         default=None)
-            t0 = _now()
-            obs = self.make_obs(enemy, player, world, tm)
             if self.sess is not None:
-                probs = self.sess.run(None, {self._input_name: obs.reshape(1, -1)})[0][0]
+                logits = self.sess.run(None, {self._input_name: X})[0]
             else:
-                # 纯 numpy 前向：obs22 → tanh(128) → tanh(128) → 14 logits
                 npz = self._npz
-                x = obs.astype(self._np.float32)
-                h = self._np.tanh(x @ npz["mlp.policy_net.0.weight"].T + npz["mlp.policy_net.0.bias"])
+                h = self._np.tanh(X @ npz["mlp.policy_net.0.weight"].T + npz["mlp.policy_net.0.bias"])
                 h = self._np.tanh(h @ npz["mlp.policy_net.2.weight"].T + npz["mlp.policy_net.2.bias"])
-                probs = h @ npz["action_net.weight"].T + npz["action_net.bias"]
-            # 拟人采样（温度 1.2）
-            p = self._np.clip(probs.astype(float), 1e-9, None)
-            p = p ** (1.0 / 1.2)
-            p /= p.sum()
-            act = int(self._np.random.choice(len(p), p=p))
+                logits = h @ npz["action_net.weight"].T + npz["action_net.bias"]
+            acts = self._np.argmax(logits, axis=1)   # 部署标准：确定性 argmax（训练采样/部署argmax）
+        except Exception:
+            self._dirty.clear()
+            return
+        ms = (_now() - t0) * 1000.0
+        for e, act in zip(ents, acts):
+            act = int(act)
+            # 接近保底（当前模型缺少"靠近玩家"梯度奖励，易保守原地放技能）：
+            # 1) 距离>320px 且动作非移动（停止/远程技能）→ 强制朝玩家移动（有目的接近）
+            # 2) 移动类动作明显背离玩家（夹角>120°）→ 纠正为朝玩家
+            # 近身(<320px) 完全交给模型自由发挥（技能/走位），模型学好后自然主导
+            if ps:
+                p = min(ps, key=lambda pl: (pl.x - e.x) ** 2 + (pl.y - e.y) ** 2)
+                pa = math.atan2(p.y - e.y, p.x - e.x)
+                far = ((p.x - e.x) ** 2 + (p.y - e.y) ** 2) > 320.0 ** 2
+                if far and (act == 0 or act >= 9):
+                    act = int(round(pa / (math.pi / 4))) % 8 + 1
+                elif 1 <= act <= 8:
+                    ang = (act - 1) * (math.pi / 4)
+                    dot = math.cos(ang) * math.cos(pa) + math.sin(ang) * math.sin(pa)
+                    if dot < -0.5:
+                        act = int(round(pa / (math.pi / 4))) % 8 + 1
+            skill = self.ACT_SKILL.get(act, 0)
+            if act == 0 or act >= 10:
+                res = (0.0, 0.0, skill if act != 0 else 0)
+            elif act == 9:
+                res = (0.0, 0.0, skill)
+            else:
+                ang = (act - 1) * (math.pi / 4)
+                res = (math.cos(ang), math.sin(ang), skill)
+            self._cache[id(e)] = (now + self._DECIDE_INTERVAL, res[0], res[1], res[2])
             self.stats["decisions"] += 1
             self.stats["action_hist"][act] = self.stats["action_hist"].get(act, 0) + 1
-            self.stats["total_ms"] += (_now() - t0) * 1000.0
-            self.stats["last_obs"] = [round(float(x), 3) for x in obs]
+            self.stats["total_ms"] += ms / max(len(ents), 1)
             self.stats["last_act"] = act
-            skill = self.ACT_SKILL.get(act, 0)
             if skill:
                 self.stats["skill_hist"][skill] = self.stats["skill_hist"].get(skill, 0) + 1
-            if act == 0 or act >= 10:
-                return 0.0, 0.0, skill if act != 0 else 0
-            if act == 9:
-                return 0.0, 0.0, skill
-            ang = (act - 1) * (math.pi / 4)
-            res = (math.cos(ang), math.sin(ang), skill)
-        except Exception:
-            res = (None, None, False)
-        if res[0] is not None:
-            self._cache[key] = (now + self._DECIDE_INTERVAL, res[0], res[1], res[2])
-            if len(self._cache) > 512:          # 防缓存膨胀（怪重生/新 id 自然淘汰）
-                self._cache.clear()
-        return res
+        self._dirty.clear()
+        if len(self._cache) > 1024:
+            self._cache.clear()
 
     def save_stats(self, path):
         """导出遥测数据（决策/技能/延迟），供开发者面板与离线分析"""
