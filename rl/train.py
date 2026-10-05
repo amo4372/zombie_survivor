@@ -21,7 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from zombie_env import ZombieEnv, MAX_STEPS, PLAYER_HP, BITE_DAMAGE, make_env_factory, TYPE_ORDER
 
 # 群体阵容：每种类型一个子环境（多僵尸共享策略 → 集体战术）
-ROSTER = ["normal", "fast", "tank", "spitter"]
+ROSTER = ["normal", "fast", "tank", "spitter", "boss"]   # v3：全部僵尸（含boss及其技能）
 
 
 def build_envs(n_envs=4):

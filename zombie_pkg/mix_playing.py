@@ -983,6 +983,20 @@ class PlayingMixin:
                     if dist_pl < enemy.size + p.size + 5:
                         p.take_damage(int(enemy.damage * 0.8), damage_type="melee", attack_x=enemy.x, attack_y=enemy.y)
 
+            elif result == "boss_summon":
+                # v2.0.14：RL 召唤技能
+                for _ in range(2):
+                    angle = random.uniform(0, math.pi * 2)
+                    sx = enemy.x + math.cos(angle) * 80
+                    sy = enemy.y + math.sin(angle) * 80
+                    _e = Enemy(sx, sy, EnemyType.ZOMBIE_NORMAL, 1, self.config.difficulty)
+                    if getattr(self, "rl_ai", None) is not None:
+                        _e.ai_rl = self.rl_ai
+                    self.enemies.append(_e)
+                self.particles.spawn_explosion(enemy.x, enemy.y, DARK_GREEN, 24)
+                if hasattr(self, "assets"):
+                    self.assets.play_sound("boss_queen_summon")
+
             elif result == "boss_summon_melee":
                 # 龙某召唤普通僵尸
                 for _ in range(3):

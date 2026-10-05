@@ -332,8 +332,11 @@ class Enemy:
             # 被钩爪勾中：完全由RiotGear控制位置，敌人不做任何自主行动
             return
 
-        # ========== Boss智能AI增强 ==========
-        if getattr(self, "is_boss", False) and self.alive:
+        # ========== Boss智能AI增强（RL 模式下由 RL 接管，跳过原状态机） ==========
+        _rl_act = (getattr(self, "ai_rl", None) is not None
+                   and getattr(self.ai_rl, "ready", False)
+                   and not getattr(self, "rl_skip", False))
+        if getattr(self, "is_boss", False) and self.alive and not _rl_act:
             self._update_boss_ai(dt, player_x, player_y, player)
 
         # 幻影僵尸隐身逻辑
@@ -385,6 +388,22 @@ class Enemy:
             return None
 
         if dist > 0:
+            # v2.0.14：RL 强化学习 AI 接管全部僵尸（含 boss）移动与技能（未启用/不可用 → 回退原 AI）
+            if _rl_act:
+                _teammates = getattr(world, "enemies", None)
+                _vx, _vy, _skill = self.ai_rl.decide(self, player, world, _teammates)
+                if _vx is not None:
+                    mdx = _vx * self.speed * self._buff_speed_mult * dt * 60
+                    mdy = _vy * self.speed * self._buff_speed_mult * dt * 60
+                    self._move_with_obstacle_collision(mdx, mdy, world)
+                    if _skill:
+                        _r = self._rl_cast_skill(_skill, dt, player_x, player_y, dist, player)
+                        if _r:
+                            return _r
+                    self.anim_timer += dt
+                    return None
+                # 决策失败（异常）→ 回退下方原 AI
+
             if getattr(self, "is_boss", False):
                 self._boss_behavior(dt, player_x, player_y, dist, player)
             else:
@@ -403,19 +422,6 @@ class Enemy:
                         return None
                     return special_result
 
-                # v2.0.13：RL 强化学习 AI 接管移动（未启用/不可用 → 回退原 AI）
-                if getattr(self, "ai_rl", None) is not None and getattr(self.ai_rl, "ready", False) and not getattr(self, "is_boss", False):
-                    _teammates = getattr(world, "enemies", None)
-                    _vx, _vy, _atk = self.ai_rl.decide(self, player, world, _teammates)
-                    if _vx is not None:
-                        mdx = _vx * self.speed * self._buff_speed_mult * dt * 60
-                        mdy = _vy * self.speed * self._buff_speed_mult * dt * 60
-                        self._move_with_obstacle_collision(mdx, mdy, world)
-                        if _atk and getattr(self, "attack_range", 0) > 0 and dist < self.attack_range:
-                            self._ranged_attack(dt, player_x, player_y, dist)
-                        self.anim_timer += dt
-                        return None
-
                 if getattr(self, "attack_range", 0) > 0 and dist < self.attack_range:
                     if dist < self.attack_range * 0.5:
                         mdx = -(dx / dist) * self.speed * self._buff_speed_mult * dt * 60
@@ -432,6 +438,35 @@ class Enemy:
         if self.anim_timer > 0.2:
             self.anim_timer = 0
             self.anim_frame = (self.anim_frame + 1) % 4
+
+    def _rl_cast_skill(self, skill, dt, player_x, player_y, dist, player):
+        """RL 技能分发：1远程 2冲刺 3召唤 4范围咆哮（boss 通用技能；普通敌人仅远程）"""
+        try:
+            if skill == 1 and getattr(self, "attack_range", 0) > 0 and dist < self.attack_range:
+                return self._ranged_attack(dt, player_x, player_y, dist)
+            if not getattr(self, "is_boss", False):
+                return None
+            if skill == 2 and self.boss_dash_cd <= 0:
+                # 冲刺：复用原冲刺状态
+                self.is_dashing = True
+                self.dash_target_x = player_x
+                self.dash_target_y = player_y
+                self.dash_speed = 9.0
+                self.dash_timer = 0.4
+                self.boss_dash_cd = 4.5
+                return None
+            if skill == 3 and self.boss_summon_cd <= 0:
+                self.boss_summon_cd = getattr(self, "summon_interval", 12.0)
+                return "boss_summon"
+            if skill == 4 and self.boss_aoe_cd <= 0:
+                self.boss_aoe_cd = 5.0
+                self.skill_windup = 0.5
+                if self.enemy_type == EnemyType.BOSS_WANG:
+                    return "wang_scythe_sweep"
+                return "boss_aoe"
+        except Exception:
+            pass
+        return None
 
     def _move_with_obstacle_collision(self, move_dx, move_dy, world):
         """带障碍物碰撞的移动：普通怪物被阻挡，特殊怪物可穿越"""

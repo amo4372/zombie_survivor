@@ -7,7 +7,8 @@
 - 共享策略多智能体：训练单僵尸策略，观测含"队友包抄角度"，部署时 N 只共享
   策略各自决策 → 集体战术涌现
 - 观测 19 维：基础9 + 八向障碍物射线8 + 最近队友相对位置2
-- 动作 Discrete(10)：0停 1-8八向移动 9=远程攻击（仅吐酸有效）
+- 动作 Discrete(13)：0停 1-8八向移动 9=远程攻击 10=冲刺(boss) 11=召唤(boss) 12=范围咆哮(boss)
+- 观测 21 维：原19维 + 冲刺冷却 + 范围技能冷却（boss 专用，普通类型恒 0）
 
 奖励设计（防无脑直线冲锋）：
   距离变化 / 侧面包抄(与玩家朝向角差) / 队友夹角包抄(≈90°集体夹击)
@@ -43,6 +44,9 @@ ZOMBIE_TYPES = {
     "tank":   {"speed": 58.0, "hp": 250.0, "bite": 20.0, "bite_cd": 0.8, "radius": 22},
     "spitter": {"speed": 82.0, "hp": 40.0, "bite": 5.0, "bite_cd": 0.6, "radius": 15,
                 "spit_damage": 6.0, "spit_cd": 2.0, "spit_range": 320.0, "spit_speed": 260.0},
+    "boss":    {"speed": 95.0, "hp": 500.0, "bite": 24.0, "bite_cd": 0.7, "radius": 22,
+                "dash_cd": 3.5, "summon_cd": 8.0, "aoe_cd": 5.0,
+                "dash_damage": 20.0, "aoe_damage": 12.0, "aoe_radius": 200.0, "dash_dist": 220.0},
 }
 TYPE_ORDER = list(ZOMBIE_TYPES)
 RAYS = [0, 45, 90, 135, 180, 225, 270, 315]   # 八向射线
@@ -59,8 +63,8 @@ class ZombieEnv(gym.Env):
         self.ztype = zombie_type
         self.teammate = teammate          # 是否模拟侧翼队友（集体战术训练）
         self.map = load_map(map_path)
-        self.action_space = spaces.Discrete(10)
-        self.observation_space = spaces.Box(low=-1.0, high=1.0, shape=(19,), dtype=np.float32)
+        self.action_space = spaces.Discrete(13)
+        self.observation_space = spaces.Box(low=-1.0, high=1.0, shape=(21,), dtype=np.float32)
         self.rz = np.random.default_rng(seed)
         self._reset_state()
 
@@ -89,6 +93,12 @@ class ZombieEnv(gym.Env):
         self.spits = []                # 吐酸投射物 [x,y,vx,vy]
         self.attack_timer = 0.0
         self.spit_timer = 0.0
+        # boss 技能冷却（普通类型恒 0）
+        self.dash_cd = 0.0
+        self.aoe_cd = 0.0
+        self.summon_cd = 0.0
+        self.is_dashing = False
+        self.dash_dir = (0.0, 0.0)
         self.fire_timer = 0.0
         self.step_count = 0
         self._prev_dist = self._dist()
@@ -134,6 +144,9 @@ class ZombieEnv(gym.Env):
                np.clip(side_w, 0, 1), np.clip(side_h, 0, 1)]
         obs += rays
         obs += [np.clip(tdx * 2, -1, 1), np.clip(tdy * 2, -1, 1)]
+        # boss 技能冷却（普通类型恒 0）
+        max_cd = max(ZOMBIE_TYPES["boss"]["dash_cd"], ZOMBIE_TYPES["boss"]["aoe_cd"], 1.0) if self.ztype == "boss" else 1.0
+        obs += [np.clip(self.dash_cd / max_cd, 0, 1), np.clip(self.aoe_cd / max_cd, 0, 1)]
         return np.array(obs, dtype=np.float32)
 
     # ---------- 玩家脚本 ----------
@@ -168,6 +181,39 @@ class ZombieEnv(gym.Env):
                 self.bullets.remove(b)
                 hit = True
         return hit
+
+    def _boss_dash(self):
+        """冲刺：向玩家突进一段距离，命中靠近奖励"""
+        if self.dash_cd > 0:
+            return -0.2
+        self.dash_cd = ZOMBIE_TYPES["boss"]["dash_cd"]
+        ang = math.atan2(self.py - self.zy, self.px - self.zx)
+        self.dash_dir = (math.cos(ang), math.sin(ang))
+        self.is_dashing = True
+        self.dash_timer = 0.45
+        # 先预览冲后距离：若显著逼近玩家则奖励
+        d_before = self._dist()
+        d_after = math.hypot(self.zx + self.dash_dir[0] * 120 - self.px,
+                             self.zy + self.dash_dir[1] * 120 - self.py)
+        gain = max(0.0, d_before - d_after)
+        return float(np.clip(gain / 300.0 * 10.0, 0, 10))
+
+    def _boss_summon(self):
+        """召唤：冷却内不可用，成功 +3（象征召唤小怪威慑）"""
+        if self.summon_cd > 0:
+            return -0.2
+        self.summon_cd = ZOMBIE_TYPES["boss"]["summon_cd"]
+        return 3.0
+
+    def _boss_aoe(self):
+        """范围咆哮：玩家在半径内受伤害"""
+        if self.aoe_cd > 0:
+            return -0.2
+        self.aoe_cd = ZOMBIE_TYPES["boss"]["aoe_cd"]
+        if self._dist() < ZOMBIE_TYPES["boss"]["aoe_radius"]:
+            self.php = max(0.0, self.php - ZOMBIE_TYPES["boss"]["aoe_damage"])
+            return 12.0
+        return 0.5
 
     def _zombie_attack(self):
         st = ZOMBIE_TYPES[self.ztype]
@@ -224,6 +270,20 @@ class ZombieEnv(gym.Env):
         st = ZOMBIE_TYPES[self.ztype]
         for _ in range(SUBSTEPS):
             self.step_count += 1
+            # 技能冷却
+            self.dash_cd = max(0.0, self.dash_cd - DT)
+            self.aoe_cd = max(0.0, self.aoe_cd - DT)
+            self.summon_cd = max(0.0, self.summon_cd - DT)
+            # 冲刺持续状态
+            if self.is_dashing:
+                dx0, dy0 = self.dash_dir
+                self.zx += dx0 * 340.0 * DT
+                self.zy += dy0 * 340.0 * DT
+                self.zx = float(np.clip(self.zx, st["radius"], ARENA_W - st["radius"]))
+                self.zy = float(np.clip(self.zy, st["radius"], ARENA_H - st["radius"]))
+                self.dash_timer -= DT
+                if self.dash_timer <= 0:
+                    self.is_dashing = False
             # 移动（1-8 向）+ 障碍物碰撞
             if 1 <= action <= 8:
                 ang = (action - 1) * (math.pi / 4)
@@ -241,6 +301,17 @@ class ZombieEnv(gym.Env):
                     reward -= 0.1  # 撞墙小惩罚（学会绕路）
             elif action == 9:
                 reward += self._spit_attack()
+            elif action in (10, 11, 12):
+                # boss 专属技能；非 boss 类型视为停止
+                if self.ztype == "boss":
+                    if action == 10:
+                        reward += self._boss_dash()
+                    elif action == 11:
+                        reward += self._boss_summon()
+                    else:
+                        reward += self._boss_aoe()
+                else:
+                    action = 0
 
             self._player_act()
             if self._update_bullets():
@@ -297,9 +368,14 @@ class ZombieEnv(gym.Env):
         return None
 
 
+TRAIN_MAPS = ["rl/maps/demo.zmap", "rl/maps/street.zmap", "rl/maps/forest.zmap",
+             "rl/maps/factory.zmap", "rl/maps/graveyard.zmap", "rl/maps/hospital.zmap"]
+
 def make_env_factory(zombie_type, seed_base=1000):
     def _f():
+        # 地图轮换：按类型+种子选图（泛化到全部地图）
+        mp = TRAIN_MAPS[abs(hash((zombie_type, seed_base))) % len(TRAIN_MAPS)]
         return ZombieEnv(player_mode="kite", zombie_type=zombie_type,
-                         map_path="rl/maps/demo.zmap", teammate=True,
+                         map_path=mp, teammate=True,
                          seed=seed_base + hash(zombie_type) % 1000)
     return _f

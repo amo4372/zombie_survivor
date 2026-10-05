@@ -282,8 +282,16 @@ class GameCore:
             if getattr(self.config, "AI_MODE", "off") == "rl":
                 from zombie_pkg.ai_controller import RLEnemyAI
                 self.rl_ai = RLEnemyAI(getattr(self.config, "RL_MODEL_PATH", ""), enable=True)
+                if self.rl_ai and self.rl_ai.ready:
+                    logger.info(f"[AI] RL 强化学习 AI 已加载: {self.rl_ai.model_path}")
+                else:
+                    logger.info("[AI] RL 模型缺失/不可用，已回退原 AI")
+            else:
+                self.rl_ai = None
+                logger.info("[AI] AI_MODE=off，使用原 AI")
         except Exception:
             self.rl_ai = None
+
         self.projectiles = []
         self.special_items = []  # 场景道具（武器箱/宝箱/生命/弹药等）
         self.text_items = []  # 可拾取文本资料
@@ -487,6 +495,19 @@ class GameCore:
         self.renderer = Renderer(self.screen, self)
         logger.info("游戏初始化完成")
 
+    def save_ai_stats(self):
+        """导出 RL 遥测数据到 data/ai_stats.json（开发者分析用）"""
+        try:
+            if getattr(self, "rl_ai", None) is not None and self.rl_ai.ready:
+                import os as _os
+                _d = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), "data")
+                _os.makedirs(_d, exist_ok=True)
+                self.rl_ai.save_stats(_os.path.join(_d, "ai_stats.json"))
+                return True
+        except Exception:
+            pass
+        return False
+
     def _update_scale(self):
         sw = self.screen.get_width()
         sh = self.screen.get_height()
@@ -578,15 +599,20 @@ class GameCore:
                 self.map_config = MAP_CONFIGS[MapType.SCHOOL]
 
             self.world = GameWorld(map_type=self.current_map)
-            # v2.0.13：可选加载 .zmap 二进制大地图（默认空=原随机地图）
-            if getattr(self.config, "MAP_FILE", ""):
-                try:
-                    from zombie_pkg.map_loader import apply_zmap
-                    _r = apply_zmap(self.world, self.config.MAP_FILE)
-                    logger.info(f"ZMAP 已应用: {_r}")
-                except Exception as _e:
-                    logger.log_exception(_e)
-                    logger.info("ZMAP 加载失败，回退默认地图")
+            # v2.0.13/14：可选加载 .zmap 二进制大地图（默认空=原随机地图；缺失/损坏自动回退并提示）
+            _mf = getattr(self.config, "MAP_FILE", "")
+            if _mf:
+                import os as _os
+                if not _os.path.exists(_mf):
+                    logger.info(f"[ZMAP] 地图文件不存在({_mf})，已回退默认随机地图")
+                else:
+                    try:
+                        from zombie_pkg.map_loader import apply_zmap
+                        _r = apply_zmap(self.world, _mf)
+                        logger.info(f"[ZMAP] 已应用: {_r}")
+                    except Exception as _e:
+                        logger.log_exception(_e)
+                        logger.info(f"[ZMAP] 地图损坏({_mf})，已回退默认地图")
             logger.info(f"世界创建完成，地图: {self.map_config['name']}")
 
             self.player = Player(0, 0, start_weapon=self.selected_weapon, start_weapon_level=self.selected_weapon_level)

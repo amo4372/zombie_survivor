@@ -8,15 +8,26 @@
 """
 import os
 import math
+import time
+
+def _now():
+    return time.perf_counter()
 
 
 class RLEnemyAI:
+    # 动作→技能映射：9远程 10冲刺 11召唤 12范围咆哮
+    ACT_SKILL = {9: 1, 10: 2, 11: 3, 12: 4}
+
     def __init__(self, model_path, enable=True):
         self.model_path = model_path
         self.enabled = False
         self.sess = None
         self._input_name = None
-        self.obs_dim = 19
+        self.obs_dim = 21
+        # 遥测统计（开发者面板/数据导出用）
+        self.stats = {"decisions": 0, "action_hist": {}, "skill_hist": {},
+                      "total_ms": 0.0, "last_obs": None, "last_act": None,
+                      "model_status": "disabled", "load_error": ""}
         if enable and model_path and os.path.exists(model_path):
             try:
                 import onnxruntime as ort
@@ -26,8 +37,11 @@ class RLEnemyAI:
                     model_path, providers=["CPUExecutionProvider"])
                 self._input_name = self.sess.get_inputs()[0].name
                 self.enabled = True
-            except Exception:
+            except Exception as e:
+                self.stats["load_error"] = str(e)[:120]
                 self.sess = None
+        if self.sess is not None:
+            self.stats["model_status"] = "ready"
 
     @property
     def ready(self):
@@ -51,13 +65,19 @@ class RLEnemyAI:
             tdy = (teammate.y - enemy.y) / ARENA_H
         else:
             tdx = tdy = 0.0
+        # boss 技能冷却（与训练环境同规格；普通敌人无属性→0）
+        dash_cd = getattr(enemy, "boss_dash_cd", 0.0) or 0.0
+        aoe_cd = getattr(enemy, "boss_aoe_cd", 0.0) or 0.0
+        max_cd = 5.0
         return np.array([
             float(np.clip(dx * 2, -1, 1)), float(np.clip(dy * 2, -1, 1)),
             float(np.clip(dist, 0, 1)),
             math.sin(facing), math.cos(facing),
             player.hp / 100.0, enemy.hp / max(getattr(enemy, "max_hp", 50), 1),
             float(np.clip(side_w, 0, 1)), float(np.clip(side_h, 0, 1)),
-        ] + rays + [float(np.clip(tdx * 2, -1, 1)), float(np.clip(tdy * 2, -1, 1))],
+        ] + rays + [float(np.clip(tdx * 2, -1, 1)), float(np.clip(tdy * 2, -1, 1)),
+                    float(np.clip(dash_cd / max_cd, 0, 1)),
+                    float(np.clip(aoe_cd / max_cd, 0, 1))],
             dtype=np.float32)
 
     def _ray_dist(self, enemy, world, ang, max_dist=400.0):
@@ -85,6 +105,7 @@ class RLEnemyAI:
             tm = None
             if teammates:
                 tm = min(teammates, key=lambda e: math.hypot(e.x - enemy.x, e.y - enemy.y))
+            t0 = _now()
             obs = self.make_obs(enemy, player, world, tm)
             probs = self.sess.run(None, {self._input_name: obs.reshape(1, -1)})[0][0]
             # 拟人采样（温度 1.2）
@@ -92,14 +113,35 @@ class RLEnemyAI:
             p = p ** (1.0 / 1.2)
             p /= p.sum()
             act = int(self._np.random.choice(len(p), p=p))
-            if act == 0:
-                return 0.0, 0.0, False
+            self.stats["decisions"] += 1
+            self.stats["action_hist"][act] = self.stats["action_hist"].get(act, 0) + 1
+            self.stats["total_ms"] += (_now() - t0) * 1000.0
+            self.stats["last_obs"] = [round(float(x), 3) for x in obs]
+            self.stats["last_act"] = act
+            skill = self.ACT_SKILL.get(act, 0)
+            if skill:
+                self.stats["skill_hist"][skill] = self.stats["skill_hist"].get(skill, 0) + 1
+            if act == 0 or act >= 10:
+                return 0.0, 0.0, skill if act != 0 else 0
             if act == 9:
-                return 0.0, 0.0, True
+                return 0.0, 0.0, skill
             ang = (act - 1) * (math.pi / 4)
-            return math.cos(ang), math.sin(ang), False
+            return math.cos(ang), math.sin(ang), skill
         except Exception:
             return None, None, False
+
+    def save_stats(self, path):
+        """导出遥测数据（决策/技能/延迟），供开发者面板与离线分析"""
+        try:
+            import json
+            s = dict(self.stats)
+            s["last_obs"] = None  # 不落盘完整观测（占空间）
+            s["avg_ms"] = round(self.stats["total_ms"] / max(self.stats["decisions"], 1), 3)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(s, f, ensure_ascii=False, indent=2)
+            return True
+        except Exception:
+            return False
 
 
 # 全局单例（惰性初始化）
