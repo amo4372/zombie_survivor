@@ -616,11 +616,17 @@ class GameCore:
             logger.info(f"世界创建完成，地图: {self.map_config['name']}")
 
             self.player = Player(0, 0, start_weapon=self.selected_weapon, start_weapon_level=self.selected_weapon_level)
+            # v2.0.14：加载 .zmap 时玩家出生对齐地图出生点（默认 0,0）
+            _psp = getattr(self.world, "spawn_points", {}).get("player", [])
+            if _psp:
+                self.player.x, self.player.y = float(_psp[0][0]), float(_psp[0][1])
             # 双人模式：P1 实际武器/角色来自第一轮选择
             if self.multiplayer_mode in ("same_screen", "network"):
                 if getattr(self, 'selected_weapon_p1', None):
                     self.player = Player(0, 0, start_weapon=self.selected_weapon_p1,
                                          start_weapon_level=self.selected_weapon_level)
+                    if _psp:
+                        self.player.x, self.player.y = float(_psp[0][0]), float(_psp[0][1])
                 if getattr(self, 'selected_char_p1', None):
                     self.selected_character = self.selected_char_p1
             # 加载跨局永久符文(可升级)到本局符文管理器

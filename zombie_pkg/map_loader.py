@@ -53,14 +53,32 @@ def _merge_runs(tiles, w, h, wanted):
 
 
 def apply_zmap(world, map_path):
-    """把 .zmap 应用到游戏世界（world.obstacles / world.zones / world.spawn_points）"""
+    """把 .zmap 应用到游戏世界（world.obstacles / world.zones / world.spawn_points）
+
+    注意：直接构造障碍、不走 _add_obs —— _add_obs 的 460x460 出生区避让会把
+    地图左上角的设计元素（栅栏/树带/建筑）大量吞掉（实测 street 被吞 77%）。
+    固定地图由设计者规划，出生区应保持地图原貌。
+    """
+    import pygame as _pg
     m = load_map(map_path)
     w, h = m["width"], m["height"]
+    # 玩家出生安全区：避开出生点周围 80px，防玩家被地图元素卡死
+    _p_spawns = [o for o in m["objects"] if o["type"] == OBJ_PLAYER_SPAWN]
+    _safe = [_pg.Rect(int(o["x"]) - 80, int(o["y"]) - 80, 160, 160) for o in _p_spawns]
     added = 0
     for tile, otype in _TILE_TO_OBSTYPE.items():
         for gx, gy, run in _merge_runs(m["tiles"], w, h, tile):
-            x, y = gx * TILE_SIZE, gy * TILE_SIZE
-            world._add_obs(otype, x, y, run * TILE_SIZE, TILE_SIZE)
+            r = _pg.Rect(gx * TILE_SIZE, gy * TILE_SIZE, run * TILE_SIZE, TILE_SIZE)
+            if r.width < 4 or r.height < 4:
+                continue
+            # 出生安全区跳过（防卡死）
+            if _safe and any(r.colliderect(s) for s in _safe):
+                continue
+            # 重叠跳过（与同源地图障碍）
+            if any(o["rect"].colliderect(r) for o in world.obstacles):
+                continue
+            world.obstacles.append({"rect": r, "type": otype,
+                                    "color": world._obs_color(otype), "rotation": 0})
             added += 1
     # 效果区
     zones = []
