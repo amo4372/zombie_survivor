@@ -29,8 +29,26 @@ OBJ_SUPPLY = 4
 OBJ_NAMES = {0: "玩家出生点", 1: "僵尸出生点", 2: "巡逻点", 3: "出口", 4: "补给点"}
 
 TILE_EMPTY = 0
-TILE_BLOCK = 1
-TILE_COVER = 2
+TILE_BLOCK = 1        # 障碍（墙/箱/废墟）
+TILE_COVER = 2        # 掩体（可通过、遮挡弹道）
+TILE_WATER = 3        # 水坑（减速 50%）
+TILE_SPIKE = 4        # 尖刺（持续伤害）
+TILE_TREE = 5         # 树木（不可通过+遮挡）
+TILE_VEHICLE = 6      # 车辆（不可通过+掩体）
+TILE_BUILDING = 7     # 建筑（不可通过+遮挡）
+TILE_FENCE = 8        # 栅栏（不可通过）
+TILE_DECOR = 9        # 装饰（纯视觉，可通过）
+
+# 阻挡移动的 tile 集合
+BLOCK_TILES = (TILE_BLOCK, TILE_TREE, TILE_VEHICLE, TILE_BUILDING, TILE_FENCE)
+# 遮挡弹道的 tile 集合（掩体+树+车+建筑）
+OCCLUDE_TILES = (TILE_COVER, TILE_TREE, TILE_VEHICLE, TILE_BUILDING)
+
+TILE_NAMES = {
+    TILE_EMPTY: "空地", TILE_BLOCK: "障碍", TILE_COVER: "掩体", TILE_WATER: "水坑",
+    TILE_SPIKE: "尖刺", TILE_TREE: "树木", TILE_VEHICLE: "车辆", TILE_BUILDING: "建筑",
+    TILE_FENCE: "栅栏", TILE_DECOR: "装饰",
+}
 
 
 def make_map(w=40, h=30, default_tile=TILE_EMPTY):
@@ -96,16 +114,26 @@ def tile_at(m, x, y):
 
 
 def is_blocked(m, x, y, radius=0.0):
-    """圆是否与障碍物碰撞（考虑半径，掩体不阻挡移动）"""
-    if tile_at(m, x, y) == TILE_BLOCK:
+    """圆是否与阻挡类障碍碰撞（掩体/水坑/尖刺/装饰不阻挡移动）"""
+    if tile_at(m, x, y) in BLOCK_TILES:
         return True
     if radius <= 0:
         return False
     for dx in (-radius, 0, radius):
         for dy in (-radius, 0, radius):
-            if tile_at(m, x + dx, y + dy) == TILE_BLOCK:
+            if tile_at(m, x + dx, y + dy) in BLOCK_TILES:
                 return True
     return False
+
+
+def speed_factor(m, x, y):
+    """所在格移动速度系数（水坑 0.5，其余 1.0）"""
+    return 0.5 if tile_at(m, x, y) == TILE_WATER else 1.0
+
+
+def hazard_dps(m, x, y):
+    """所在格每秒伤害（尖刺 8/s）"""
+    return 8.0 if tile_at(m, x, y) == TILE_SPIKE else 0.0
 
 
 def raycast_free(m, x0, y0, ang, max_dist, step=8.0):
@@ -137,6 +165,27 @@ def demo_map(path="rl/maps/demo.zmap"):
         for a in range(3):
             for b in range(3):
                 m["tiles"][(oy + a) * m["width"] + ox + b] = TILE_COVER
+    # 丰富元素：树木带 / 车辆 / 水坑 / 尖刺 / 栅栏 / 建筑 / 装饰
+    for t in range(10):
+        m["tiles"][(6 + t) * m["width"] + 4] = TILE_TREE
+        m["tiles"][(6 + t) * m["width"] + 3] = TILE_TREE
+    for t in range(6):
+        m["tiles"][(9 + t) * m["width"] + 30] = TILE_VEHICLE
+    for t in range(4):
+        m["tiles"][(14 + t) * m["width"] + 33] = TILE_WATER
+        m["tiles"][(14 + t) * m["width"] + 34] = TILE_WATER
+    for t in range(5):
+        m["tiles"][(22 + t) * m["width"] + 6] = TILE_SPIKE
+    for t in range(8):
+        m["tiles"][20 * m["width"] + 10 + t] = TILE_FENCE
+    m["tiles"][2 * m["width"] + 35] = TILE_BUILDING
+    m["tiles"][2 * m["width"] + 36] = TILE_BUILDING
+    m["tiles"][3 * m["width"] + 35] = TILE_BUILDING
+    m["tiles"][3 * m["width"] + 36] = TILE_BUILDING
+    for t in range(3):
+        m["tiles"][(26 + t) * m["width"] + 28] = TILE_DECOR
+    for t in range(3):
+        m["tiles"][(26 + t) * m["width"] + 29] = TILE_DECOR
     m["objects"] = [
         {"type": OBJ_PLAYER_SPAWN, "x": 640, "y": 768, "r": 12.0},
         {"type": OBJ_ZOMBIE_SPAWN, "x": 128, "y": 96, "r": 12.0},

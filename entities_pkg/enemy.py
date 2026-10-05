@@ -403,6 +403,19 @@ class Enemy:
                         return None
                     return special_result
 
+                # v2.0.13：RL 强化学习 AI 接管移动（未启用/不可用 → 回退原 AI）
+                if getattr(self, "ai_rl", None) is not None and getattr(self.ai_rl, "ready", False) and not getattr(self, "is_boss", False):
+                    _teammates = getattr(world, "enemies", None)
+                    _vx, _vy, _atk = self.ai_rl.decide(self, player, world, _teammates)
+                    if _vx is not None:
+                        mdx = _vx * self.speed * self._buff_speed_mult * dt * 60
+                        mdy = _vy * self.speed * self._buff_speed_mult * dt * 60
+                        self._move_with_obstacle_collision(mdx, mdy, world)
+                        if _atk and getattr(self, "attack_range", 0) > 0 and dist < self.attack_range:
+                            self._ranged_attack(dt, player_x, player_y, dist)
+                        self.anim_timer += dt
+                        return None
+
                 if getattr(self, "attack_range", 0) > 0 and dist < self.attack_range:
                     if dist < self.attack_range * 0.5:
                         mdx = -(dx / dist) * self.speed * self._buff_speed_mult * dt * 60

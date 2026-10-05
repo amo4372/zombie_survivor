@@ -17,16 +17,24 @@
 import os
 import sys
 import argparse
+import pygame
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from map_format import (make_map, save_map, load_map, demo_map,
                         TILE_SIZE, TILE_EMPTY, TILE_BLOCK, TILE_COVER,
+                        TILE_WATER, TILE_SPIKE, TILE_TREE, TILE_VEHICLE,
+                        TILE_BUILDING, TILE_FENCE, TILE_DECOR, TILE_NAMES,
                         OBJ_NAMES)
 
 COL_BG = (28, 28, 34)
 COL_GRID = (45, 45, 55)
-COL_BLOCK = (120, 80, 60)
-COL_COVER = (90, 130, 90)
+# tile 颜色表（10 种元素）
+TILE_COLORS = {
+    TILE_EMPTY: None, TILE_BLOCK: (120, 80, 60), TILE_COVER: (90, 130, 90),
+    TILE_WATER: (70, 110, 200), TILE_SPIKE: (200, 200, 80), TILE_TREE: (40, 130, 70),
+    TILE_VEHICLE: (160, 90, 160), TILE_BUILDING: (110, 110, 120),
+    TILE_FENCE: (170, 150, 100), TILE_DECOR: (70, 70, 90),
+}
 COL_OBJ = {0: (90, 200, 120), 1: (200, 90, 90), 2: (230, 200, 90),
            3: (120, 160, 230), 4: (210, 140, 220)}
 
@@ -42,6 +50,11 @@ class MapEditor:
         self.paint = TILE_BLOCK       # 当前绘制 tile
         self.obj_type = -1            # -1 表示绘制模式，0-4 表示放置对象
         self.dirty = False
+        self._key_tiles = {pygame.K_b: TILE_BLOCK, pygame.K_c: TILE_COVER,
+                           pygame.K_w: TILE_WATER, pygame.K_s: TILE_SPIKE,
+                           pygame.K_t: TILE_TREE, pygame.K_v: TILE_VEHICLE,
+                           pygame.K_h: TILE_BUILDING, pygame.K_f: TILE_FENCE,
+                           pygame.K_d: TILE_DECOR}
 
     # ---- 编辑操作（与 GUI 解耦，可测试）----
     def paint_at(self, x, y, tile=None):
@@ -115,9 +128,10 @@ class MapEditor:
                     if ev.key == pygame.K_c:
                         self.clear()
                         print("[EDITOR] 已清空")
-                    if ev.key == pygame.K_x:
-                        self.paint = TILE_COVER if self.paint != TILE_COVER else TILE_BLOCK
-                        print(f"[EDITOR] 绘制模式: {'掩体' if self.paint == TILE_COVER else '障碍物'}")
+                    if ev.key in self._key_tiles:
+                        self.paint = self._key_tiles[ev.key]
+                        self.obj_type = -1
+                        print(f"[EDITOR] 绘制元素: {TILE_NAMES[self.paint]}")
                     for k in range(5):
                         if ev.key == pygame.K_0 + k:
                             self.obj_type = k
@@ -153,7 +167,7 @@ class MapEditor:
         for gy in range(m["height"]):
             for gx in range(m["width"]):
                 t = m["tiles"][gy * m["width"] + gx]
-                c = {TILE_BLOCK: COL_BLOCK, TILE_COVER: COL_COVER}.get(t)
+                c = TILE_COLORS.get(t)
                 if c:
                     pygame.draw.rect(screen, c, (gx * TILE_SIZE, gy * TILE_SIZE,
                                                  TILE_SIZE - 1, TILE_SIZE - 1))
@@ -175,6 +189,7 @@ class MapEditor:
     # ---- 无头链路测试 ----
     def _dummy_test(self):
         # 程序化编辑：涂障碍、擦除、放对象、保存、加载、断言
+        self.clear()                     # 从空地图开始（防残留）
         self.paint_at(200, 200)          # 涂一格障碍
         self.paint_at(232, 200)          # 相邻格
         self.paint_at(200, 200, tile=TILE_EMPTY)   # 擦掉第一格

@@ -21,7 +21,8 @@ from gymnasium import spaces
 
 import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from map_format import load_map, is_blocked, raycast_free, TILE_BLOCK
+from map_format import (load_map, is_blocked, raycast_free, TILE_BLOCK,
+                       speed_factor, hazard_dps)
 
 ARENA_W, ARENA_H = 1280.0, 960.0   # 与 40x30 格 * 32px 地图对应
 DT = 1.0 / 30.0
@@ -230,6 +231,12 @@ class ZombieEnv(gym.Env):
                 ny = self.zy + math.sin(ang) * st["speed"] * DT
                 if not is_blocked(self.map, nx, ny, st["radius"]):
                     self.zx, self.zy = float(nx), float(ny)
+                    # 地图元素：水坑减速 / 尖刺伤害
+                    if speed_factor(self.map, self.zx, self.zy) < 1.0:
+                        reward -= 0.05  # 水坑减速惩罚（学会避开）
+                    self.zhp -= hazard_dps(self.map, self.zx, self.zy) * DT
+                    if hazard_dps(self.map, self.zx, self.zy) > 0:
+                        reward -= 0.1  # 踩尖刺惩罚
                 else:
                     reward -= 0.1  # 撞墙小惩罚（学会绕路）
             elif action == 9:

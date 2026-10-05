@@ -560,7 +560,16 @@ class PlayingMixin:
                     move_x, move_y = float(_mv[0]), float(_mv[1])
                 except Exception:
                     pass
-        self.player.update(dt, move_x, move_y, mouse_angle, self.world, sprinting=sprinting)
+        # v2.0.13：.zmap 效果区（水坑减速 / 尖刺伤害）
+        _zone_mult = 1.0
+        if getattr(self.world, "zones", None):
+            try:
+                from zombie_pkg.map_loader import apply_player_zones
+                _zone_mult = apply_player_zones(self.world, self.player, dt)
+            except Exception:
+                pass
+        self.player.update(dt, move_x * _zone_mult, move_y * _zone_mult,
+                           mouse_angle, self.world, sprinting=sprinting)
         # 符文：再生效果
         if hasattr(self, 'rune_manager'):
             regen = self.rune_manager.get_bonus("regen")
@@ -772,6 +781,9 @@ class PlayingMixin:
             spawn_y = self.player.y + math.sin(angle) * dist
             spawn_x, spawn_y = self.world.clamp_position(spawn_x, spawn_y, 20)
             enemy = Enemy(spawn_x, spawn_y, spawn_type, 1, self.config.difficulty)
+            # v2.0.13：RL 强化学习 AI 挂载（未启用时 rl_ai=None，回退原 AI）
+            if getattr(self, "rl_ai", None) is not None:
+                enemy.ai_rl = self.rl_ai
             if drops_vaccine:
                 enemy.drops_vaccine = True  # 标记此Boss必爆疫苗
             self.enemies.append(enemy)

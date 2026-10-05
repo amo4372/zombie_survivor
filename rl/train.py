@@ -47,7 +47,7 @@ def pick_device(device):
 
 def train(steps=200_000, checkpoint=None, n_envs=4, tensorboard=True, device="auto"):
     from stable_baselines3 import PPO
-    from stable_baselines3.common.callbacks import CheckpointCallback
+    from stable_baselines3.common.callbacks import CheckpointCallback, EvalCallback
 
     env = build_envs(n_envs)
     dev = pick_device(device)
@@ -66,30 +66,47 @@ def train(steps=200_000, checkpoint=None, n_envs=4, tensorboard=True, device="au
             tensorboard_log=tb_log, verbose=1, device=dev,
         )
     os.makedirs("rl/models", exist_ok=True)
+    os.makedirs("rl/eval_envs", exist_ok=True)
     ckpt = CheckpointCallback(save_freq=max(steps // 5, 1000), save_path="rl/models",
                               name_prefix="ppo_zombie_v2")
-    print(f"[RL] 开始训练 {steps} 步 ...")
+    eval_freq = max(steps // 8, 500)
+    eval_env = ZombieEnv(player_mode="kite", zombie_type="normal",
+                         map_path="rl/maps/demo.zmap", seed=42)
+    eval_cb = EvalCallback(eval_env, best_model_save_path="rl/models",
+                           log_path="rl/logs", eval_freq=eval_freq,
+                           n_eval_episodes=3, deterministic=True)
+    print(f"[RL] 开始训练 {steps} 步（每 {eval_freq} 步测评一次）...")
     t0 = time.time()
-    model.learn(total_timesteps=steps, callback=ckpt, progress_bar=False)
+    model.learn(total_timesteps=steps, callback=[ckpt, eval_cb], progress_bar=False)
     cost = time.time() - t0
     path = "rl/models/ppo_zombie_v2.zip"
     model.save(path)
     print(f"[RL] 训练完成: {steps} 步, 耗时 {cost/60:.1f} 分钟 → {path}")
     env.close()
+
+    # 训练过程历史 → 测评报告
+    history = []
+    if getattr(eval_cb, "evaluations_timesteps", None) is not None and len(eval_cb.evaluations_timesteps) > 0:
+        for ts, ev in zip(eval_cb.evaluations_timesteps, eval_cb.evaluations_results):
+            history.append({"step": int(ts), "mean_reward": float(np.mean(ev))})
+    _gen_report(path, dev, steps, cost, history)
     return path
 
 
-def evaluate(model_path, n_episodes=8):
-    """评估：对每种僵尸类型各跑若干集"""
+def _gen_report(model_path, device, steps, cost, history, n_episodes=8):
+    """评估各类型 + 生成 HTML 数据报告"""
     from stable_baselines3 import PPO
+    from report import build_report
     model = PPO.load(model_path)
+    eval_data = {}
     for zt in TYPE_ORDER:
-        rewards, wins, deaths, dists = [], 0, 0, []
+        rewards, wins, deaths, bites, dists = [], 0, 0, [], []
         for ep in range(n_episodes):
             env = ZombieEnv(player_mode="kite", zombie_type=zt,
                             map_path="rl/maps/demo.zmap", seed=100 + ep)
             obs, _ = env.reset()
             total, done = 0.0, False
+            bites_ep = 0.0
             while not done:
                 act, _ = model.predict(obs, deterministic=True)
                 obs, r, term, trunc, _ = env.step(int(act))
@@ -100,10 +117,25 @@ def evaluate(model_path, n_episodes=8):
                 wins += 1
             if env.zhp <= 0:
                 deaths += 1
+            bites_ep = max(0.0, (PLAYER_HP - max(env.php, 0)) / BITE_DAMAGE)
+            bites.append(bites_ep)
             dists.append(env.step_count)
+        eval_data[zt] = {"rewards": rewards, "wins": wins, "deaths": deaths,
+                         "episodes": n_episodes, "avg_bites": float(np.mean(bites)),
+                         "avg_steps": float(np.mean(dists))}
         print(f"[RL] {zt:8s}: 平均奖励 {np.mean(rewards):6.1f} | "
               f"玩家死亡 {wins}/{n_episodes} | 僵尸死亡 {deaths}/{n_episodes} | "
               f"平均步数 {np.mean(dists):.0f}/{MAX_STEPS}")
+    data = {"model": model_path, "device": device,
+            "total_timesteps": int(steps), "train_time_min": round(cost / 60, 1),
+            "history": history, "eval": eval_data}
+    return build_report(data)
+
+
+def evaluate(model_path, n_episodes=8):
+    """只评估（--eval-only）：跑各类型并生成报告"""
+    import glob
+    _gen_report(model_path, "eval", 0, 0, [], n_episodes)
 
 
 if __name__ == "__main__":
@@ -122,4 +154,4 @@ if __name__ == "__main__":
         sys.exit(0)
     path = train(args.steps, args.checkpoint, args.n_envs,
                  tensorboard=not args.no_tb, device=args.device)
-    evaluate(path)
+    # 训练已完成（train 内部自动生成测评报告），无需重复评估

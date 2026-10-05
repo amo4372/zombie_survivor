@@ -1,2 +1,5 @@
 pygame>=2.5.0
 pyinstaller>=6.0
+
+# v2.0.13 RL 僵尸AI（可选：不装则 AI_MODE=rl 自动回退原AI）
+onnxruntime>=1.18

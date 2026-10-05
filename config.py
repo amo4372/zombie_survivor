@@ -6,6 +6,10 @@ import pygame
 from enum import Enum, auto
 
 BASE_WIDTH = 1280
+
+# ===== RL 研究原型接入开关（v2.0.13，默认关闭不影响原玩法） =====
+# 注：AI_MODE / MAP_FILE / RL_MODEL_PATH 定义在 game_core.Config（运行时配置实例）
+
 BASE_HEIGHT = 720
 
 # 黑暗色调配色方案

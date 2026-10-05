@@ -41,6 +41,7 @@ ESSENTIAL_DIRS = [
     "renderer_pkg",    # v2.0.9：渲染系统包（由 renderer.py 拆分）
     "ui_pkg",          # v2.0.11：UI 组件包（由 ui.py 拆分）
     "entities_pkg",    # v2.0.11：实体包（由 entities.py 拆分）
+    "rl",              # v2.0.13：RL 推理模块 + .zmap 地图 + ONNX 模型（训练脚本随包但无入口）
 ]
 
 # 排除的文件模式（即使在必要目录中也排除）
@@ -52,6 +53,8 @@ EXCLUDE_PATTERNS = [
     "savegame.json", "savegame.zss",
     "_update_cache", "_update_backup",
     "dist_encrypted", "releases",
+    "rl/reports", "rl/logs", "rl/eval_envs",  # RL 训练产物不进发布包
+    "rl/models/",  # 训练 .zip 模型默认排除（create_zip 里单独追加 zombie_policy.onnx）
     "fluidsynth_portable",  # FluidSynth便携版，体积大，不打包
 ]
 
@@ -182,6 +185,11 @@ def create_zip(version, files, changelog=""):
     zip_name = f"zombie_survivor_v{version}_update.zip"
     zip_path = os.path.join(PROJECT_DIR, OUTPUT_DIR, zip_name)
 
+    # v2.0.13：ONNX 推理模型单独追加（rl/models/ 目录整体排除）
+    _onnx = os.path.join(PROJECT_DIR, "rl", "models", "zombie_policy.onnx")
+    if os.path.exists(_onnx):
+        files = files + [(_onnx, os.path.join("rl", "models", "zombie_policy.onnx"))]
+
     # 生成完整性清单（覆盖全部打包文件）
     manifest = {"version": version, "files": {}}
     for full_path, rel_path in files:
@@ -201,6 +209,9 @@ def create_zip(version, files, changelog=""):
         zf.write(tmp_manifest.name, manifest_arcname)
         for full_path, rel_path in files:
             # 在zip中创建顶层目录
+            rel_s = rel_path.replace(os.sep, "/")
+            if rel_s == "assets/manifest.json":
+                continue  # 防重复：zip 内 manifest 由临时文件唯一写入
             arcname = os.path.join(f"zombie_survivor_v{version}", rel_path)
             zf.write(full_path, arcname)
             print(f"  [打包] {rel_path}")

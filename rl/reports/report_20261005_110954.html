@@ -1,0 +1,57 @@
+<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8">
+<title>僵尸AI 训练测评报告</title>
+<style>
+body{background:#0e1116;color:#ddd;font-family:"Microsoft YaHei",sans-serif;margin:0;padding:24px}
+h1{color:#fff;font-size:22px} h2{color:#4fc3f7;font-size:17px;margin-top:28px}
+.card{background:#1a1f27;border:1px solid #2a3140;border-radius:12px;padding:16px;margin-top:12px}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th,td{border:1px solid #2a3140;padding:8px 10px;text-align:center}
+th{background:#20272f;color:#8fd0ff} .tag{color:#ffb74d;font-size:12px}
+.verdict{color:#81c784;font-weight:bold}
+</style></head><body>
+<h1>🧟 僵尸AI 训练测评报告</h1>
+<div class="tag">模型: rl/models/ppo_zombie_v2.zip · 设备: cpu ·
+训练步数: 15,000 · 耗时: 0.2 分钟</div>
+<h2>训练过程</h2><div class="card"><svg viewBox="0 0 720 260" width="100%" style="background:#14171c;border-radius:10px">
+  <polygon points="24.0,236.0 24.0,236.0 696.0,24.0 696.0,236.0" fill="#4fc3f7" opacity="0.12"/>
+  <polyline points="24.0,236.0 696.0,24.0" fill="none" stroke="#4fc3f7" stroke-width="2.2"/>
+  <text x="18" y="240.0" font-size="11" fill="#999" text-anchor="end">-31</text><text x="18" y="134.0" font-size="11" fill="#999" text-anchor="end">-13</text><text x="18" y="28.0" font-size="11" fill="#999" text-anchor="end">5</text><text x="24.0" y="252" font-size="11" fill="#999" text-anchor="middle">7500</text><text x="192.0" y="252" font-size="11" fill="#999" text-anchor="middle">9375</text><text x="360.0" y="252" font-size="11" fill="#999" text-anchor="middle">11250</text><text x="528.0" y="252" font-size="11" fill="#999" text-anchor="middle">13125</text><text x="696.0" y="252" font-size="11" fill="#999" text-anchor="middle">15000</text>
+  <text x="24" y="14" font-size="12" fill="#aaa">训练过程 平均奖励 (mean reward)</text>
+</svg></div>
+<h2>各僵尸类型平均奖励</h2><div class="card"><svg viewBox="0 0 720 260" width="100%" style="background:#14171c;border-radius:10px"><text x="82" y="51.5" font-size="12" fill="#ccc" text-anchor="end">normal</text>
+<rect x="90" y="24.0" width="6.0" height="45.0" rx="4" fill="#ffb74d" opacity="0.85"/>
+<text x="102.0" y="51.5" font-size="11" fill="#eee">-6.072078003674251</text><text x="82" y="106.5" font-size="12" fill="#ccc" text-anchor="end">fast</text>
+<rect x="90" y="79.0" width="6.0" height="45.0" rx="4" fill="#ffb74d" opacity="0.85"/>
+<text x="102.0" y="106.5" font-size="11" fill="#eee">-32.48680078109099</text><text x="82" y="161.5" font-size="12" fill="#ccc" text-anchor="end">tank</text>
+<rect x="90" y="134.0" width="570.0" height="45.0" rx="4" fill="#ffb74d" opacity="0.85"/>
+<text x="666.0" y="161.5" font-size="11" fill="#eee">39.79367979571896</text><text x="82" y="216.5" font-size="12" fill="#ccc" text-anchor="end">spitter</text>
+<rect x="90" y="189.0" width="6.0" height="45.0" rx="4" fill="#ffb74d" opacity="0.85"/>
+<text x="102.0" y="216.5" font-size="11" fill="#eee">-1.8060416307569573</text></svg></div>
+<h2>各僵尸类型玩家击杀率 (%)</h2><div class="card"><svg viewBox="0 0 720 260" width="100%" style="background:#14171c;border-radius:10px"><text x="82" y="51.5" font-size="12" fill="#ccc" text-anchor="end">normal</text>
+<rect x="90" y="24.0" width="6.0" height="45.0" rx="4" fill="#81c784" opacity="0.85"/>
+<text x="102.0" y="51.5" font-size="11" fill="#eee">0.0</text><text x="82" y="106.5" font-size="12" fill="#ccc" text-anchor="end">fast</text>
+<rect x="90" y="79.0" width="6.0" height="45.0" rx="4" fill="#81c784" opacity="0.85"/>
+<text x="102.0" y="106.5" font-size="11" fill="#eee">0.0</text><text x="82" y="161.5" font-size="12" fill="#ccc" text-anchor="end">tank</text>
+<rect x="90" y="134.0" width="6.0" height="45.0" rx="4" fill="#81c784" opacity="0.85"/>
+<text x="102.0" y="161.5" font-size="11" fill="#eee">0.0</text><text x="82" y="216.5" font-size="12" fill="#ccc" text-anchor="end">spitter</text>
+<rect x="90" y="189.0" width="6.0" height="45.0" rx="4" fill="#81c784" opacity="0.85"/>
+<text x="102.0" y="216.5" font-size="11" fill="#eee">0.0</text></svg></div>
+<h2>详细数据</h2><div class="card"><table>
+<tr><th>类型</th><th>平均奖励</th><th>击杀玩家</th><th>击杀率</th><th>自身死亡</th><th>平均咬伤</th><th>平均存活步数</th></tr>
+<tr><td><b>normal</b></td>
+<td>-6.1</td><td style="color:#999">0/8</td>
+<td>0%</td><td>2/8</td>
+<td>0.0</td><td>810</td></tr><tr><td><b>fast</b></td>
+<td>-32.5</td><td style="color:#999">0/8</td>
+<td>0%</td><td>2/8</td>
+<td>0.2</td><td>761</td></tr><tr><td><b>tank</b></td>
+<td>39.8</td><td style="color:#999">0/8</td>
+<td>0%</td><td>0/8</td>
+<td>0.0</td><td>900</td></tr><tr><td><b>spitter</b></td>
+<td>-1.8</td><td style="color:#999">0/8</td>
+<td>0%</td><td>2/8</td>
+<td>0.0</td><td>812</td></tr></table>
+<div style="margin-top:12px" class="tag">结论：
+综合最强: <b>tank</b>（平均奖励 39.8，击杀率 0%）<br>整体策略尚未击杀玩家（需继续训练/调奖励）
+</div></div>
+</body></html>

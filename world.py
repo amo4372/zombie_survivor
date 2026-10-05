@@ -222,6 +222,10 @@ class GameWorld:
         }
         self.tile_color_a, self.tile_color_b = self.ground_colors.get(map_type, ((50, 48, 45), (58, 55, 50)))
         self.obstacles = []
+        # v2.0.13：.zmap 效果区（水坑/尖刺）与出生点
+        self.zones = []
+        self.spawn_points = {"player": [], "zombie": [], "patrol": [],
+                             "exit": [], "supply": []}
         self.generated_chunks = set()
         self.items = []
         self.item_spawn_timer = 0

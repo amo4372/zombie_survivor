@@ -93,6 +93,11 @@ mod_loader.mod_hooks._global_classes = {
 }
 
 class Config:
+    # ===== v2.0.13 RL 研究原型接入开关（默认关闭，不影响原玩法） =====
+    AI_MODE = "off"              # "off" 原AI / "rl" 强化学习AI（需模型+onnxruntime）
+    MAP_FILE = ""                # .zmap 二进制大地图（空=默认随机地图；如 rl/maps/demo.zmap）
+    RL_MODEL_PATH = "rl/models/zombie_policy.onnx"
+
     def __init__(self):
         self.control_mode = ControlMode.KEYBOARD
         self.game_mode = GameMode.TIMED
@@ -271,6 +276,14 @@ class GameCore:
 
         self.rune_manager = RuneManager()  # 符文系统（修复：此前从未初始化导致不生效）
         self.enemies = []
+        # v2.0.13：RL 强化学习 AI 控制器（AI_MODE="rl" 时启用，缺失自动回退）
+        self.rl_ai = None
+        try:
+            if getattr(self.config, "AI_MODE", "off") == "rl":
+                from zombie_pkg.ai_controller import RLEnemyAI
+                self.rl_ai = RLEnemyAI(getattr(self.config, "RL_MODEL_PATH", ""), enable=True)
+        except Exception:
+            self.rl_ai = None
         self.projectiles = []
         self.special_items = []  # 场景道具（武器箱/宝箱/生命/弹药等）
         self.text_items = []  # 可拾取文本资料
@@ -565,6 +578,15 @@ class GameCore:
                 self.map_config = MAP_CONFIGS[MapType.SCHOOL]
 
             self.world = GameWorld(map_type=self.current_map)
+            # v2.0.13：可选加载 .zmap 二进制大地图（默认空=原随机地图）
+            if getattr(self.config, "MAP_FILE", ""):
+                try:
+                    from zombie_pkg.map_loader import apply_zmap
+                    _r = apply_zmap(self.world, self.config.MAP_FILE)
+                    logger.info(f"ZMAP 已应用: {_r}")
+                except Exception as _e:
+                    logger.log_exception(_e)
+                    logger.info("ZMAP 加载失败，回退默认地图")
             logger.info(f"世界创建完成，地图: {self.map_config['name']}")
 
             self.player = Player(0, 0, start_weapon=self.selected_weapon, start_weapon_level=self.selected_weapon_level)
