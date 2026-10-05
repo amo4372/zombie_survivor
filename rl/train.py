@@ -68,7 +68,7 @@ def train(steps=200_000, checkpoint=None, n_envs=4, tensorboard=True, device="au
         )
     os.makedirs("rl/models", exist_ok=True)
     os.makedirs("rl/eval_envs", exist_ok=True)
-    ckpt = CheckpointCallback(save_freq=max(steps // 5, 1000), save_path="rl/models",
+    ckpt = CheckpointCallback(save_freq=args.save_every, save_path="rl/models",
                               name_prefix="ppo_zombie_v2")
     # eval_freq 按 update 次数计：每约 25 万 timesteps 评估一次（曲线多点，避免两点直线）
     eval_freq = max(steps // n_envs // 20, 100)
@@ -81,7 +81,8 @@ def train(steps=200_000, checkpoint=None, n_envs=4, tensorboard=True, device="au
     t0 = time.time()
     model.learn(total_timesteps=steps, callback=[ckpt, eval_cb], progress_bar=False)
     cost = time.time() - t0
-    path = "rl/models/ppo_zombie_v2.zip"
+    # 保存到断点路径（续训闭环：wrapper 每次以 checkpoint 路径续跑，被杀后自动接力）
+    path = checkpoint if (checkpoint and os.path.exists(os.path.dirname(checkpoint))) else "rl/models/ppo_zombie_v2.zip"
     model.save(path)
     print(f"[RL] 训练完成: {steps} 步, 耗时 {cost/60:.1f} 分钟 → {path}")
     env.close()
@@ -170,6 +171,8 @@ if __name__ == "__main__":
     ap.add_argument("--n-envs", type=int, default=4)
     ap.add_argument("--no-tb", action="store_true")
     ap.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
+    ap.add_argument("--save-every", type=int, default=500_000,
+                    help="CheckpointCallback 保存频率（默认每50万步，防长训中断丢失）")
     args = ap.parse_args()
 
     os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

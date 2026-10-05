@@ -79,7 +79,7 @@ class ZombieEnv(gym.Env):
         self._add_random_obstacles(abs(hash((zombie_type, seed or 0))) % 100000)
         # v2.0.14.1：动作14=投掷投掷物（对齐游戏端 try_throw：rock/acid/fire）
         self.action_space = spaces.Discrete(14)
-        self.observation_space = spaces.Box(low=-1.0, high=1.0, shape=(22,), dtype=np.float32)
+        self.observation_space = spaces.Box(low=-1.0, high=1.0, shape=(26,), dtype=np.float32)   # 22基础+4子弹感知
         self.rz = np.random.default_rng(seed)
         self._reset_state()
 
@@ -224,6 +224,18 @@ class ZombieEnv(gym.Env):
         max_cd = max(ZOMBIE_TYPES["boss"]["dash_cd"], ZOMBIE_TYPES["boss"]["aoe_cd"], 1.0) if self.ztype == "boss" else 1.0
         obs += [np.clip(self.dash_cd / max_cd, 0, 1), np.clip(self.aoe_cd / max_cd, 0, 1),
                np.clip(self.throw_cd / 5.0, 0, 1)]
+        # 子弹感知（躲避子弹）：最近一发玩家子弹 方位sin/cos + 距离 + 威胁度(1=正朝僵尸飞来)
+        bs, bc, bd, bt = 0.0, 0.0, 0.0, 0.0
+        _best, _bd = None, float("inf")
+        for b in self.bullets:
+            _d = math.hypot(b[0] - self.zx, b[1] - self.zy)
+            if _d < _bd:
+                _bd, _best = _d, b
+        if _best is not None:
+            b_ang = math.atan2(_best[1] - self.zy, _best[0] - self.zx)
+            threat = math.cos(math.atan2(_best[3], _best[2]) - math.atan2(self.zy - _best[1], self.zx - _best[0]))
+            bs, bc, bd, bt = math.sin(b_ang), math.cos(b_ang), float(np.clip(_bd / 600.0, 0, 1)), float(np.clip(threat, -1, 1))
+        obs += [bs, bc, bd, bt]
         return np.array(obs, dtype=np.float32)
 
     # ---------- 玩家脚本（行为多样化：kite风筝 / stand站桩 / strafe横向走位 / melee近战冲脸）----------

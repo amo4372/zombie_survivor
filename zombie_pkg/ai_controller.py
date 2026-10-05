@@ -26,7 +26,7 @@ class RLEnemyAI:
         self._dirty = set()         # 待批量重算的敌人 id（主循环每帧 flush 一次批前向）
         self._DECIDE_INTERVAL = 0.2   # 决策节流：同怪 0.2s 内复用上次动作
         self._input_name = None
-        self.obs_dim = 22   # v2.0.14.1: +投掷冷却
+        self.obs_dim = 22   # 默认旧模型维度；加载后按权重自动适配（22 或 26 子弹感知）
         # 遥测统计（开发者面板/数据导出用）
         self.stats = {"decisions": 0, "action_hist": {}, "skill_hist": {},
                       "total_ms": 0.0, "last_obs": None, "last_act": None,
@@ -41,6 +41,7 @@ class RLEnemyAI:
                 self.sess = ort.InferenceSession(
                     model_path, providers=["CPUExecutionProvider"])
                 self._input_name = self.sess.get_inputs()[0].name
+                self.obs_dim = int(self.sess.get_inputs()[0].shape[1])
                 self.enabled = True
             except Exception as e:
                 # v2.0.15：onnxruntime 不可用（如 Pydroid3 无 wheel）→ 纯 numpy 推理回退
@@ -53,6 +54,7 @@ class RLEnemyAI:
                         self._np = _np2
                         self._np_mod = _np2
                         self._npz = _np2.load(_npz_path)
+                        self.obs_dim = int(self._npz["mlp.policy_net.0.weight"].shape[1])
                         self.enabled = True
                 except Exception as e2:
                     self.stats["load_error"] = (self.stats["load_error"] + " | " + str(e2)[:80])
@@ -90,7 +92,7 @@ class RLEnemyAI:
         aoe_cd = getattr(enemy, "boss_aoe_cd", 0.0) or 0.0
         throw_cd = getattr(enemy, "throw_cd", 0.0) or 0.0
         max_cd = 5.0
-        return np.array([
+        obs = [
             float(np.clip(dx * 2, -1, 1)), float(np.clip(dy * 2, -1, 1)),
             float(np.clip(dist, 0, 1)),
             math.sin(facing), math.cos(facing),
@@ -99,8 +101,29 @@ class RLEnemyAI:
         ] + rays + [float(np.clip(tdx * 2, -1, 1)), float(np.clip(tdy * 2, -1, 1)),
                     float(np.clip(dash_cd / max_cd, 0, 1)),
                     float(np.clip(aoe_cd / max_cd, 0, 1)),
-                    float(np.clip(throw_cd / max_cd, 0, 1))],
-            dtype=np.float32)
+                    float(np.clip(throw_cd / max_cd, 0, 1))]
+        # 子弹感知 4 维（新模型 26 维；旧模型 22 维补零保持兼容）
+        bs = bc = bd = bt = 0.0
+        if self.obs_dim >= 26 and world is not None:
+            try:
+                _best, _bd = None, float("inf")
+                for b in getattr(world, "projectiles", None) or []:
+                    if not getattr(b, "alive", True):
+                        continue
+                    _d = math.hypot(b.x - enemy.x, b.y - enemy.y)
+                    if _d < _bd:
+                        _bd, _best = _d, b
+                if _best is not None:
+                    b_ang = math.atan2(_best.y - enemy.y, _best.x - enemy.x)
+                    threat = math.cos(math.atan2(_best.vy, _best.vx)
+                                      - math.atan2(enemy.y - _best.y, enemy.x - _best.x))
+                    bs, bc, bd, bt = (math.sin(b_ang), math.cos(b_ang),
+                                      float(np.clip(_bd / 600.0, 0, 1)), float(np.clip(threat, -1, 1)))
+            except Exception:
+                pass
+        if self.obs_dim >= 26:
+            obs += [bs, bc, bd, bt]
+        return np.array(obs, dtype=np.float32)
 
     def _ray_dist(self, enemy, world, ang, max_dist=400.0):
         """沿方向采样世界障碍（rects），返回首个碰撞距离归一化 0~1；无碰撞=1.0"""
