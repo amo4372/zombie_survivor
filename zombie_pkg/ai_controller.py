@@ -28,6 +28,8 @@ class RLEnemyAI:
         self.stats = {"decisions": 0, "action_hist": {}, "skill_hist": {},
                       "total_ms": 0.0, "last_obs": None, "last_act": None,
                       "model_status": "disabled", "load_error": ""}
+        self._npz = None          # 纯 numpy 推理权重（onnxruntime 不可用时的回退）
+        self._np_mod = None
         if enable and model_path and os.path.exists(model_path):
             try:
                 import onnxruntime as ort
@@ -38,14 +40,28 @@ class RLEnemyAI:
                 self._input_name = self.sess.get_inputs()[0].name
                 self.enabled = True
             except Exception as e:
+                # v2.0.15：onnxruntime 不可用（如 Pydroid3 无 wheel）→ 纯 numpy 推理回退
                 self.stats["load_error"] = str(e)[:120]
                 self.sess = None
+                try:
+                    _npz_path = os.path.join(os.path.dirname(model_path), "policy_weights.npz")
+                    if os.path.exists(_npz_path):
+                        import numpy as _np2
+                        self._np = _np2
+                        self._np_mod = _np2
+                        self._npz = _np2.load(_npz_path)
+                        self.enabled = True
+                except Exception as e2:
+                    self.stats["load_error"] = (self.stats["load_error"] + " | " + str(e2)[:80])
+                    self._npz = None
         if self.sess is not None:
             self.stats["model_status"] = "ready"
+        elif self._npz is not None:
+            self.stats["model_status"] = "ready-numpy"   # 纯 numpy 推理模式
 
     @property
     def ready(self):
-        return self.enabled and self.sess is not None
+        return self.enabled and (self.sess is not None or self._npz is not None)
 
     # ---------- 观测构造（与 RL 环境 19 维同规格） ----------
     def make_obs(self, enemy, player, world=None, teammate=None):
@@ -109,7 +125,15 @@ class RLEnemyAI:
                 tm = min(teammates, key=lambda e: math.hypot(e.x - enemy.x, e.y - enemy.y))
             t0 = _now()
             obs = self.make_obs(enemy, player, world, tm)
-            probs = self.sess.run(None, {self._input_name: obs.reshape(1, -1)})[0][0]
+            if self.sess is not None:
+                probs = self.sess.run(None, {self._input_name: obs.reshape(1, -1)})[0][0]
+            else:
+                # 纯 numpy 前向：obs22 → tanh(128) → tanh(128) → 14 logits
+                npz = self._npz
+                x = obs.astype(self._np.float32)
+                h = self._np.tanh(x @ npz["mlp.policy_net.0.weight"].T + npz["mlp.policy_net.0.bias"])
+                h = self._np.tanh(h @ npz["mlp.policy_net.2.weight"].T + npz["mlp.policy_net.2.bias"])
+                probs = h @ npz["action_net.weight"].T + npz["action_net.bias"]
             # 拟人采样（温度 1.2）
             p = self._np.clip(probs.astype(float), 1e-9, None)
             p = p ** (1.0 / 1.2)

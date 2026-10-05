@@ -63,17 +63,20 @@ class ZombieEnv(gym.Env):
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 30}
 
     def __init__(self, render_mode=None, player_mode="kite", zombie_type="normal",
-                 map_path=None, teammate=True, seed=None):
+                 map_path=None, teammate=True, seed=None, n_zombies=1):
         super().__init__()
         self.render_mode = render_mode
         self.player_mode = player_mode
         self.ztype = zombie_type
         self.teammate = teammate          # 是否模拟侧翼队友（集体战术训练）
+        self.n_zombies = max(1, int(n_zombies))   # 群体：1=单挑, 2/3=包抄群
         # map_path=None → 按 (类型,种子) 从 5 张剧情地图轮换（肉鸽泛化）
         if map_path is None:
             map_path = TRAIN_MAPS[abs(hash((zombie_type, seed or 0))) % len(TRAIN_MAPS)]
         self.map = load_map(map_path)
         self.map_path = os.path.basename(map_path)
+        # 随机障碍叠加：固定剧情地图 + 随机掩体/水/刺（与游戏端"固定+随机"一致）
+        self._add_random_obstacles(abs(hash((zombie_type, seed or 0))) % 100000)
         # v2.0.14.1：动作14=投掷投掷物（对齐游戏端 try_throw：rock/acid/fire）
         self.action_space = spaces.Discrete(14)
         self.observation_space = spaces.Box(low=-1.0, high=1.0, shape=(22,), dtype=np.float32)
@@ -81,6 +84,42 @@ class ZombieEnv(gym.Env):
         self._reset_state()
 
     # ---------- 状态 ----------
+    def _add_random_obstacles(self, seed):
+        """固定剧情图 + 随机障碍叠加（掩体/水坑/尖刺），增加地图多样性；避开出生安全区(左上 8x8)与出口"""
+        try:
+            r = np.random.default_rng(seed)
+            n = int(r.integers(2, 5))
+            tiles = [2, 3, 4]   # 掩体 / 水 / 刺
+            w, h = self.map["w"], self.map["h"]
+            for _ in range(n):
+                for _try in range(30):
+                    x = int(r.integers(4, w - 4)); y = int(r.integers(4, h - 4))
+                    if x < 8 and y < 8:
+                        continue  # 出生安全区不挡
+                    if self.map["grid"][y][x] != 0:
+                        continue
+                    # 避开出口与补给对象格
+                    objs = [o for o in self.map["objects"] if o["type"] in (0, 3)]
+                    if any(abs(o["x"] // 32 - x) < 2 and abs(o["y"] // 32 - y) < 2 for o in objs):
+                        continue
+                    self.map["grid"][y][x] = int(r.choice(tiles))
+                    break
+        except Exception:
+            pass  # 随机障碍失败不影响训练
+
+    def _update_pack(self):
+        """群体脚本队友：从多方向逼近玩家 + 近身咬人（与 RL 主僵尸形成包抄）"""
+        st = ZOMBIE_TYPES[self.ztype]
+        for p in self.pack:
+            ang = math.atan2(self.py - p["y"], self.px - p["x"]) + self.rz.uniform(-0.35, 0.35)
+            nx = p["x"] + math.cos(ang) * st["speed"] * 0.9 * DT
+            ny = p["y"] + math.sin(ang) * st["speed"] * 0.9 * DT
+            if not is_blocked(self.map, nx, ny, st["radius"]):
+                p["x"], p["y"] = float(nx), float(ny)
+            if math.hypot(p["x"] - self.px, p["y"] - self.py) < st["radius"] + PLAYER_RADIUS + 6:
+                self.php -= st["bite"] * 0.5
+                self.ep_dmg_dealt += st["bite"] * 0.5
+
     def _reset_state(self):
         st = ZOMBIE_TYPES[self.ztype]
         # 出生点：优先用地图僵尸出生点，没有则随机
@@ -127,15 +166,28 @@ class ZombieEnv(gym.Env):
         self.ep_skill_use = {"spit": 0, "dash": 0, "summon": 0, "aoe": 0, "throw": 0}  # 技能成功使用次数
         self._prev_dist = self._dist()
         self._flank_accum = 0.0
-        # 队友（脚本模拟侧翼包抄）：与玩家保持镜像夹击
-        self._tm_ang = self.rz.uniform(0, 2 * math.pi)
-        self._tm_speed = ZOMBIE_TYPES["fast"]["speed"]
+        # 群体队友（真实位置，多方向包抄）：分布在玩家另一侧/侧翼
+        self.pack = []
+        if self.n_zombies > 1:
+            base = math.atan2(self.zy - self.py, self.zx - self.px)
+            for i in range(self.n_zombies - 1):
+                side = math.pi / 2 if i % 2 == 0 else -math.pi / 2
+                a = base + side + self.rz.uniform(-0.5, 0.5)
+                d0 = self.rz.uniform(260, 380)
+                self.pack.append({
+                    "x": float(np.clip(self.px + math.cos(a) * d0, 40, ARENA_W - 40)),
+                    "y": float(np.clip(self.py + math.sin(a) * d0, 40, ARENA_H - 40)),
+                    "hp": ZOMBIE_TYPES[self.ztype]["hp"] * 0.8,
+                })
 
     def _dist(self):
         return math.hypot(self.zx - self.px, self.zy - self.py)
 
     def _teammate_pos(self):
-        """队友位置：从玩家另一侧包抄（与 RL 僵尸大致成 90° 夹角）"""
+        """队友位置：优先真实群体队友（最近者）；无 pack 时镜像侧翼"""
+        if getattr(self, "pack", None):
+            best = min(self.pack, key=lambda p: math.hypot(p["x"] - self.zx, p["y"] - self.zy))
+            return float(best["x"]), float(best["y"])
         ang_to_z = math.atan2(self.zy - self.py, self.zx - self.px)
         t_ang = ang_to_z + math.pi / 2 if self.rz.random() < 0.5 else ang_to_z - math.pi / 2
         d = 260.0
@@ -174,10 +226,30 @@ class ZombieEnv(gym.Env):
                np.clip(self.throw_cd / 5.0, 0, 1)]
         return np.array(obs, dtype=np.float32)
 
-    # ---------- 玩家脚本 ----------
+    # ---------- 玩家脚本（行为多样化：kite风筝 / stand站桩 / strafe横向走位 / melee近战冲脸）----------
     def _player_act(self):
         self.pfacing = math.atan2(self.zy - self.py, self.zx - self.px)
-        if self.player_mode == "kite":
+        mode = self.player_mode
+        d = self._dist()
+        if mode == "stand":
+            pass  # 站桩输出（威胁近距离目标，逼僵尸学绕后/技能压制）
+        elif mode == "strafe":
+            tang = self.pfacing + (math.pi / 2 if self.rz.random() < 0.5 else -math.pi / 2)
+            nx = self.px + math.cos(tang) * PLAYER_SPEED * DT
+            ny = self.py + math.sin(tang) * PLAYER_SPEED * DT
+            if not is_blocked(self.map, nx, ny, PLAYER_RADIUS):
+                self.px, self.py = float(nx), float(ny)
+        elif mode == "melee":
+            # 近战玩家：冲脸 + 近身高伤（逼僵尸用技能/拉开距离）
+            toward = math.atan2(self.zy - self.py, self.zx - self.px)
+            nx = self.px + math.cos(toward) * PLAYER_SPEED * 1.3 * DT
+            ny = self.py + math.sin(toward) * PLAYER_SPEED * 1.3 * DT
+            if not is_blocked(self.map, nx, ny, PLAYER_RADIUS):
+                self.px, self.py = float(nx), float(ny)
+            if d < 70:
+                self.zhp -= 8.0 * DT
+            return  # 近战玩家不射击
+        else:  # kite 默认
             away = math.atan2(self.py - self.zy, self.px - self.zx)
             mv = away + self.rz.uniform(-0.5, 0.5)
             nx = self.px + math.cos(mv) * PLAYER_SPEED * DT
@@ -186,7 +258,7 @@ class ZombieEnv(gym.Env):
                 self.px, self.py = float(nx), float(ny)
         self.fire_timer -= DT
         if self.fire_timer <= 0:
-            self.fire_timer = 0.55
+            self.fire_timer = 0.5 if mode == "strafe" else 0.42 if mode == "stand" else 0.55
             spread = self.rz.uniform(-0.35, 0.35)
             ang = self.pfacing + spread
             self.bullets.append([self.px, self.py,
@@ -398,6 +470,8 @@ class ZombieEnv(gym.Env):
                     action = 0
 
             self._player_act()
+            if self.n_zombies > 1:
+                self._update_pack()
             if self._update_bullets():
                 reward -= 0.8
             reward += self._zombie_attack() * 5.0
@@ -463,7 +537,17 @@ def make_env_factory(zombie_type, seed_base=1000):
     def _f():
         # 地图轮换：按类型+种子选图（泛化到全部地图）
         mp = TRAIN_MAPS[abs(hash((zombie_type, seed_base))) % len(TRAIN_MAPS)]
-        return ZombieEnv(player_mode="kite", zombie_type=zombie_type,
-                         map_path=mp, teammate=True,
-                         seed=seed_base + hash(zombie_type) % 1000)
+        seed = seed_base + hash(zombie_type) % 1000
+        # 玩家行为多样化：kite 为主，穿插 stand/strafe/melee（学应对不同玩家）
+        modes = ["kite", "kite", "stand", "strafe", "melee"]
+        mode = modes[seed % len(modes)]
+        # 群体包抄：50% 单挑、30% 双僵尸、20% 三僵尸（集体战术）
+        nz = 1
+        r = seed % 10
+        if 5 <= r < 8:
+            nz = 2
+        elif r >= 8:
+            nz = 3
+        return ZombieEnv(player_mode=mode, zombie_type=zombie_type,
+                         map_path=mp, teammate=True, seed=seed, n_zombies=nz)
     return _f

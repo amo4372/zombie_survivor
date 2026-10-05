@@ -201,6 +201,10 @@ def create_zip(version, files, changelog=""):
     _onnx = os.path.join(PROJECT_DIR, "rl", "models", "zombie_policy.onnx")
     if os.path.exists(_onnx):
         files = files + [(_onnx, os.path.join("rl", "models", "zombie_policy.onnx"))]
+    # v2.0.15：纯 numpy 推理权重（onnxruntime 不可用时的回退，Pydroid3 零依赖可跑 RL）
+    _npz = os.path.join(PROJECT_DIR, "rl", "models", "policy_weights.npz")
+    if os.path.exists(_npz):
+        files = files + [(_npz, os.path.join("rl", "models", "policy_weights.npz"))]
 
     # 生成完整性清单（覆盖全部打包文件）
     manifest = {"version": version, "files": {}}
