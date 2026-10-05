@@ -1,0 +1,6 @@
+# Pydroid3 依赖（Android）——按顺序安装
+# 1) 游戏本体：Pydroid3 终端执行  pip install pygame-ce  （pygame-ce 提供 Android wheel；若失败改用 pygame）
+# 2) RL 工具（地图/环境/推理）：pip install numpy
+# 3) 可选：RL 推理  pip install onnxruntime  （装不了也不影响游戏，AI_MODE=rl 会自动回退原 AI）
+pygame-ce>=2.5.0
+numpy>=1.24

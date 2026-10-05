@@ -368,8 +368,9 @@ class ZombieEnv(gym.Env):
         return None
 
 
-TRAIN_MAPS = ["rl/maps/demo.zmap", "rl/maps/street.zmap", "rl/maps/forest.zmap",
-             "rl/maps/factory.zmap", "rl/maps/graveyard.zmap", "rl/maps/hospital.zmap"]
+# 按游戏剧情章节的 5 张地图 + demo 示例（肉鸽：固定障碍叠加随机障碍，每局不同）
+TRAIN_MAPS = ["rl/maps/school.zmap", "rl/maps/street.zmap", "rl/maps/downtown.zmap",
+              "rl/maps/suburb.zmap", "rl/maps/nuclear.zmap"]
 
 def make_env_factory(zombie_type, seed_base=1000):
     def _f():
