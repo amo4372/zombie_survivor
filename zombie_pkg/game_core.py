@@ -94,7 +94,7 @@ mod_loader.mod_hooks._global_classes = {
 
 class Config:
     # ===== v2.0.13 RL 研究原型接入开关（默认关闭，不影响原玩法） =====
-    AI_MODE = "off"              # "off" 原AI / "rl" 强化学习AI（需模型+onnxruntime）
+    AI_MODE = "auto"             # "auto" 自动检查（有模型→RL；无→原AI）/ "off" 强制原AI / "rl" 强制RL（缺模型回退）
     MAP_FILE = ""                # .zmap 二进制大地图（空=默认随机地图；如 rl/maps/demo.zmap）
     RL_MODEL_PATH = "rl/models/zombie_policy.onnx"
 
@@ -276,16 +276,19 @@ class GameCore:
 
         self.rune_manager = RuneManager()  # 符文系统（修复：此前从未初始化导致不生效）
         self.enemies = []
-        # v2.0.13：RL 强化学习 AI 控制器（AI_MODE="rl" 时启用，缺失自动回退）
+        # v2.0.13：RL 强化学习 AI 控制器（AI_MODE=auto 自动检查：有模型→RL，无模型→原 AI）
         self.rl_ai = None
         try:
-            if getattr(self.config, "AI_MODE", "off") == "rl":
+            _ai_mode = getattr(self.config, "AI_MODE", "auto")
+            if _ai_mode in ("auto", "rl"):
                 from zombie_pkg.ai_controller import RLEnemyAI
                 self.rl_ai = RLEnemyAI(getattr(self.config, "RL_MODEL_PATH", ""), enable=True)
                 if self.rl_ai and self.rl_ai.ready:
                     logger.info(f"[AI] RL 强化学习 AI 已加载: {self.rl_ai.model_path}")
-                else:
+                elif _ai_mode == "rl":
                     logger.info("[AI] RL 模型缺失/不可用，已回退原 AI")
+                else:
+                    self.rl_ai = None  # auto 且模型缺失 → 正常使用原 AI
             else:
                 self.rl_ai = None
                 logger.info("[AI] AI_MODE=off，使用原 AI")

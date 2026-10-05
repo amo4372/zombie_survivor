@@ -41,7 +41,8 @@ ESSENTIAL_DIRS = [
     "renderer_pkg",    # v2.0.9：渲染系统包（由 renderer.py 拆分）
     "ui_pkg",          # v2.0.11：UI 组件包（由 ui.py 拆分）
     "entities_pkg",    # v2.0.11：实体包（由 entities.py 拆分）
-    "rl",              # v2.0.13：RL 推理模块 + .zmap 地图 + ONNX 模型（训练脚本随包但无入口）
+    # 注意：rl/ 不进 ESSENTIAL_DIRS —— 训练工具不公开，只白名单打包
+    # 地图 .zmap + map_format.py（游戏端依赖）+ ONNX 模型（create_zip 单独追加）
 ]
 
 # 排除的文件模式（即使在必要目录中也排除）
@@ -53,8 +54,7 @@ EXCLUDE_PATTERNS = [
     "savegame.json", "savegame.zss",
     "_update_cache", "_update_backup",
     "dist_encrypted", "releases",
-    "rl/reports", "rl/logs", "rl/eval_envs",  # RL 训练产物不进发布包
-    "rl/models/",  # 训练 .zip 模型默认排除（create_zip 里单独追加 zombie_policy.onnx）
+    "rl/reports", "rl/logs", "rl/eval_envs", "rl/models/",  # 兜底：RL 训练产物绝不上包
     "fluidsynth_portable",  # FluidSynth便携版，体积大，不打包
 ]
 
@@ -122,6 +122,18 @@ def collect_files():
         fpath = os.path.join(PROJECT_DIR, f)
         if os.path.exists(fpath) and not should_exclude(f):
             files_to_pack.append((fpath, f))
+
+    # v2.0.13：RL 发布规则 —— 训练工具不公开（train/zombie_env/export/inference/report/editor 均不上包）
+    # 只打包：rl/maps/*.zmap（游戏端 MAP_FILE 可用）+ rl/map_format.py（map_loader 依赖）
+    # ONNX 推理模型由 create_zip 单独追加（rl/models/zombie_policy.onnx）
+    _rl_maps = os.path.join(PROJECT_DIR, "rl", "maps")
+    if os.path.isdir(_rl_maps):
+        for _fn in sorted(os.listdir(_rl_maps)):
+            if _fn.endswith(".zmap"):
+                files_to_pack.append((os.path.join(_rl_maps, _fn), os.path.join("rl", "maps", _fn)))
+    _rl_fmt = os.path.join(PROJECT_DIR, "rl", "map_format.py")
+    if os.path.exists(_rl_fmt):
+        files_to_pack.append((_rl_fmt, "rl/map_format.py"))
 
     # 必要目录
     for d in ESSENTIAL_DIRS:
