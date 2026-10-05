@@ -40,7 +40,7 @@ COL_OBJ = {0: (90, 200, 120), 1: (200, 90, 90), 2: (230, 200, 90),
 
 
 class MapEditor:
-    def __init__(self, path="rl/maps/demo.zmap", dummy=False):
+    def __init__(self, path="rl/maps/school.zmap", dummy=False):
         self.dummy = dummy
         self.path = path
         if os.path.exists(path):
@@ -212,7 +212,7 @@ class MapEditor:
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--map", default="rl/maps/demo.zmap")
+    ap.add_argument("--map", default="rl/maps/school.zmap")
     ap.add_argument("--dummy", action="store_true", help="无头链路测试（无显示器）")
     args = ap.parse_args()
     os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

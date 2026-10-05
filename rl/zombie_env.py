@@ -43,10 +43,17 @@ ZOMBIE_TYPES = {
     "fast":   {"speed": 145.0, "hp": 30.0, "bite": 6.0, "bite_cd": 0.35, "radius": 13},
     "tank":   {"speed": 58.0, "hp": 250.0, "bite": 20.0, "bite_cd": 0.8, "radius": 22},
     "spitter": {"speed": 82.0, "hp": 40.0, "bite": 5.0, "bite_cd": 0.6, "radius": 15,
-                "spit_damage": 6.0, "spit_cd": 2.0, "spit_range": 320.0, "spit_speed": 260.0},
+                "spit_damage": 6.0, "spit_cd": 2.0, "spit_range": 320.0, "spit_speed": 260.0,
+                "can_throw": True, "throw_type": "acid", "throw_damage": 8.0,
+                "throw_cd": 4.0, "throw_range_min": 150.0, "throw_range_max": 450.0},
+    "ranged": {"speed": 78.0, "hp": 45.0, "bite": 6.0, "bite_cd": 0.7, "radius": 15,
+               "can_throw": True, "throw_type": "rock", "throw_damage": 10.0,
+               "throw_cd": 3.5, "throw_range_min": 150.0, "throw_range_max": 450.0},
     "boss":    {"speed": 95.0, "hp": 500.0, "bite": 24.0, "bite_cd": 0.7, "radius": 22,
                 "dash_cd": 3.5, "summon_cd": 8.0, "aoe_cd": 5.0,
-                "dash_damage": 20.0, "aoe_damage": 12.0, "aoe_radius": 200.0, "dash_dist": 220.0},
+                "dash_damage": 20.0, "aoe_damage": 12.0, "aoe_radius": 200.0, "dash_dist": 220.0,
+                "can_throw": True, "throw_type": "fire", "throw_damage": 14.0,
+                "throw_cd": 4.0, "throw_range_min": 150.0, "throw_range_max": 450.0},
 }
 TYPE_ORDER = list(ZOMBIE_TYPES)
 RAYS = [0, 45, 90, 135, 180, 225, 270, 315]   # 八向射线
@@ -56,15 +63,20 @@ class ZombieEnv(gym.Env):
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 30}
 
     def __init__(self, render_mode=None, player_mode="kite", zombie_type="normal",
-                 map_path="rl/maps/demo.zmap", teammate=True, seed=None):
+                 map_path=None, teammate=True, seed=None):
         super().__init__()
         self.render_mode = render_mode
         self.player_mode = player_mode
         self.ztype = zombie_type
         self.teammate = teammate          # 是否模拟侧翼队友（集体战术训练）
+        # map_path=None → 按 (类型,种子) 从 5 张剧情地图轮换（肉鸽泛化）
+        if map_path is None:
+            map_path = TRAIN_MAPS[abs(hash((zombie_type, seed or 0))) % len(TRAIN_MAPS)]
         self.map = load_map(map_path)
-        self.action_space = spaces.Discrete(13)
-        self.observation_space = spaces.Box(low=-1.0, high=1.0, shape=(21,), dtype=np.float32)
+        self.map_path = os.path.basename(map_path)
+        # v2.0.14.1：动作14=投掷投掷物（对齐游戏端 try_throw：rock/acid/fire）
+        self.action_space = spaces.Discrete(14)
+        self.observation_space = spaces.Box(low=-1.0, high=1.0, shape=(22,), dtype=np.float32)
         self.rz = np.random.default_rng(seed)
         self._reset_state()
 
@@ -91,16 +103,28 @@ class ZombieEnv(gym.Env):
         self.pfacing = math.atan2(self.zy - self.py, self.zx - self.px)
         self.bullets = []
         self.spits = []                # 吐酸投射物 [x,y,vx,vy]
+        self.throws = []               # 投掷物（抛射物）[x,y,vx,vy,dmg]
         self.attack_timer = 0.0
         self.spit_timer = 0.0
         # boss 技能冷却（普通类型恒 0）
         self.dash_cd = 0.0
         self.aoe_cd = 0.0
         self.summon_cd = 0.0
+        self.throw_cd = 0.0            # 投掷物冷却（有 can_throw 的类型）
         self.is_dashing = False
         self.dash_dir = (0.0, 0.0)
         self.fire_timer = 0.0
         self.step_count = 0
+        # ---- episode 游戏相关统计（测评报告用）----
+        self.ep_dmg_dealt = 0.0     # 对玩家造成伤害
+        self.ep_dmg_taken = 0.0     # 被玩家子弹伤害
+        self.ep_kills = 0           # 击杀玩家次数
+        self.ep_move_dist = 0.0     # 累计移动距离
+        self.ep_bite_hits = 0       # 咬中次数
+        self.ep_spit_hits = 0       # 吐酸命中次数
+        self.ep_throw_hits = 0      # 投掷物命中次数
+        self.ep_hazard_hits = 0     # 踩水坑/尖刺次数
+        self.ep_skill_use = {"spit": 0, "dash": 0, "summon": 0, "aoe": 0, "throw": 0}  # 技能成功使用次数
         self._prev_dist = self._dist()
         self._flank_accum = 0.0
         # 队友（脚本模拟侧翼包抄）：与玩家保持镜像夹击
@@ -146,7 +170,8 @@ class ZombieEnv(gym.Env):
         obs += [np.clip(tdx * 2, -1, 1), np.clip(tdy * 2, -1, 1)]
         # boss 技能冷却（普通类型恒 0）
         max_cd = max(ZOMBIE_TYPES["boss"]["dash_cd"], ZOMBIE_TYPES["boss"]["aoe_cd"], 1.0) if self.ztype == "boss" else 1.0
-        obs += [np.clip(self.dash_cd / max_cd, 0, 1), np.clip(self.aoe_cd / max_cd, 0, 1)]
+        obs += [np.clip(self.dash_cd / max_cd, 0, 1), np.clip(self.aoe_cd / max_cd, 0, 1),
+               np.clip(self.throw_cd / 5.0, 0, 1)]
         return np.array(obs, dtype=np.float32)
 
     # ---------- 玩家脚本 ----------
@@ -180,6 +205,7 @@ class ZombieEnv(gym.Env):
                 self.zhp -= BULLET_DAMAGE
                 self.bullets.remove(b)
                 hit = True
+                self.ep_dmg_taken += BULLET_DAMAGE
         return hit
 
     def _boss_dash(self):
@@ -187,6 +213,7 @@ class ZombieEnv(gym.Env):
         if self.dash_cd > 0:
             return -0.2
         self.dash_cd = ZOMBIE_TYPES["boss"]["dash_cd"]
+        self.ep_skill_use["dash"] += 1
         ang = math.atan2(self.py - self.zy, self.px - self.zx)
         self.dash_dir = (math.cos(ang), math.sin(ang))
         self.is_dashing = True
@@ -203,6 +230,7 @@ class ZombieEnv(gym.Env):
         if self.summon_cd > 0:
             return -0.2
         self.summon_cd = ZOMBIE_TYPES["boss"]["summon_cd"]
+        self.ep_skill_use["summon"] += 1
         return 3.0
 
     def _boss_aoe(self):
@@ -210,8 +238,10 @@ class ZombieEnv(gym.Env):
         if self.aoe_cd > 0:
             return -0.2
         self.aoe_cd = ZOMBIE_TYPES["boss"]["aoe_cd"]
+        self.ep_skill_use["aoe"] += 1
         if self._dist() < ZOMBIE_TYPES["boss"]["aoe_radius"]:
             self.php = max(0.0, self.php - ZOMBIE_TYPES["boss"]["aoe_damage"])
+            self.ep_dmg_dealt += ZOMBIE_TYPES["boss"]["aoe_damage"]
             return 12.0
         return 0.5
 
@@ -222,6 +252,8 @@ class ZombieEnv(gym.Env):
         if self._dist() < 34 and self.attack_timer <= 0:
             self.attack_timer = st["bite_cd"]
             self.php -= st["bite"]
+            self.ep_bite_hits += 1
+            self.ep_dmg_dealt += st["bite"]
             return 1.0
         return 0.0
 
@@ -236,7 +268,47 @@ class ZombieEnv(gym.Env):
         ang = math.atan2(self.py - self.zy, self.px - self.zx)
         self.spits.append([self.zx, self.zy,
                            math.cos(ang) * st["spit_speed"], math.sin(ang) * st["spit_speed"]])
+        self.ep_skill_use["spit"] += 1
         return 0.0
+
+    def _throw_attack(self):
+        """投掷投掷物（对齐游戏端 try_throw：150-450 距离、抛物线弹道）
+        rock/acid/fire 按类型；冷却内 -0.2；成功发射 +0.5；命中 +伤害奖励"""
+        st = ZOMBIE_TYPES[self.ztype]
+        if not st.get("can_throw"):
+            return 0.0
+        if self.throw_cd > 0:
+            return -0.2
+        d = self._dist()
+        if d < st["throw_range_min"] or d > st["throw_range_max"]:
+            return 0.0  # 距离不符不发射（不惩罚，学会选时机）
+        self.throw_cd = st["throw_cd"]
+        ang = math.atan2(self.py - self.zy, self.px - self.zx)
+        spd = 280.0
+        self.throws.append([self.zx, self.zy,
+                            math.cos(ang) * spd, math.sin(ang) * spd,
+                            st["throw_damage"]])
+        self.ep_skill_use["throw"] += 1
+        return 0.5  # 成功发射（压制奖励）
+
+    def _update_throws(self):
+        """投掷物飞行+命中（玩家被击中扣血）"""
+        st = ZOMBIE_TYPES[self.ztype]
+        dmg = 0.0
+        for t in list(self.throws):
+            t[0] += t[2] * DT
+            t[1] += t[3] * DT
+            if (t[0] < 0 or t[0] > ARENA_W or t[1] < 0 or t[1] > ARENA_H
+                    or is_blocked(self.map, t[0], t[1], 4)):
+                self.throws.remove(t)
+                continue
+            if math.hypot(t[0] - self.px, t[1] - self.py) < PLAYER_RADIUS + 6:
+                self.php = max(0.0, self.php - t[4])
+                self.throws.remove(t)
+                dmg += t[4]
+                self.ep_throw_hits += 1
+                self.ep_dmg_dealt += t[4]
+        return dmg
 
     def _update_spits(self):
         st = ZOMBIE_TYPES[self.ztype]
@@ -254,6 +326,8 @@ class ZombieEnv(gym.Env):
                 self.php -= st["spit_damage"]
                 self.spits.remove(s)
                 dmg += st["spit_damage"]
+                self.ep_spit_hits += 1
+                self.ep_dmg_dealt += st["spit_damage"]
         return dmg
 
     # ---------- Gymnasium ----------
@@ -274,6 +348,7 @@ class ZombieEnv(gym.Env):
             self.dash_cd = max(0.0, self.dash_cd - DT)
             self.aoe_cd = max(0.0, self.aoe_cd - DT)
             self.summon_cd = max(0.0, self.summon_cd - DT)
+            self.throw_cd = max(0.0, self.throw_cd - DT)
             # 冲刺持续状态
             if self.is_dashing:
                 dx0, dy0 = self.dash_dir
@@ -290,17 +365,26 @@ class ZombieEnv(gym.Env):
                 nx = self.zx + math.cos(ang) * st["speed"] * DT
                 ny = self.zy + math.sin(ang) * st["speed"] * DT
                 if not is_blocked(self.map, nx, ny, st["radius"]):
+                    self.ep_move_dist += math.hypot(nx - self.zx, ny - self.zy)
                     self.zx, self.zy = float(nx), float(ny)
                     # 地图元素：水坑减速 / 尖刺伤害
                     if speed_factor(self.map, self.zx, self.zy) < 1.0:
                         reward -= 0.05  # 水坑减速惩罚（学会避开）
+                        self.ep_hazard_hits += 1
                     self.zhp -= hazard_dps(self.map, self.zx, self.zy) * DT
                     if hazard_dps(self.map, self.zx, self.zy) > 0:
                         reward -= 0.1  # 踩尖刺惩罚
+                        self.ep_hazard_hits += 1
                 else:
                     reward -= 0.1  # 撞墙小惩罚（学会绕路）
             elif action == 9:
                 reward += self._spit_attack()
+            elif action == 13:
+                # 投掷投掷物（ranged/spitter/boss 可用；其余类型视为停止）
+                if ZOMBIE_TYPES[self.ztype].get("can_throw"):
+                    reward += self._throw_attack()
+                else:
+                    action = 0
             elif action in (10, 11, 12):
                 # boss 专属技能；非 boss 类型视为停止
                 if self.ztype == "boss":
@@ -318,6 +402,7 @@ class ZombieEnv(gym.Env):
                 reward -= 0.8
             reward += self._zombie_attack() * 5.0
             reward += self._update_spits() * 0.8
+            reward += self._update_throws() * 0.8
 
             d_now = self._dist()
             r_close = (self._prev_dist - d_now) / (st["speed"] * DT * SUBSTEPS) * 1.5
@@ -349,6 +434,7 @@ class ZombieEnv(gym.Env):
 
             if self.php <= 0:
                 reward += 50.0
+                self.ep_kills += 1
                 terminated = True
                 break
             if self.zhp <= 0:
@@ -369,6 +455,7 @@ class ZombieEnv(gym.Env):
 
 
 # 按游戏剧情章节的 5 张地图 + demo 示例（肉鸽：固定障碍叠加随机障碍，每局不同）
+# 按游戏剧情章节的 5 张地图（肉鸽：固定障碍叠加随机障碍，每局不同）
 TRAIN_MAPS = ["rl/maps/school.zmap", "rl/maps/street.zmap", "rl/maps/downtown.zmap",
               "rl/maps/suburb.zmap", "rl/maps/nuclear.zmap"]
 

@@ -983,6 +983,10 @@ class PlayingMixin:
                     if dist_pl < enemy.size + p.size + 5:
                         p.take_damage(int(enemy.damage * 0.8), damage_type="melee", attack_x=enemy.x, attack_y=enemy.y)
 
+            elif isinstance(result, dict) and result.get("type") in ("rock", "fire", "acid", "bomb", "curse"):
+                # v2.0.14.1：RL 投掷物技能 → 复用怪物投掷物生成链路
+                self._spawn_enemy_throwable(result)
+
             elif result == "boss_summon":
                 # v2.0.14：RL 召唤技能
                 for _ in range(2):

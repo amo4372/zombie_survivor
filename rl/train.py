@@ -15,10 +15,11 @@ import sys
 import argparse
 import time
 import numpy as np
+import math
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from zombie_env import ZombieEnv, MAX_STEPS, PLAYER_HP, BITE_DAMAGE, make_env_factory, TYPE_ORDER
+from zombie_env import ZombieEnv, MAX_STEPS, PLAYER_HP, BITE_DAMAGE, make_env_factory, TYPE_ORDER, ARENA_W, ARENA_H
 
 # 群体阵容：每种类型一个子环境（多僵尸共享策略 → 集体战术）
 ROSTER = ["normal", "fast", "tank", "spitter", "boss"]   # v3：全部僵尸（含boss及其技能）
@@ -71,7 +72,7 @@ def train(steps=200_000, checkpoint=None, n_envs=4, tensorboard=True, device="au
                               name_prefix="ppo_zombie_v2")
     eval_freq = max(steps // 8, 500)
     eval_env = ZombieEnv(player_mode="kite", zombie_type="normal",
-                         map_path="rl/maps/demo.zmap", seed=42)
+                         map_path=None, seed=42)
     eval_cb = EvalCallback(eval_env, best_model_save_path="rl/models",
                            log_path="rl/logs", eval_freq=eval_freq,
                            n_eval_episodes=3, deterministic=True)
@@ -101,12 +102,22 @@ def _gen_report(model_path, device, steps, cost, history, n_episodes=8):
     eval_data = {}
     for zt in TYPE_ORDER:
         rewards, wins, deaths, bites, dists = [], 0, 0, [], []
+        dmg_d, dmg_t, move, bh, sh, hz = [], [], [], [], [], []
+        skills = {"spit": [], "dash": [], "summon": [], "aoe": []}
         for ep in range(n_episodes):
+            # 剧情图轮换（5 张随机一张），测地图泛化
             env = ZombieEnv(player_mode="kite", zombie_type=zt,
-                            map_path="rl/maps/demo.zmap", seed=100 + ep)
+                            map_path=None, seed=100 + ep)
             obs, _ = env.reset()
+            # 实战初始距离：僵尸从玩家 260~360px 随机角度出发（贴近真实战斗，
+            # 避免出生点过远导致咬/吐酸/投掷全测不出）
+            _a = (100 + ep * 37) % 360
+            _d0 = 260.0 + (ep * 13) % 100
+            _rad = math.radians(_a)
+            env.zx = float(np.clip(env.px + math.cos(_rad) * _d0, 40, ARENA_W - 40))
+            env.zy = float(np.clip(env.py + math.sin(_rad) * _d0, 40, ARENA_H - 40))
+            env._prev_dist = env._dist()
             total, done = 0.0, False
-            bites_ep = 0.0
             while not done:
                 act, _ = model.predict(obs, deterministic=True)
                 obs, r, term, trunc, _ = env.step(int(act))
@@ -117,15 +128,27 @@ def _gen_report(model_path, device, steps, cost, history, n_episodes=8):
                 wins += 1
             if env.zhp <= 0:
                 deaths += 1
-            bites_ep = max(0.0, (PLAYER_HP - max(env.php, 0)) / BITE_DAMAGE)
-            bites.append(bites_ep)
+            bites.append(max(0.0, (PLAYER_HP - max(env.php, 0)) / BITE_DAMAGE))
             dists.append(env.step_count)
+            dmg_d.append(env.ep_dmg_dealt); dmg_t.append(env.ep_dmg_taken)
+            move.append(env.ep_move_dist); bh.append(env.ep_bite_hits)
+            sh.append(env.ep_spit_hits); hz.append(env.ep_hazard_hits)
+            for k in skills:
+                skills[k].append(env.ep_skill_use.get(k, 0))
         eval_data[zt] = {"rewards": rewards, "wins": wins, "deaths": deaths,
                          "episodes": n_episodes, "avg_bites": float(np.mean(bites)),
-                         "avg_steps": float(np.mean(dists))}
+                         "avg_steps": float(np.mean(dists)),
+                         "avg_dmg_dealt": float(np.mean(dmg_d)),
+                         "avg_dmg_taken": float(np.mean(dmg_t)),
+                         "avg_move": float(np.mean(move)),
+                         "avg_bite_hits": float(np.mean(bh)),
+                         "avg_spit_hits": float(np.mean(sh)),
+                         "avg_hazard": float(np.mean(hz)),
+                         "skills": {k: float(np.mean(v)) for k, v in skills.items()}}
         print(f"[RL] {zt:8s}: 平均奖励 {np.mean(rewards):6.1f} | "
               f"玩家死亡 {wins}/{n_episodes} | 僵尸死亡 {deaths}/{n_episodes} | "
-              f"平均步数 {np.mean(dists):.0f}/{MAX_STEPS}")
+              f"伤害输出 {np.mean(dmg_d):5.1f} | 移动 {np.mean(move):6.0f}px | "
+              f"技能 {sum(float(np.mean(v)) for v in skills.values()):.1f}次")
     data = {"model": model_path, "device": device,
             "total_timesteps": int(steps), "train_time_min": round(cost / 60, 1),
             "history": history, "eval": eval_data}

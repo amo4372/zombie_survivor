@@ -16,14 +16,14 @@ def _now():
 
 class RLEnemyAI:
     # 动作→技能映射：9远程 10冲刺 11召唤 12范围咆哮
-    ACT_SKILL = {9: 1, 10: 2, 11: 3, 12: 4}
+    ACT_SKILL = {9: 1, 10: 2, 11: 3, 12: 4, 13: 5}   # 13=投掷投掷物（v2.0.14.1）
 
     def __init__(self, model_path, enable=True):
         self.model_path = model_path
         self.enabled = False
         self.sess = None
         self._input_name = None
-        self.obs_dim = 21
+        self.obs_dim = 22   # v2.0.14.1: +投掷冷却
         # 遥测统计（开发者面板/数据导出用）
         self.stats = {"decisions": 0, "action_hist": {}, "skill_hist": {},
                       "total_ms": 0.0, "last_obs": None, "last_act": None,
@@ -68,6 +68,7 @@ class RLEnemyAI:
         # boss 技能冷却（与训练环境同规格；普通敌人无属性→0）
         dash_cd = getattr(enemy, "boss_dash_cd", 0.0) or 0.0
         aoe_cd = getattr(enemy, "boss_aoe_cd", 0.0) or 0.0
+        throw_cd = getattr(enemy, "throw_cd", 0.0) or 0.0
         max_cd = 5.0
         return np.array([
             float(np.clip(dx * 2, -1, 1)), float(np.clip(dy * 2, -1, 1)),
@@ -77,7 +78,8 @@ class RLEnemyAI:
             float(np.clip(side_w, 0, 1)), float(np.clip(side_h, 0, 1)),
         ] + rays + [float(np.clip(tdx * 2, -1, 1)), float(np.clip(tdy * 2, -1, 1)),
                     float(np.clip(dash_cd / max_cd, 0, 1)),
-                    float(np.clip(aoe_cd / max_cd, 0, 1))],
+                    float(np.clip(aoe_cd / max_cd, 0, 1)),
+                    float(np.clip(throw_cd / max_cd, 0, 1))],
             dtype=np.float32)
 
     def _ray_dist(self, enemy, world, ang, max_dist=400.0):

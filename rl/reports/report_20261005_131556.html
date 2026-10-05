@@ -1,0 +1,71 @@
+<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8">
+<title>僵尸AI 训练测评报告</title>
+<style>
+body{background:#0e1116;color:#ddd;font-family:"Microsoft YaHei",sans-serif;margin:0;padding:24px}
+h1{color:#fff;font-size:22px} h2{color:#4fc3f7;font-size:17px;margin-top:28px}
+.card{background:#1a1f27;border:1px solid #2a3140;border-radius:12px;padding:16px;margin-top:12px}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th,td{border:1px solid #2a3140;padding:8px 10px;text-align:center}
+th{background:#20272f;color:#8fd0ff} .tag{color:#ffb74d;font-size:12px}
+.verdict{color:#81c784;font-weight:bold}
+</style></head><body>
+<h1>🧟 僵尸AI 训练测评报告</h1>
+<div class="tag">模型: rl/models/ppo_zombie_v2.zip · 设备: cpu ·
+训练步数: 30,000 · 耗时: 0.4 分钟</div>
+<h2>训练过程</h2><div class="card"><svg viewBox="0 0 720 260" width="100%" style="background:#14171c;border-radius:10px">
+  <polygon points="24.0,236.0 24.0,24.0 696.0,236.0 696.0,236.0" fill="#4fc3f7" opacity="0.12"/>
+  <polyline points="24.0,24.0 696.0,236.0" fill="none" stroke="#4fc3f7" stroke-width="2.2"/>
+  <text x="18" y="240.0" font-size="11" fill="#999" text-anchor="end">-58</text><text x="18" y="133.9999999999991" font-size="11" fill="#999" text-anchor="end">-57</text><text x="18" y="28.0" font-size="11" fill="#999" text-anchor="end">-57</text><text x="24.0" y="252" font-size="11" fill="#999" text-anchor="middle">15000</text><text x="192.0" y="252" font-size="11" fill="#999" text-anchor="middle">18750</text><text x="360.0" y="252" font-size="11" fill="#999" text-anchor="middle">22500</text><text x="528.0" y="252" font-size="11" fill="#999" text-anchor="middle">26250</text><text x="696.0" y="252" font-size="11" fill="#999" text-anchor="middle">30000</text>
+  <text x="24" y="14" font-size="12" fill="#aaa">训练过程 平均奖励 (mean reward)</text>
+</svg></div>
+<h2>各僵尸类型平均奖励</h2><div class="card"><svg viewBox="0 0 720 260" width="100%" style="background:#14171c;border-radius:10px"><text x="82" y="42.33333333333333" font-size="12" fill="#ccc" text-anchor="end">normal</text>
+<rect x="90" y="24.0" width="248.6" height="26.666666666666664" rx="4" fill="#ffb74d" opacity="0.85"/>
+<text x="344.6" y="42.33333333333333" font-size="11" fill="#eee">31.24952214094829</text><text x="82" y="79.0" font-size="12" fill="#ccc" text-anchor="end">fast</text>
+<rect x="90" y="60.666666666666664" width="6.0" height="26.666666666666664" rx="4" fill="#ffb74d" opacity="0.85"/>
+<text x="102.0" y="79.0" font-size="11" fill="#eee">-11.381930569114937</text><text x="82" y="115.66666666666666" font-size="12" fill="#ccc" text-anchor="end">tank</text>
+<rect x="90" y="97.33333333333333" width="6.0" height="26.666666666666664" rx="4" fill="#ffb74d" opacity="0.85"/>
+<text x="102.0" y="115.66666666666666" font-size="11" fill="#eee">-58.64318724528386</text><text x="82" y="152.33333333333334" font-size="12" fill="#ccc" text-anchor="end">spitter</text>
+<rect x="90" y="134.0" width="570.0" height="26.666666666666664" rx="4" fill="#ffb74d" opacity="0.85"/>
+<text x="666.0" y="152.33333333333334" font-size="11" fill="#eee">71.6479292208147</text><text x="82" y="189.0" font-size="12" fill="#ccc" text-anchor="end">ranged</text>
+<rect x="90" y="170.66666666666666" width="6.0" height="26.666666666666664" rx="4" fill="#ffb74d" opacity="0.85"/>
+<text x="102.0" y="189.0" font-size="11" fill="#eee">0.5578635741894626</text><text x="82" y="225.66666666666666" font-size="12" fill="#ccc" text-anchor="end">boss</text>
+<rect x="90" y="207.33333333333331" width="6.0" height="26.666666666666664" rx="4" fill="#ffb74d" opacity="0.85"/>
+<text x="102.0" y="225.66666666666666" font-size="11" fill="#eee">-17.509177359877544</text></svg></div>
+<h2>各僵尸类型玩家击杀率 (%)</h2><div class="card"><svg viewBox="0 0 720 260" width="100%" style="background:#14171c;border-radius:10px"><text x="82" y="42.33333333333333" font-size="12" fill="#ccc" text-anchor="end">normal</text>
+<rect x="90" y="24.0" width="6.0" height="26.666666666666664" rx="4" fill="#81c784" opacity="0.85"/>
+<text x="102.0" y="42.33333333333333" font-size="11" fill="#eee">0.0</text><text x="82" y="79.0" font-size="12" fill="#ccc" text-anchor="end">fast</text>
+<rect x="90" y="60.666666666666664" width="6.0" height="26.666666666666664" rx="4" fill="#81c784" opacity="0.85"/>
+<text x="102.0" y="79.0" font-size="11" fill="#eee">0.0</text><text x="82" y="115.66666666666666" font-size="12" fill="#ccc" text-anchor="end">tank</text>
+<rect x="90" y="97.33333333333333" width="6.0" height="26.666666666666664" rx="4" fill="#81c784" opacity="0.85"/>
+<text x="102.0" y="115.66666666666666" font-size="11" fill="#eee">0.0</text><text x="82" y="152.33333333333334" font-size="12" fill="#ccc" text-anchor="end">spitter</text>
+<rect x="90" y="134.0" width="6.0" height="26.666666666666664" rx="4" fill="#81c784" opacity="0.85"/>
+<text x="102.0" y="152.33333333333334" font-size="11" fill="#eee">0.0</text><text x="82" y="189.0" font-size="12" fill="#ccc" text-anchor="end">ranged</text>
+<rect x="90" y="170.66666666666666" width="6.0" height="26.666666666666664" rx="4" fill="#81c784" opacity="0.85"/>
+<text x="102.0" y="189.0" font-size="11" fill="#eee">0.0</text><text x="82" y="225.66666666666666" font-size="12" fill="#ccc" text-anchor="end">boss</text>
+<rect x="90" y="207.33333333333331" width="6.0" height="26.666666666666664" rx="4" fill="#81c784" opacity="0.85"/>
+<text x="102.0" y="225.66666666666666" font-size="11" fill="#eee">0.0</text></svg></div>
+<h2>详细数据</h2><div class="card"><table>
+<tr><th>类型</th><th>平均奖励</th><th>击杀玩家</th><th>击杀率</th><th>自身死亡</th><th>平均咬伤</th><th>平均存活步数</th></tr>
+<tr><td><b>normal</b></td>
+<td>31.2</td><td style="color:#999">0/8</td>
+<td>0%</td><td>1/8</td>
+<td>0.0</td><td>871</td></tr><tr><td><b>fast</b></td>
+<td>-11.4</td><td style="color:#999">0/8</td>
+<td>0%</td><td>4/8</td>
+<td>0.0</td><td>734</td></tr><tr><td><b>tank</b></td>
+<td>-58.6</td><td style="color:#999">0/8</td>
+<td>0%</td><td>0/8</td>
+<td>0.0</td><td>900</td></tr><tr><td><b>spitter</b></td>
+<td>71.6</td><td style="color:#999">0/8</td>
+<td>0%</td><td>2/8</td>
+<td>0.0</td><td>820</td></tr><tr><td><b>ranged</b></td>
+<td>0.6</td><td style="color:#999">0/8</td>
+<td>0%</td><td>1/8</td>
+<td>0.0</td><td>863</td></tr><tr><td><b>boss</b></td>
+<td>-17.5</td><td style="color:#999">0/8</td>
+<td>0%</td><td>0/8</td>
+<td>0.0</td><td>900</td></tr></table>
+<div style="margin-top:12px" class="tag">结论：
+综合最强: <b>spitter</b>（平均奖励 71.6，击杀率 0%）<br>整体策略尚未击杀玩家（需继续训练/调奖励）
+</div></div>
+</body></html>

@@ -444,6 +444,24 @@ class Enemy:
         try:
             if skill == 1 and getattr(self, "attack_range", 0) > 0 and dist < self.attack_range:
                 return self._ranged_attack(dt, player_x, player_y, dist)
+            if skill == 5 and getattr(self, "can_throw", False):
+                # v2.0.14.1：投掷投掷物（RL 已决策 → 确定性发射，绕过 try_throw 的随机拒绝）
+                if self.throw_cd > 0:
+                    return None
+                if dist < 150 or dist > 450:
+                    return None
+                self.throw_cd = random.uniform(2.0, 3.5)
+                _tt = "rock"
+                if self.enemy_type == EnemyType.ZOMBIE_SPITTER:
+                    _tt = "acid"
+                elif self.enemy_type == EnemyType.ZOMBIE_RANGED:
+                    _tt = random.choice(["rock", "fire"])
+                elif getattr(self, "is_boss", False):
+                    _tt = random.choice(["fire", "rock", "acid"])
+                return {"type": _tt, "x": self.x, "y": self.y,
+                        "target_x": player_x, "target_y": player_y,
+                        "damage": self.damage * 1.5,
+                        "owner": "boss" if getattr(self, "is_boss", False) else "enemy_minion"}
             if not getattr(self, "is_boss", False):
                 return None
             if skill == 2 and self.boss_dash_cd <= 0:
