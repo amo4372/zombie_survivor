@@ -70,7 +70,8 @@ def train(steps=200_000, checkpoint=None, n_envs=4, tensorboard=True, device="au
     os.makedirs("rl/eval_envs", exist_ok=True)
     ckpt = CheckpointCallback(save_freq=max(steps // 5, 1000), save_path="rl/models",
                               name_prefix="ppo_zombie_v2")
-    eval_freq = max(steps // 8, 500)
+    # eval_freq 按 update 次数计：每约 25 万 timesteps 评估一次（曲线多点，避免两点直线）
+    eval_freq = max(steps // n_envs // 20, 100)
     eval_env = ZombieEnv(player_mode="kite", zombie_type="normal",
                          map_path=None, seed=42)
     eval_cb = EvalCallback(eval_env, best_model_save_path="rl/models",
