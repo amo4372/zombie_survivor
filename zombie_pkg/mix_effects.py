@@ -1257,6 +1257,10 @@ class EffectsMixin:
         if getattr(enemy, "is_boss", False) and not self.has_vaccine:
             if getattr(enemy, "drops_vaccine", False) or self.config.game_mode == GameMode.TIMED or random.random() < 0.15:
                 self.has_vaccine = True
+                try:
+                    self._unlock_achievement("vaccine_hunter")
+                except Exception:
+                    pass
                 self.floating_texts.append(FloatingText(enemy.x, enemy.y, "获得疫苗！", color=GREEN, lifetime=3.0))
                 if self.session:
                     self.session.set_got_vaccine(True)

@@ -134,16 +134,19 @@ def check_for_updates(timeout=10):
 
         # 找到zip包（优先选择包含游戏包名的）
         download_url = None
+        _asset_size = 0
         for asset in assets:
             name = asset.get("name", "").lower()
             if name.endswith('.zip') and ('zombie' in name or 'survivor' in name or 'game' in name or 'update' in name):
                 download_url = asset.get("browser_download_url")
+                _asset_size = int(asset.get("size", 0) or 0)
                 break
         # 如果没找到特定名称的，取第一个zip
         if not download_url:
             for asset in assets:
                 if asset.get("name", "").lower().endswith('.zip'):
                     download_url = asset.get("browser_download_url")
+                    _asset_size = int(asset.get("size", 0) or 0)
                     break
 
         # 如果release没有assets，尝试源码包
@@ -159,6 +162,9 @@ def check_for_updates(timeout=10):
         UPDATE_STATE["download_url"] = download_url
         UPDATE_STATE["checking"] = False
 
+        if _asset_size > 0:
+            _mb = _asset_size / 1048576.0
+            changelog = f"[更新包大小 {_mb:.1f} MB]\n" + changelog
         return (latest_version, download_url, changelog)
 
     except urllib.error.URLError as e:

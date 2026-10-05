@@ -646,6 +646,20 @@ class RecordsMixin:
             cond("bleeding_warrior", d.get("bleeding_kills", 0) >= 20)
             # 地狱铁人
             cond("iron_will", d.get("difficulty") == "地狱" and time_survived >= 480)
+            # v2.0.12 补全实时结算：财富/本局得分/Boss/组合技/全武器/无伤
+            cond("coin_rich", rd.get("total_coins_earned", 0) >= 1000)
+            cond("millionaire", d.get("score", 0) >= 1000000)
+            cond("wang_slayer", kb.get("boss_wang", 0) >= 1)
+            cond("combo_master", len(rd.get("combo_unlocked", []) or []) >= 3)
+            try:
+                _owned_n = sum(1 for _w in self.records.get_owned_weapons()) if hasattr(self.records, "get_owned_weapons") else 0
+                if _owned_n <= 0:
+                    from weapons import WEAPONS
+                    _owned_n = sum(1 for _wt in WEAPONS if self.records.is_weapon_owned(_wt))
+            except Exception:
+                _owned_n = 0
+            cond("full_armory", _owned_n >= 13)
+            cond("untouchable", d.get("damage_taken", 0) == 0 and time_survived >= 600)
         except Exception as e:
             logger.log_exception(e)
 
@@ -1052,7 +1066,14 @@ class RecordsMixin:
             pass
 
     def _codex_unlock_toast(self, unlocked, label):
-        """图鉴新解锁时实时弹出提示"""
+        """图鉴新解锁时实时弹出提示（v2.0.12：敌人英文名映射为中文名）"""
         if unlocked:
+            try:
+                from codex import MONSTER_CODEX
+                cn = MONSTER_CODEX.get(label, {}).get("name", "")
+                if cn:
+                    label = cn
+            except Exception:
+                pass
             self.ach_toast_queue.append({"key": "codex", "name": label, "desc": "已收录进图鉴",
                                             "timer": 3.0, "kind": "codex", "born": time.time()})

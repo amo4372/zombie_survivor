@@ -141,15 +141,27 @@ class UiMixin:
             self.screen.blit(t, t.get_rect(center=(sw // 2, panel_y + int(48 * scale))))
             t2 = self.game.font.render("检测到新版本，是否立即更新？", True, WHITE)
             self.screen.blit(t2, t2.get_rect(center=(sw // 2, panel_y + int(95 * scale))))
-            preview = ""
+            # v2.0.12：changelog 清洗（去 markdown 符号）+ 多行详情预览
+            preview_lines = []
             if changelog:
-                lines = [l for l in changelog.split("\n") if l.strip()]
-                preview = " | ".join(lines[:2])[:60]
-            if preview:
-                t3 = self.game.font_small.render(preview, True, LIGHT_GRAY)
-                self.screen.blit(t3, t3.get_rect(center=(sw // 2, panel_y + int(130 * scale))))
-            yes_btn = Button(sw // 2 - 160, panel_y + int(180 * scale), 130, 45, "立即更新", color=GREEN)
-            no_btn = Button(sw // 2 + 30, panel_y + int(180 * scale), 130, 45, "稍后", color=GRAY)
+                for l in changelog.split("\n"):
+                    ls = l.strip()
+                    if not ls:
+                        continue
+                    ls = ls.lstrip("#").lstrip("*").lstrip("-").lstrip("□").lstrip("▢").strip()
+                    if ls.startswith("[更新包大小"):
+                        preview_lines.insert(0, ls)  # 包大小置顶
+                    elif len(preview_lines) < 3:
+                        preview_lines.append(ls)
+            if preview_lines:
+                t3 = self.game.font_small.render(preview_lines[0], True, (255, 200, 100) if preview_lines[0].startswith("[更新包大小") else LIGHT_GRAY)
+                self.screen.blit(t3, t3.get_rect(center=(sw // 2, panel_y + int(128 * scale))))
+                for _li, _pl in enumerate(preview_lines[1:4], start=1):
+                    tp = self.game.font_small.render(_pl, True, LIGHT_GRAY)
+                    self.screen.blit(tp, tp.get_rect(center=(sw // 2, panel_y + int((128 + _li * 24) * scale))))
+            # v2.0.12：按钮使用设计坐标（Button 内部统一缩放，修复安卓双重缩放错位/点击无效）
+            yes_btn = Button(sw // 2 // scale - 160, 360, 130, 45, "立即更新", color=GREEN)
+            no_btn = Button(sw // 2 // scale + 30, 360, 130, 45, "稍后", color=GRAY)
             if yes_btn.update(mouse_pos, mouse_pressed, self.game.touch_events, scale):
                 self.game.logger.info("弹窗：立即更新")
                 self.game._apply_update_now()
@@ -158,7 +170,7 @@ class UiMixin:
                 self.game._dismiss_update_notice()
             yes_btn.draw(self.screen, self.game.font_large, scale)
             no_btn.draw(self.screen, self.game.font_large, scale)
-            notes_btn = Button(sw // 2 - 65, panel_y + int(250 * scale), 130, 40, "更新说明", color=CYAN)
+            notes_btn = Button(sw // 2 // scale - 65, 440, 130, 40, "更新说明", color=CYAN)
             if notes_btn.update(mouse_pos, mouse_pressed, self.game.touch_events, scale):
                 self.game.update_notice = None
                 self.game.state = GameState.UPDATE_NOTES
