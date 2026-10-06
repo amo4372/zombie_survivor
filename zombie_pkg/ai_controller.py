@@ -24,7 +24,7 @@ class RLEnemyAI:
         self.sess = None
         self._cache = {}            # id(enemy) -> (下次决策时间, vx, vy, skill)：决策节流缓存
         self._dirty = set()         # 待批量重算的敌人 id（主循环每帧 flush 一次批前向）
-        self._DECIDE_INTERVAL = 0.2   # 决策节流：同怪 0.2s 内复用上次动作
+        self._DECIDE_INTERVAL = 0.25  # 决策节流：同怪 0.25s 内复用上次动作（精英少，减推理量）
         self._input_name = None
         self.obs_dim = 22   # 默认旧模型维度；加载后按权重自动适配（22 或 26 子弹感知）
         # 遥测统计（开发者面板/数据导出用）
@@ -56,6 +56,13 @@ class RLEnemyAI:
                         self._np_mod = _np2
                         self._npz = _np2.load(_npz_path)
                         self.obs_dim = int(self._npz["mlp.policy_net.0.weight"].shape[1])
+                        # 推理性能：权重预转 contiguous float32 缓存
+                        self._w0 = self._np.ascontiguousarray(self._npz["mlp.policy_net.0.weight"], dtype=self._np.float32)
+                        self._b0 = self._np.ascontiguousarray(self._npz["mlp.policy_net.0.bias"], dtype=self._np.float32)
+                        self._w2 = self._np.ascontiguousarray(self._npz["mlp.policy_net.2.weight"], dtype=self._np.float32)
+                        self._b2 = self._np.ascontiguousarray(self._npz["mlp.policy_net.2.bias"], dtype=self._np.float32)
+                        self._wa = self._np.ascontiguousarray(self._npz["action_net.weight"], dtype=self._np.float32)
+                        self._ba = self._np.ascontiguousarray(self._npz["action_net.bias"], dtype=self._np.float32)
                         self.enabled = True
                 except Exception as e2:
                     self.stats["load_error"] = (self.stats["load_error"] + " | " + str(e2)[:80])
@@ -151,7 +158,7 @@ class RLEnemyAI:
         """沿方向采样世界障碍（rects），返回首个碰撞距离归一化 0~1；无碰撞=1.0"""
         if not world or not getattr(world, "obstacles", None):
             return 1.0
-        step = 12.0
+        step = 20.0
         d = 0.0
         ex, ey = enemy.x, enemy.y
         cos_a, sin_a = math.cos(ang), math.sin(ang)
@@ -212,10 +219,9 @@ class RLEnemyAI:
             if self.sess is not None:
                 logits = self.sess.run(None, {self._input_name: X})[0]
             else:
-                npz = self._npz
-                h = self._np.tanh(X @ npz["mlp.policy_net.0.weight"].T + npz["mlp.policy_net.0.bias"])
-                h = self._np.tanh(h @ npz["mlp.policy_net.2.weight"].T + npz["mlp.policy_net.2.bias"])
-                logits = h @ npz["action_net.weight"].T + npz["action_net.bias"]
+                h = self._np.tanh(X @ self._w0.T + self._b0)
+                h = self._np.tanh(h @ self._w2.T + self._b2)
+                logits = h @ self._wa.T + self._ba
             acts = self._np.argmax(logits, axis=1)   # 部署标准：确定性 argmax（训练采样/部署argmax）
         except Exception:
             self._dirty.clear()
