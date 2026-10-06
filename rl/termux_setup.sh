@@ -35,7 +35,7 @@ pkg install -y python python-pip python-numpy
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo " [4/4] 安装 gymnasium（纯 Python，RL 环境标准接口）"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-pip install -U pip
+# 注意：Termux 禁止 `pip install -U pip`（会破坏 python-pip 包），直接装依赖
 pip install gymnasium
 
 echo ""
