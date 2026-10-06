@@ -229,6 +229,12 @@ def train(steps=200_000, checkpoint=None, n_envs=4, tensorboard=True, device="au
     progress_cb.finish()  # 清掉进度行
     # 段末统一保存到 latest.zip（唯一权威最新档；wrapper 优先取它续训）
     path = "rl/models/latest.zip"
+    # 好档防护：新训（无 checkpoint）会覆盖 latest.zip，先留底旧档防误覆盖
+    if not checkpoint and os.path.exists(path):
+        import shutil
+        _bak = "rl/models/latest_pre_newtrain.zip"
+        shutil.copy(path, _bak)
+        print(f"[RL] 新训覆盖防护：旧 latest.zip 已备份 → {_bak}")
     model.save(path)
     _save_abs(start_ts + steps)   # 段末：绝对步数状态对齐
     if stop_reason:
