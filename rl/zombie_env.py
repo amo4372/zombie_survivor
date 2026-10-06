@@ -314,7 +314,7 @@ class ZombieEnv(gym.Env):
     def _boss_dash(self):
         """冲刺：向玩家突进一段距离，命中靠近奖励"""
         if self.dash_cd > 0:
-            return -0.05
+            return -0.2
         self.dash_cd = ZOMBIE_TYPES["boss"]["dash_cd"]
         self.ep_skill_use["dash"] += 1
         ang = math.atan2(self.py - self.zy, self.px - self.zx)
@@ -331,7 +331,7 @@ class ZombieEnv(gym.Env):
     def _boss_summon(self):
         """召唤：冷却内不可用，成功 +3（象征召唤小怪威慑）"""
         if self.summon_cd > 0:
-            return -0.05
+            return -0.2
         self.summon_cd = ZOMBIE_TYPES["boss"]["summon_cd"]
         self.ep_skill_use["summon"] += 1
         return 3.0
@@ -339,19 +339,19 @@ class ZombieEnv(gym.Env):
     def _boss_aoe(self):
         """范围咆哮：玩家在半径内受伤害"""
         if self.aoe_cd > 0:
-            return -0.05
+            return -0.2
         self.aoe_cd = ZOMBIE_TYPES["boss"]["aoe_cd"]
         self.ep_skill_use["aoe"] += 1
         if self._dist() < ZOMBIE_TYPES["boss"]["aoe_radius"]:
             self.php = max(0.0, self.php - ZOMBIE_TYPES["boss"]["aoe_damage"])
             self.ep_dmg_dealt += ZOMBIE_TYPES["boss"]["aoe_damage"]
-            return 15.0
+            return 12.0
         return 0.5
 
     def _boss_lock(self):
         """锁定必中：蓄力后对玩家造成高伤（必中，不可闪避）"""
         if self.lock_cd > 0:
-            return -0.05
+            return -0.2
         self.lock_cd = ZOMBIE_TYPES["boss"]["lock_cd"]
         self.ep_skill_use["lock"] = self.ep_skill_use.get("lock", 0) + 1
         dmg = ZOMBIE_TYPES["boss"]["lock_damage"]
@@ -364,31 +364,31 @@ class ZombieEnv(gym.Env):
     def _boss_debuff(self):
         """恶心控制：玩家减速+伤害降低（环境象征为玩家输出下降→僵尸存活收益）"""
         if self.debuff_cd > 0:
-            return -0.05
+            return -0.2
         self.debuff_cd = ZOMBIE_TYPES["boss"]["debuff_cd"]
         self.ep_skill_use["debuff"] = self.ep_skill_use.get("debuff", 0) + 1
         if self._dist() < 400.0:
-            return 9.0
-        return 2.0
+            return 6.0
+        return 1.5
 
     def _boss_elite(self):
         """特种召唤：召唤精英级小怪（象征：立即形成包抄威慑+伤害增益）"""
         if self.elite_cd > 0:
-            return -0.05
+            return -0.2
         self.elite_cd = ZOMBIE_TYPES["boss"]["elite_cd"]
         self.ep_skill_use["elite"] = self.ep_skill_use.get("elite", 0) + 1
-        return 10.0
+        return 8.0
 
     def _boss_heal(self):
         """回血：恢复 25% 最大生命，按回复量奖励"""
         if self.heal_cd > 0:
-            return -0.05
+            return -0.2
         self.heal_cd = ZOMBIE_TYPES["boss"]["heal_cd"]
         self.ep_skill_use["heal"] = self.ep_skill_use.get("heal", 0) + 1
         st = ZOMBIE_TYPES["boss"]
         healed = min(st["hp"] * st["heal_ratio"], st["hp"] - self.zhp)
         self.zhp = min(st["hp"], self.zhp + healed)
-        return float(healed * 0.10)
+        return float(healed * 0.08)
 
     def _zombie_attack(self):
         st = ZOMBIE_TYPES[self.ztype]
