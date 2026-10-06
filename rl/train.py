@@ -47,7 +47,7 @@ def pick_device(device):
     return device
 
 
-def train(steps=200_000, checkpoint=None, n_envs=4, tensorboard=True, device="auto"):
+def train(steps=200_000, checkpoint=None, n_envs=4, tensorboard=True, device="auto", eval_type="boss"):
     from stable_baselines3 import PPO
     from stable_baselines3.common.callbacks import BaseCallback, EvalCallback
 
@@ -91,7 +91,7 @@ def train(steps=200_000, checkpoint=None, n_envs=4, tensorboard=True, device="au
     # SB3 EvalCallback 的 eval_freq 按「每步 n_calls」计（每步 timesteps 前进 n_envs）：
     # 每 ~20 万 timesteps 一次评估 → 60 万步段内 ≥2 点、长训曲线密
     eval_freq = max(steps // n_envs // 20, 100)
-    eval_env = ZombieEnv(player_mode="kite", zombie_type="normal",
+    eval_env = ZombieEnv(player_mode="kite", zombie_type=args.eval_type,
                          map_path=None, seed=42)
 
     class _HistEval(EvalCallback):
@@ -260,6 +260,8 @@ if __name__ == "__main__":
     ap.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
     ap.add_argument("--save-every", type=int, default=500_000,
                     help="CheckpointCallback 保存频率（默认每50万步，防长训中断丢失）")
+    ap.add_argument("--eval-type", default="boss",
+                    help="训练期评估的僵尸类型（默认 boss：分层AI后的RL主体；可选 normal/tank/brute/assassin/sorcerer/guardian）")
     args = ap.parse_args()
 
     os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -267,5 +269,6 @@ if __name__ == "__main__":
         evaluate(args.checkpoint or "rl/models/ppo_zombie_v2.zip")
         sys.exit(0)
     path = train(args.steps, args.checkpoint, args.n_envs,
-                 tensorboard=not args.no_tb, device=args.device)
+                 tensorboard=not args.no_tb, device=args.device,
+                 eval_type=args.eval_type)
     # 训练已完成（train 内部自动生成测评报告），无需重复评估
