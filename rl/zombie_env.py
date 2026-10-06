@@ -80,8 +80,8 @@ class ZombieEnv(gym.Env):
         # 随机障碍叠加：固定剧情地图 + 随机掩体/水/刺（与游戏端"固定+随机"一致）
         self._add_random_obstacles(abs(hash((zombie_type, seed or 0))) % 100000)
         # v2.0.14.1：动作14=投掷投掷物（对齐游戏端 try_throw：rock/acid/fire）
-        self.action_space = spaces.Discrete(14)
-        self.observation_space = spaces.Box(low=-1.0, high=1.0, shape=(31,), dtype=np.float32)   # 22基础+4子弹感知+5玩家感知
+        self.action_space = spaces.Discrete(18)   # v2.0.19: 14锁定 15恶心 16特种召唤 17回血
+        self.observation_space = spaces.Box(low=-1.0, high=1.0, shape=(35,), dtype=np.float32)   # v2.0.19 obs35: 31维+4新技能冷却
         self.rz = np.random.default_rng(seed)
         self._reset_state()
 
@@ -532,7 +532,7 @@ class ZombieEnv(gym.Env):
                     reward += self._throw_attack()
                 else:
                     action = 0
-            elif action in (10, 11, 12):
+            elif action in (10, 11, 12, 14, 15, 16, 17):
                 # boss 专属技能；非 boss 类型视为停止
                 if self.ztype == "boss":
                     if action == 10:
