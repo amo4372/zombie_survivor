@@ -59,6 +59,8 @@ ZOMBIE_TYPES = {
 }
 TYPE_ORDER = list(ZOMBIE_TYPES)
 RAYS = [0, 45, 90, 135, 180, 225, 270, 315]   # 八向射线
+# v2.0.19 性能优化：预计算八向 (cos, sin)，_get_obs 射线循环不再每帧调三角函数
+RAY_CS = [(math.cos(math.radians(r)), math.sin(math.radians(r))) for r in RAYS]
 
 
 class ZombieEnv(gym.Env):
@@ -209,11 +211,11 @@ class ZombieEnv(gym.Env):
         d = self._dist() / math.hypot(ARENA_W, ARENA_H)
         side_w = min(self.zx, ARENA_W - self.zx) / (ARENA_W / 2)
         side_h = min(self.zy, ARENA_H - self.zy) / (ARENA_H / 2)
-        # 八向障碍物射线（0~1，1=通畅；撞墙=距离占比）
+        # 八向障碍物射线（0~1，1=通畅；撞墙=距离占比）——角度表预计算，避免每帧 cos/sin
         rays = []
-        for r in RAYS:
-            rad = math.radians(r)
-            rv, _hit = raycast_free(self.map, self.zx, self.zy, rad, 400.0)
+        _m, _zx, _zy = self.map, self.zx, self.zy
+        for _cs in RAY_CS:
+            rv, _hit = raycast_free(_m, _zx, _zy, _cs, 400.0)
             rays.append(rv)
         # 队友信息
         if self.teammate:

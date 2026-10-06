@@ -16,7 +16,7 @@ while true; do
     CKPT="--checkpoint rl/models/best_model.zip"
   fi
   echo "===== 段开始 $(date '+%F %T') 起点:${CKPT:-从头} ====="
-  python3 rl/train.py --steps 600000 $CKPT --device cpu --no-tb --save-every 200000
+  python3 rl/train.py --steps 600000 $CKPT --device cpu --no-tb --save-every 200000 --n-envs 2   # v2.0.19 2核主机：2环境并行最优
   echo "===== 段结束 $(date '+%F %T') ====="
   sleep 3
 done

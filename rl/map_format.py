@@ -105,43 +105,80 @@ def load_map(path):
             "name": os.path.basename(path)}
 
 
+_INV_TILE = 1.0 / TILE_SIZE
+
+
+def _cache(m):
+    """地图格网预缓存（宽度/高度/tiles 局部引用），避免每帧重复字典访问"""
+    c = m.get("_c")
+    if c is None:
+        c = (m["width"], m["height"], m["tiles"])
+        m["_c"] = c
+    return c
+
+
 def tile_at(m, x, y):
     """像素坐标 → 格值（越界视为障碍物）"""
-    gx, gy = int(x // TILE_SIZE), int(y // TILE_SIZE)
-    if gx < 0 or gy < 0 or gx >= m["width"] or gy >= m["height"]:
+    w, h, t = _cache(m)
+    gx = int(x * _INV_TILE)
+    gy = int(y * _INV_TILE)
+    if gx < 0 or gy < 0 or gx >= w or gy >= h:
         return TILE_BLOCK
-    return m["tiles"][gy * m["width"] + gx]
+    return t[gy * w + gx]
 
 
 def is_blocked(m, x, y, radius=0.0):
     """圆是否与阻挡类障碍碰撞（掩体/水坑/尖刺/装饰不阻挡移动）"""
-    if tile_at(m, x, y) in BLOCK_TILES:
+    w, h, t = _cache(m)
+    gx = int(x * _INV_TILE)
+    gy = int(y * _INV_TILE)
+    if gx < 0 or gy < 0 or gx >= w or gy >= h or t[gy * w + gx] in BLOCK_TILES:
         return True
     if radius <= 0:
         return False
     for dx in (-radius, 0, radius):
         for dy in (-radius, 0, radius):
-            if tile_at(m, x + dx, y + dy) in BLOCK_TILES:
+            gx2 = int((x + dx) * _INV_TILE)
+            gy2 = int((y + dy) * _INV_TILE)
+            if gx2 < 0 or gy2 < 0 or gx2 >= w or gy2 >= h or t[gy2 * w + gx2] in BLOCK_TILES:
                 return True
     return False
 
 
 def speed_factor(m, x, y):
     """所在格移动速度系数（水坑 0.5，其余 1.0）"""
-    return 0.5 if tile_at(m, x, y) == TILE_WATER else 1.0
+    w, h, t = _cache(m)
+    gx = int(x * _INV_TILE)
+    gy = int(y * _INV_TILE)
+    if gx < 0 or gy < 0 or gx >= w or gy >= h:
+        return 1.0
+    return 0.5 if t[gy * w + gx] == TILE_WATER else 1.0
 
 
 def hazard_dps(m, x, y):
     """所在格每秒伤害（尖刺 8/s）"""
-    return 8.0 if tile_at(m, x, y) == TILE_SPIKE else 0.0
+    w, h, t = _cache(m)
+    gx = int(x * _INV_TILE)
+    gy = int(y * _INV_TILE)
+    if gx < 0 or gy < 0 or gx >= w or gy >= h:
+        return 0.0
+    return 8.0 if t[gy * w + gx] == TILE_SPIKE else 0.0
 
 
 def raycast_free(m, x0, y0, ang, max_dist, step=8.0):
-    """沿方向采样，返回首个障碍物距离（归一化 0~1）与是否碰撞；-1 表示通畅"""
+    """沿方向采样，返回首个障碍物距离（归一化 0~1）与是否碰撞；-1 表示通畅
+    ang 可传弧度角或 (cos, sin) 预计算元组（性能优化路径，免三角函数）"""
+    w, h, t = _cache(m)
+    if isinstance(ang, tuple):
+        cx, sx = ang
+    else:
+        cx, sx = math_cos(ang), math_sin(ang)
     d = 0.0
     while d < max_dist:
         d += step
-        if tile_at(m, x0 + math_cos(ang) * d, y0 + math_sin(ang) * d) == TILE_BLOCK:
+        gx = int((x0 + cx * d) * _INV_TILE)
+        gy = int((y0 + sx * d) * _INV_TILE)
+        if gx < 0 or gy < 0 or gx >= w or gy >= h or t[gy * w + gx] == TILE_BLOCK:
             return min(d / max_dist, 1.0), True
     return 1.0, False
 
