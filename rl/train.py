@@ -20,18 +20,21 @@ import math
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from zombie_env import ZombieEnv, MAX_STEPS, PLAYER_HP, BITE_DAMAGE, make_env_factory, TYPE_ORDER, ARENA_W, ARENA_H
+from zombie_env import ZombieEnv, MAX_STEPS, PLAYER_HP, BITE_DAMAGE, ZOMBIE_TYPES, make_env_factory, TYPE_ORDER, ARENA_W, ARENA_H
 
 # 群体阵容：每种类型一个子环境（多僵尸共享策略 → 集体战术）
 ROSTER = ["normal", "fast", "tank", "spitter", "ranged", "boss"]   # v4：全部僵尸含boss+投掷怪
+# 精英/BOSS 阵容（分层 AI：普通僵尸规则，RL 只训精英+BOSS）
+ELITE_TYPES = ["boss", "tank", "spitter", "ranged"]
 
 
-def build_envs(n_envs=4):
+def build_envs(n_envs=4, types=None):
     # 手动构造 SubprocVecEnv（兼容 sb3 2.9 + gymnasium 1.0）
     from stable_baselines3.common.vec_env import SubprocVecEnv
+    roster = types or ROSTER
     factories = []
     for i in range(n_envs):
-        zt = ROSTER[i % len(ROSTER)]
+        zt = roster[i % len(roster)]
         factories.append(make_env_factory(zt, seed_base=1000 + i * 97))
     return SubprocVecEnv(factories)
 
@@ -48,7 +51,7 @@ def pick_device(device):
 
 
 def train(steps=200_000, checkpoint=None, n_envs=4, tensorboard=True, device="auto", eval_type="boss",
-          log_every_sec=5.0):
+          log_every_sec=5.0, ztypes=None):
     from stable_baselines3 import PPO
     from stable_baselines3.common.callbacks import BaseCallback, EvalCallback
 
@@ -107,9 +110,19 @@ def train(steps=200_000, checkpoint=None, n_envs=4, tensorboard=True, device="au
                 sys.stdout.write("\r" + " " * len(self._last_line) + "\r")
                 sys.stdout.flush()
 
-    env = build_envs(n_envs)
+    types = None
+    if ztypes:
+        types = [t.strip() for t in ztypes.split(",") if t.strip()]
+        for t in types:
+            if t not in ZOMBIE_TYPES:
+                raise SystemExit(f"未知僵尸类型: {t}（可选: {', '.join(ZOMBIE_TYPES)}）")
+        n_envs = len(types)
+    else:
+        types = ELITE_TYPES + (["normal", "fast"] if n_envs > len(ELITE_TYPES) else [])
+    roster_actual = [types[i % len(types)] for i in range(n_envs)]
+    env = build_envs(n_envs, types)
     dev = pick_device(device)
-    print(f"[RL] 设备: {dev} | 阵容: {ROSTER}")
+    print(f"[RL] 设备: {dev} | 训练阵容: {roster_actual}")
     tb_log = "rl/logs" if tensorboard else None
     # 学习率/探索系数按绝对步数衰减（续训时基于 abs_step 状态，不会回升；
     # 总目标 500 万步，后期收敛稳定，减少"学好了又坏掉"的震荡）
@@ -366,6 +379,9 @@ if __name__ == "__main__":
                     help="训练期评估的僵尸类型（默认 boss：分层AI后的RL主体；可选 normal/tank/brute/assassin/sorcerer/guardian）")
     ap.add_argument("--log-every-sec", type=float, default=5.0,
                     help="实时进度刷新间隔（秒），默认 5 秒；后台/nohup 自动转行日志")
+    ap.add_argument("--ztypes", default="",
+                    help="训练僵尸类型，逗号分隔（如 boss,tank）。默认：精英+BOSS "
+                         "（分层 AI：普通僵尸不用 RL）")
     args = ap.parse_args()
 
     os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -374,5 +390,6 @@ if __name__ == "__main__":
         sys.exit(0)
     path = train(args.steps, args.checkpoint, args.n_envs,
                  tensorboard=not args.no_tb, device=args.device,
-                 eval_type=args.eval_type, log_every_sec=args.log_every_sec)
+                 eval_type=args.eval_type, log_every_sec=args.log_every_sec,
+                 ztypes=args.ztypes)
     # 训练已完成（train 内部自动生成测评报告），无需重复评估

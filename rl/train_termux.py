@@ -34,7 +34,7 @@ import argparse
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from zombie_env import ZombieEnv, MAX_STEPS, TYPE_ORDER, make_env_factory, TRAIN_MAPS
+from zombie_env import ZombieEnv, MAX_STEPS, TYPE_ORDER, ZOMBIE_TYPES, make_env_factory, TRAIN_MAPS
 
 # ---------- 常量（与 SB3 版 train.py 对齐，obs35 / 动作18） ----------
 OBS_DIM = 35
@@ -307,6 +307,10 @@ class _Reporter:
             sys.stdout.flush()
 
 
+# 精英/BOSS 阵容（分层 AI：普通僵尸用规则，RL 只训精英+BOSS）
+ELITE_TYPES = ["boss", "tank", "spitter", "ranged"]
+
+
 def main():
     ap = argparse.ArgumentParser(description="Termux 兼容纯 NumPy PPO-lite 训练器")
     ap.add_argument("--steps", type=int, default=50000)
@@ -317,6 +321,9 @@ def main():
     ap.add_argument("--save-every", type=int, default=SAVE_EVERY)
     ap.add_argument("--log-every-sec", type=float, default=2.0,
                     help="实时进度刷新间隔（秒），默认 2 秒；后台/nohup 时自动转行日志")
+    ap.add_argument("--ztypes", default="",
+                    help="训练僵尸类型，逗号分隔（如 boss,tank,spitter）。默认：精英+BOSS "
+                         "（boss,tank），普通僵尸不用 RL（分层 AI）")
     args = ap.parse_args()
 
     if args.eval_only:
@@ -340,10 +347,17 @@ def main():
         pol = NPPolicy()
         print("[新训] 从零初始化策略")
 
+    if args.ztypes:
+        types = [t.strip() for t in args.ztypes.split(",") if t.strip()]
+        for t in types:
+            if t not in ZOMBIE_TYPES:
+                raise SystemExit(f"未知僵尸类型: {t}（可选: {', '.join(ZOMBIE_TYPES)}）")
+    else:
+        types = ELITE_TYPES[:args.n_envs]   # 默认精英+BOSS（普通僵尸用规则 AI，不训 RL）
     envs = []
-    for i, t in enumerate(TYPE_ORDER[:args.n_envs]):
+    for i, t in enumerate(types):
         envs.append(make_env_factory(t, seed_base=1000 + i * 97)())
-    print(f"环境 {len(envs)} 个（类型: {[e.ztype for e in envs]}）")
+    print(f"环境 {len(envs)} 个（类型: {types}）")
 
     start = time.time()
     step_abs = abs0
