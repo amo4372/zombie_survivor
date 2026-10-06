@@ -22,14 +22,26 @@ import time
 import html as _html
 
 
+def _sma(values, window=5):
+    """滑动平均（窗口默认5，末端保留原始值避免拖尾）"""
+    if len(values) <= window:
+        return values
+    out = []
+    for i in range(len(values)):
+        lo = max(0, i - window + 1)
+        out.append(sum(values[lo:i + 1]) / (i - lo + 1))
+    return out
+
+
 def _svg_line_chart(points, w=720, h=260, color="#4fc3f7"):
-    """训练 reward 曲线 → SVG polyline + 面积"""
+    """训练 reward 曲线 → 原始 polyline + 面积 + 滑动平均趋势线"""
     if len(points) < 2:
         return "<p>训练过程数据不足，无法绘制曲线</p>"
     xs = [p["step"] for p in points]
     ys = [p["mean_reward"] for p in points]
+    sm = _sma(ys, window=max(3, min(8, len(points) // 3)))
     x0, x1 = min(xs), max(xs)
-    y0, y1 = min(ys), max(ys)
+    y0, y1 = min(min(ys), min(sm)), max(max(ys), max(sm))
     pad = 24
     if x1 == x0:
         x1 = x0 + 1
@@ -40,8 +52,8 @@ def _svg_line_chart(points, w=720, h=260, color="#4fc3f7"):
     def py(y):
         return h - pad - (y - y0) / (y1 - y0) * (h - 2 * pad)
     pts = " ".join(f"{px(p['step']):.1f},{py(p['mean_reward']):.1f}" for p in points)
-    area = " ".join(f"{px(p['step']):.1f},{py(p['mean_reward']):.1f}" for p in points)
-    area = f"{px(x0):.1f},{py(y0):.1f} {area} {px(x1):.1f},{py(y0):.1f}"
+    sm_pts = " ".join(f"{px(xs[i]):.1f},{py(sm[i]):.1f}" for i in range(len(sm)))
+    area = f"{px(x0):.1f},{py(y0):.1f} {pts} {px(x1):.1f},{py(y0):.1f}"
     ticks = ""
     for v in [y0, (y0 + y1) / 2, y1]:
         ticks += f'<text x="{pad-6}" y="{py(v)+4}" font-size="11" fill="#999" text-anchor="end">{v:.0f}</text>'
@@ -50,10 +62,11 @@ def _svg_line_chart(points, w=720, h=260, color="#4fc3f7"):
         xi = x0 + (x1 - x0) * i / 4
         xlabels += f'<text x="{px(xi):.1f}" y="{h-8}" font-size="11" fill="#999" text-anchor="middle">{int(xi)}</text>'
     return f'''<svg viewBox="0 0 {w} {h}" width="100%" style="background:#14171c;border-radius:10px">
-  <polygon points="{area}" fill="{color}" opacity="0.12"/>
-  <polyline points="{pts}" fill="none" stroke="{color}" stroke-width="2.2"/>
+  <polygon points="{area}" fill="{color}" opacity="0.10"/>
+  <polyline points="{pts}" fill="none" stroke="{color}" stroke-width="1.6" opacity="0.45"/>
+  <polyline points="{sm_pts}" fill="none" stroke="#ffb74d" stroke-width="3"/>
   {ticks}{xlabels}
-  <text x="{pad}" y="14" font-size="12" fill="#aaa">训练过程 平均奖励 (mean reward)</text>
+  <text x="{pad}" y="14" font-size="12" fill="#aaa">训练过程 平均奖励（细线=原始 / 橙粗线=滑动平均趋势）</text>
 </svg>'''
 
 

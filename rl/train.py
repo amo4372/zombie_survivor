@@ -69,14 +69,21 @@ def train(steps=200_000, checkpoint=None, n_envs=4, tensorboard=True, device="au
     dev = pick_device(device)
     print(f"[RL] 设备: {dev} | 阵容: {ROSTER}")
     tb_log = "rl/logs" if tensorboard else None
+    # 学习率/探索系数按绝对步数衰减（续训时基于 abs_step 状态，不会回升；
+    # 总目标 500 万步，后期收敛稳定，减少"学好了又坏掉"的震荡）
+    _abs = _load_abs()
+    _progress = max(1.0 - _abs / 5_000_000, 0.0)
+    _lr = max(3e-4 * _progress, 5e-5)
+    _ent = max(0.01 * _progress, 0.003)
     if checkpoint and os.path.exists(checkpoint):
-        print(f"[RL] 从断点续训: {checkpoint}")
-        model = PPO.load(checkpoint, env=env, device=dev)
+        print(f"[RL] 从断点续训: {checkpoint} (lr={_lr:.2e}, ent={_ent:.3f})")
+        model = PPO.load(checkpoint, env=env, device=dev,
+                         learning_rate=_lr, ent_coef=_ent)
     else:
         model = PPO(
             "MlpPolicy", env,
             n_steps=512, batch_size=128, gamma=0.99, gae_lambda=0.95,
-            clip_range=0.2, ent_coef=0.01, learning_rate=3e-4,
+            clip_range=0.2, ent_coef=_ent, learning_rate=_lr,
             vf_coef=0.5, max_grad_norm=0.5,
             policy_kwargs=dict(net_arch=dict(pi=[128, 128], vf=[128, 128])),
             tensorboard_log=tb_log, verbose=1, device=dev,
@@ -123,7 +130,7 @@ def train(steps=200_000, checkpoint=None, n_envs=4, tensorboard=True, device="au
 
     eval_cb = _HistEval(eval_env, best_model_save_path="rl/models",
                         log_path="rl/logs", eval_freq=eval_freq,
-                        n_eval_episodes=3, deterministic=True,
+                        n_eval_episodes=args.eval_episodes, deterministic=True,
                         start_ts=start_ts)
     print(f"[RL] 开始训练 {steps} 步（每 {eval_freq} 次评估一次）...")
     t0 = time.time()
@@ -260,6 +267,8 @@ if __name__ == "__main__":
     ap.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
     ap.add_argument("--save-every", type=int, default=500_000,
                     help="CheckpointCallback 保存频率（默认每50万步，防长训中断丢失）")
+    ap.add_argument("--eval-episodes", type=int, default=10,
+                    help="每次评估跑的局数（默认10，降低单点噪声，曲线更平滑可信）")
     ap.add_argument("--eval-type", default="boss",
                     help="训练期评估的僵尸类型（默认 boss：分层AI后的RL主体；可选 normal/tank/brute/assassin/sorcerer/guardian）")
     args = ap.parse_args()
