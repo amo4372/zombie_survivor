@@ -9,13 +9,17 @@ set -e
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo " [1/4] 配置清华 Termux 镜像源"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-# 兼容新旧版源的配置文件路径
+# 兼容新旧版源的配置文件路径；域名级替换（兼容 deb [arch=all,arm] 前缀）
 LIST="$PREFIX/etc/apt/sources.list"
 LSTD="$PREFIX/etc/apt/sources.list.d/termux.list"
 [ -f "$LSTD" ] && LIST="$LSTD"
-sed -i 's@^deb https\?://packages.termux.org@deb https://mirrors.tuna.tsinghua.edu.cn/termux@' "$LIST" 2>/dev/null || true
-# 若上面没替换成功（URL 已是镜像），跳过
-grep -q "mirrors.tuna.tsinghua.edu.cn/termux" "$LIST" && echo "  镜像源已就绪: $(grep -m1 '^deb' "$LIST" | awk '{print $2}')" || echo "  ⚠ 未检测到替换，请手动 termux-change-repo 选清华源"
+sed -i 's@packages\.termux\.org@mirrors.tuna.tsinghua.edu.cn/termux@g' "$LIST"
+# 校验是否替换成功
+if grep -q "mirrors.tuna.tsinghua.edu.cn/termux" "$LIST"; then
+  echo "  镜像源已就绪: $(grep -m1 '^deb' "$LIST")"
+else
+  echo "  ⚠ 未检测到替换，请手动执行: termux-change-repo 并选择清华源"
+fi
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo " [2/4] 更新软件源 & 升级系统包"
