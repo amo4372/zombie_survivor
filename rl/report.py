@@ -209,7 +209,7 @@ th{{background:#20272f;color:#8fd0ff}} .tag{{color:#ffb74d;font-size:12px}}
 </style></head><body>
 <h1>🧟 僵尸AI 训练测评报告</h1>
 <div class="tag">模型: {_html.escape(data.get("model",""))} · 设备: {_html.escape(data.get("device",""))} ·
-训练步数: {data.get("total_timesteps",0):,} · 耗时: {data.get("train_time_min",0):.1f} 分钟</div>
+训练步数: {data.get("total_timesteps",0):,} · 耗时: {("仅评估模式（断点累计训练耗时见训练日志）" if data.get("train_time_min",0)<=0 else f"{data['train_time_min']:.1f} 分钟")}</div>
 <h2>训练过程</h2><div class="card">{hist_svg}</div>
 <h2>各僵尸类型平均奖励</h2><div class="card">{bar_svg}</div>
 <h2>各僵尸类型玩家击杀率 (%)</h2><div class="card">{bar2_svg}</div>

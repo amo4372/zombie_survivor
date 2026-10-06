@@ -105,10 +105,14 @@ def train(steps=200_000, checkpoint=None, n_envs=4, tensorboard=True, device="au
         """每次评估后把「绝对步数 + 平均奖励」实时追加到 rl/logs/train_history.jsonl
         ——断点续训/进程被杀也不丢曲线数据。"""
 
-        def __init__(self, *a, hist_path="rl/logs/train_history.jsonl", start_ts=0, **kw):
+        def __init__(self, *a, hist_path="rl/logs/train_history.jsonl", start_ts=0,
+                     target_reward=None, target_window=3, stop_file="rl/logs/stop.flag", **kw):
             super().__init__(*a, **kw)
             self.hist_path = hist_path
             self.start_ts = start_ts
+            self.target_reward = target_reward
+            self.target_window = max(1, target_window)
+            self.stop_file = stop_file
             self._n_prev = 0
 
         def _on_step(self):
@@ -124,6 +128,22 @@ def train(steps=200_000, checkpoint=None, n_envs=4, tensorboard=True, device="au
                             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
                         _save_abs(rec["step"])
                         self._n_prev = n
+                    # —— 停止条件（每次新评估后检查）——
+                    # a) 用户主动停止：touch rl/logs/stop.flag
+                    if self.stop_file and os.path.exists(self.stop_file):
+                        try:
+                            os.remove(self.stop_file)
+                        except OSError:
+                            pass
+                        raise _TargetMet("用户主动停止(检测到 stop.flag)")
+                    # b) 达标停止：最近 target_window 次评估均值 ≥ 目标（滑动窗口防单点噪声）
+                    if self.target_reward is not None and n >= self.target_window:
+                        recent = [float(np.mean(r)) for r in self.evaluations_results[-self.target_window:]]
+                        if sum(recent) / len(recent) >= self.target_reward:
+                            raise _TargetMet(
+                                f"平均奖励达标: 最近{self.target_window}次均值 {sum(recent)/len(recent):.1f} ≥ 目标 {self.target_reward}")
+            except _TargetMet:
+                raise
             except Exception as e:
                 print(f"[HistEval] 写入失败: {e}")
             return ok
@@ -131,16 +151,32 @@ def train(steps=200_000, checkpoint=None, n_envs=4, tensorboard=True, device="au
     eval_cb = _HistEval(eval_env, best_model_save_path="rl/models",
                         log_path="rl/logs", eval_freq=eval_freq,
                         n_eval_episodes=args.eval_episodes, deterministic=True,
-                        start_ts=start_ts)
+                        start_ts=start_ts,
+                        target_reward=args.target_reward,
+                        target_window=args.target_window,
+                        stop_file=args.stop_file)
     print(f"[RL] 开始训练 {steps} 步（每 {eval_freq} 次评估一次）...")
+    if args.target_reward is not None:
+        print(f"[RL] 达标停止开启: 平均奖励 ≥ {args.target_reward}（最近{args.target_window}次均值）自动停")
+    if args.stop_file:
+        print(f"[RL] 用户停止方式: touch {args.stop_file} 随时停训（可续训）")
     t0 = time.time()
-    model.learn(total_timesteps=steps, callback=[ckpt, eval_cb], progress_bar=False)
+    stop_reason = None
+    try:
+        model.learn(total_timesteps=steps, callback=[ckpt, eval_cb], progress_bar=False)
+    except _TargetMet as e:
+        stop_reason = str(e)
+    except KeyboardInterrupt:
+        stop_reason = "用户主动停止(Ctrl+C)"
     cost = time.time() - t0
     # 段末统一保存到 latest.zip（唯一权威最新档；wrapper 优先取它续训）
     path = "rl/models/latest.zip"
     model.save(path)
     _save_abs(start_ts + steps)   # 段末：绝对步数状态对齐
-    print(f"[RL] 训练完成: {steps} 步, 耗时 {cost/60:.1f} 分钟 → {path} (绝对 {start_ts + steps})")
+    if stop_reason:
+        print(f"[RL] 提前停止: {stop_reason}")
+    print(f"[RL] 训练完成: {steps if not stop_reason else '提前停止'} 步, 耗时 {cost/60:.1f} 分钟 → {path} (绝对 {start_ts + steps})")
+    print(f"[RL] 断点已保存: {path} —— 下次续训: --checkpoint {path}")
     env.close()
 
     # 训练过程历史 → 测评报告
@@ -216,6 +252,11 @@ def _gen_report(model_path, device, steps, cost, history, n_episodes=8):
 ABS_STEP_FILE = "rl/logs/abs_step.txt"
 
 
+class _TargetMet(Exception):
+    """训练提前停止信号（达标 或 用户主动停止）"""
+    pass
+
+
 def _load_abs():
     """读取绝对步数状态（断点续训/进程被杀后的接力基准）"""
     try:
@@ -254,7 +295,8 @@ def _load_history(path="rl/logs/train_history.jsonl"):
 def evaluate(model_path, n_episodes=8):
     """只评估（--eval-only）：跑各类型并生成报告（含完整训练曲线）"""
     import glob
-    _gen_report(model_path, "eval", 0, 0, _load_history(), n_episodes)
+    # 训练步数显示模型累计绝对进度（断点续训后不为 0）；耗时由日志统计
+    _gen_report(model_path, "eval", _load_abs(), 0, _load_history(), n_episodes)
 
 
 if __name__ == "__main__":
@@ -267,6 +309,12 @@ if __name__ == "__main__":
     ap.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
     ap.add_argument("--save-every", type=int, default=500_000,
                     help="CheckpointCallback 保存频率（默认每50万步，防长训中断丢失）")
+    ap.add_argument("--target-reward", type=float, default=None,
+                    help="达标停止：最近 N 次评估平均奖励 ≥ 该值则提前停止训练（如 50.0）")
+    ap.add_argument("--target-window", type=int, default=3,
+                    help="达标判定窗口（默认3次评估均值，防单点噪声误停）")
+    ap.add_argument("--stop-file", default="rl/logs/stop.flag",
+                    help="用户主动停止：训练中 touch 该文件立即停训并保存断点")
     ap.add_argument("--eval-episodes", type=int, default=10,
                     help="每次评估跑的局数（默认10，降低单点噪声，曲线更平滑可信）")
     ap.add_argument("--eval-type", default="boss",
