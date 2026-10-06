@@ -26,7 +26,8 @@ def main():
         import onnxruntime as ort
         s = ort.InferenceSession(_ONNX)
         inp = s.get_inputs()[0].name
-        x = np.random.RandomState(0).rand(1, 22).astype(np.float32)
+        obs_dim = int(s.get_inputs()[0].shape[1])  # 动态取观测维度（22/26/31 自适应）
+        x = np.random.RandomState(0).rand(1, obs_dim).astype(np.float32)
         ref = s.run(None, {inp: x})[0][0]
         h = np.tanh(x @ w["mlp.policy_net.0.weight"].T + w["mlp.policy_net.0.bias"])
         h = np.tanh(h @ w["mlp.policy_net.2.weight"].T + w["mlp.policy_net.2.bias"])
