@@ -77,6 +77,8 @@ def write_abs(v):
 
 
 def latest_npz():
+    # 首次运行 rl/models/ 目录可能不存在（源码包不含运行时目录），先创建
+    os.makedirs(_MODEL_DIR, exist_ok=True)
     if os.path.exists(os.path.join(_MODEL_DIR, "latest_termux.npz")):
         return os.path.join(_MODEL_DIR, "latest_termux.npz")
     cands = [os.path.join(_MODEL_DIR, f) for f in os.listdir(_MODEL_DIR)
@@ -325,6 +327,7 @@ def main():
             f.write(json.dumps({"step": step_abs, "mean_reward": round(mean_rew, 2),
                                 "lr": round(lr, 6), "ent": round(ent, 5)}) + "\n")
         if step_abs % args.save_every == 0 or step_abs >= target:
+            os.makedirs(_MODEL_DIR, exist_ok=True)  # 保险：保存前确保目录存在
             p = os.path.join(_MODEL_DIR, f"termux_policy_{step_abs}_steps.npz")
             pol.save(p)
             pol.save(os.path.join(_MODEL_DIR, "latest_termux.npz"))
