@@ -14,6 +14,7 @@ import os
 import sys
 import argparse
 import time
+import json
 import numpy as np
 import math
 
@@ -84,21 +85,55 @@ def train(steps=200_000, checkpoint=None, n_envs=4, tensorboard=True, device="au
     os.makedirs("rl/eval_envs", exist_ok=True)
     ckpt = StepCheckpoint(save_path="rl/models", every=args.save_every,
                           name_prefix="ppo_zombie_v2")
-    # eval_freq 按 update 次数计：每约 25 万 timesteps 评估一次（曲线多点，避免两点直线）
+    # 段起点绝对步数：SB3 learn() 会重置 num_timesteps 为相对值，
+    # 曲线要跨段连续必须加回续训前的绝对步数（状态文件维护，被杀/续训不丢）
+    start_ts = _load_abs()
+    # SB3 EvalCallback 的 eval_freq 按「每步 n_calls」计（每步 timesteps 前进 n_envs）：
+    # 每 ~20 万 timesteps 一次评估 → 60 万步段内 ≥2 点、长训曲线密
     eval_freq = max(steps // n_envs // 20, 100)
     eval_env = ZombieEnv(player_mode="kite", zombie_type="normal",
                          map_path=None, seed=42)
-    eval_cb = EvalCallback(eval_env, best_model_save_path="rl/models",
-                           log_path="rl/logs", eval_freq=eval_freq,
-                           n_eval_episodes=3, deterministic=True)
-    print(f"[RL] 开始训练 {steps} 步（每 {eval_freq} 步测评一次）...")
+
+    class _HistEval(EvalCallback):
+        """每次评估后把「绝对步数 + 平均奖励」实时追加到 rl/logs/train_history.jsonl
+        ——断点续训/进程被杀也不丢曲线数据。"""
+
+        def __init__(self, *a, hist_path="rl/logs/train_history.jsonl", start_ts=0, **kw):
+            super().__init__(*a, **kw)
+            self.hist_path = hist_path
+            self.start_ts = start_ts
+            self._n_prev = 0
+
+        def _on_step(self):
+            ok = super()._on_step()
+            try:
+                ts = getattr(self, "evaluations_timesteps", None)
+                if ts is not None:
+                    n = len(ts)
+                    if n > self._n_prev:
+                        rec = {"step": self.start_ts + int(self.model.num_timesteps),
+                               "mean_reward": float(np.mean(self.evaluations_results[-1]))}
+                        with open(self.hist_path, "a", encoding="utf-8") as f:
+                            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                        _save_abs(rec["step"])
+                        self._n_prev = n
+            except Exception as e:
+                print(f"[HistEval] 写入失败: {e}")
+            return ok
+
+    eval_cb = _HistEval(eval_env, best_model_save_path="rl/models",
+                        log_path="rl/logs", eval_freq=eval_freq,
+                        n_eval_episodes=3, deterministic=True,
+                        start_ts=start_ts)
+    print(f"[RL] 开始训练 {steps} 步（每 {eval_freq} 次评估一次）...")
     t0 = time.time()
     model.learn(total_timesteps=steps, callback=[ckpt, eval_cb], progress_bar=False)
     cost = time.time() - t0
     # 段末统一保存到 latest.zip（唯一权威最新档；wrapper 优先取它续训）
     path = "rl/models/latest.zip"
     model.save(path)
-    print(f"[RL] 训练完成: {steps} 步, 耗时 {cost/60:.1f} 分钟 → {path}")
+    _save_abs(start_ts + steps)   # 段末：绝对步数状态对齐
+    print(f"[RL] 训练完成: {steps} 步, 耗时 {cost/60:.1f} 分钟 → {path} (绝对 {start_ts + steps})")
     env.close()
 
     # 训练过程历史 → 测评报告
@@ -171,10 +206,48 @@ def _gen_report(model_path, device, steps, cost, history, n_episodes=8):
     return build_report(data)
 
 
+ABS_STEP_FILE = "rl/logs/abs_step.txt"
+
+
+def _load_abs():
+    """读取绝对步数状态（断点续训/进程被杀后的接力基准）"""
+    try:
+        with open(ABS_STEP_FILE, encoding="utf-8") as f:
+            return int(f.read().strip() or 0)
+    except (FileNotFoundError, ValueError):
+        return 0
+
+
+def _save_abs(v):
+    try:
+        with open(ABS_STEP_FILE, "w", encoding="utf-8") as f:
+            f.write(str(int(v)))
+    except Exception:
+        pass
+
+
+def _load_history(path="rl/logs/train_history.jsonl"):
+    """读取跨段持久化的训练历史（断点续训不丢失）"""
+    hist = []
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    hist.append(json.loads(line))
+                except Exception:
+                    continue
+    except FileNotFoundError:
+        pass
+    return hist
+
+
 def evaluate(model_path, n_episodes=8):
-    """只评估（--eval-only）：跑各类型并生成报告"""
+    """只评估（--eval-only）：跑各类型并生成报告（含完整训练曲线）"""
     import glob
-    _gen_report(model_path, "eval", 0, 0, [], n_episodes)
+    _gen_report(model_path, "eval", 0, 0, _load_history(), n_episodes)
 
 
 if __name__ == "__main__":
