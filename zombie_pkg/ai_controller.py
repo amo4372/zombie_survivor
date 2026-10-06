@@ -16,7 +16,8 @@ def _now():
 
 class RLEnemyAI:
     # 动作→技能映射：9远程 10冲刺 11召唤 12范围咆哮
-    ACT_SKILL = {9: 1, 10: 2, 11: 3, 12: 4, 13: 5}   # 13=投掷投掷物（v2.0.14.1）
+    ACT_SKILL = {9: 1, 10: 2, 11: 3, 12: 4, 13: 5,   # 13=投掷（v2.0.14.1）
+                 14: 6, 15: 7, 16: 8, 17: 9}          # v2.0.19: 14锁定必中 15恶心 16特种召唤 17回血
 
     def __init__(self, model_path, enable=True):
         self.model_path = model_path
@@ -152,6 +153,16 @@ class RLEnemyAI:
                 obs += [pvx, pvy, pfx, pfy, pfire]
             except Exception:
                 obs += [0.0, 0.0, 0.0, 0.0, 0.0]
+        # v2.0.19 新技能冷却 4 维（obs35：锁定/恶心/特种召唤/回血；旧模型兼容）
+        if self.obs_dim >= 35:
+            try:
+                _mc = 15.0
+                obs += [float(np.clip(getattr(enemy, "boss_lock_cd", 0.0) / _mc, 0, 1)),
+                        float(np.clip(getattr(enemy, "boss_debuff_cd", 0.0) / _mc, 0, 1)),
+                        float(np.clip(getattr(enemy, "boss_elite_cd", 0.0) / _mc, 0, 1)),
+                        float(np.clip(getattr(enemy, "boss_heal_cd", 0.0) / _mc, 0, 1))]
+            except Exception:
+                obs += [0.0, 0.0, 0.0, 0.0]
         return np.array(obs, dtype=np.float32)
 
     def _ray_dist(self, enemy, world, ang, max_dist=400.0):

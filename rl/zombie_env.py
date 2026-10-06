@@ -51,6 +51,8 @@ ZOMBIE_TYPES = {
                "throw_cd": 3.5, "throw_range_min": 150.0, "throw_range_max": 450.0},
     "boss":    {"speed": 95.0, "hp": 500.0, "bite": 24.0, "bite_cd": 0.7, "radius": 22,
                 "dash_cd": 3.5, "summon_cd": 8.0, "aoe_cd": 5.0,
+                "lock_cd": 9.0, "debuff_cd": 7.0, "elite_cd": 14.0, "heal_cd": 12.0,
+                "lock_damage": 96.0, "heal_ratio": 0.25,
                 "dash_damage": 20.0, "aoe_damage": 12.0, "aoe_radius": 200.0, "dash_dist": 220.0,
                 "can_throw": True, "throw_type": "fire", "throw_damage": 14.0,
                 "throw_cd": 4.0, "throw_range_min": 150.0, "throw_range_max": 450.0},
@@ -150,6 +152,10 @@ class ZombieEnv(gym.Env):
         self.aoe_cd = 0.0
         self.summon_cd = 0.0
         self.throw_cd = 0.0            # 投掷物冷却（有 can_throw 的类型）
+        self.lock_cd = 0.0             # v2.0.19 锁定必中
+        self.debuff_cd = 0.0           # v2.0.19 恶心控制
+        self.elite_cd = 0.0            # v2.0.19 特种召唤
+        self.heal_cd = 0.0             # v2.0.19 回血
         self.is_dashing = False
         self.dash_dir = (0.0, 0.0)
         self.fire_timer = 0.0
@@ -243,6 +249,10 @@ class ZombieEnv(gym.Env):
         pvy = float(np.clip((self.py - self._prev_py) / (PLAYER_SPEED * DT * SUBSTEPS), -1, 1))
         obs += [pvx, pvy, math.sin(self.pfacing), math.cos(self.pfacing),
                 float(1.0 if self.fire_timer > 0 else 0.0)]
+        # v2.0.19 新技能冷却 4 维（obs35；普通类型恒 0；顺序与游戏端 ai_controller 一致）
+        _mc = 15.0
+        obs += [np.clip(self.lock_cd / _mc, 0, 1), np.clip(self.debuff_cd / _mc, 0, 1),
+               np.clip(self.elite_cd / _mc, 0, 1), np.clip(self.heal_cd / _mc, 0, 1)]
         return np.array(obs, dtype=np.float32)
 
     # ---------- 玩家脚本（行为多样化：kite风筝 / stand站桩 / strafe横向走位 / melee近战冲脸）----------
@@ -335,6 +345,48 @@ class ZombieEnv(gym.Env):
             self.ep_dmg_dealt += ZOMBIE_TYPES["boss"]["aoe_damage"]
             return 12.0
         return 0.5
+
+    def _boss_lock(self):
+        """锁定必中：蓄力后对玩家造成高伤（必中，不可闪避）"""
+        if self.lock_cd > 0:
+            return -0.2
+        self.lock_cd = ZOMBIE_TYPES["boss"]["lock_cd"]
+        self.ep_skill_use["lock"] = self.ep_skill_use.get("lock", 0) + 1
+        dmg = ZOMBIE_TYPES["boss"]["lock_damage"]
+        # 距离越近命中收益越高（远程仍可锁定）
+        proximity = max(0.3, 1.0 - self._dist() / 600.0)
+        self.php = max(0.0, self.php - dmg)
+        self.ep_dmg_dealt += dmg
+        return float(dmg * 0.12 * proximity)   # 高伤害必中 → 强正奖励
+
+    def _boss_debuff(self):
+        """恶心控制：玩家减速+伤害降低（环境象征为玩家输出下降→僵尸存活收益）"""
+        if self.debuff_cd > 0:
+            return -0.2
+        self.debuff_cd = ZOMBIE_TYPES["boss"]["debuff_cd"]
+        self.ep_skill_use["debuff"] = self.ep_skill_use.get("debuff", 0) + 1
+        if self._dist() < 400.0:
+            return 6.0
+        return 1.5
+
+    def _boss_elite(self):
+        """特种召唤：召唤精英级小怪（象征：立即形成包抄威慑+伤害增益）"""
+        if self.elite_cd > 0:
+            return -0.2
+        self.elite_cd = ZOMBIE_TYPES["boss"]["elite_cd"]
+        self.ep_skill_use["elite"] = self.ep_skill_use.get("elite", 0) + 1
+        return 8.0
+
+    def _boss_heal(self):
+        """回血：恢复 25% 最大生命，按回复量奖励"""
+        if self.heal_cd > 0:
+            return -0.2
+        self.heal_cd = ZOMBIE_TYPES["boss"]["heal_cd"]
+        self.ep_skill_use["heal"] = self.ep_skill_use.get("heal", 0) + 1
+        st = ZOMBIE_TYPES["boss"]
+        healed = min(st["hp"] * st["heal_ratio"], st["hp"] - self.zhp)
+        self.zhp = min(st["hp"], self.zhp + healed)
+        return float(healed * 0.08)
 
     def _zombie_attack(self):
         st = ZOMBIE_TYPES[self.ztype]
@@ -440,6 +492,10 @@ class ZombieEnv(gym.Env):
             self.aoe_cd = max(0.0, self.aoe_cd - DT)
             self.summon_cd = max(0.0, self.summon_cd - DT)
             self.throw_cd = max(0.0, self.throw_cd - DT)
+            self.lock_cd = max(0.0, self.lock_cd - DT)
+            self.debuff_cd = max(0.0, self.debuff_cd - DT)
+            self.elite_cd = max(0.0, self.elite_cd - DT)
+            self.heal_cd = max(0.0, self.heal_cd - DT)
             # 冲刺持续状态
             if self.is_dashing:
                 dx0, dy0 = self.dash_dir
@@ -483,8 +539,16 @@ class ZombieEnv(gym.Env):
                         reward += self._boss_dash()
                     elif action == 11:
                         reward += self._boss_summon()
-                    else:
+                    elif action == 12:
                         reward += self._boss_aoe()
+                    elif action == 14:
+                        reward += self._boss_lock()       # v2.0.19 锁定必中
+                    elif action == 15:
+                        reward += self._boss_debuff()     # v2.0.19 恶心控制
+                    elif action == 16:
+                        reward += self._boss_elite()      # v2.0.19 特种召唤
+                    else:
+                        reward += self._boss_heal()       # v2.0.19 回血
                 else:
                     action = 0
 
@@ -493,7 +557,7 @@ class ZombieEnv(gym.Env):
                 self._update_pack()
             if self._update_bullets():
                 reward -= 0.8
-            reward += self._zombie_attack() * 5.0
+            reward += self._zombie_attack() * 8.0   # v2.0.19 鼓励主动输出
             reward += self._update_spits() * 0.8
             reward += self._update_throws() * 0.8
 
@@ -528,7 +592,7 @@ class ZombieEnv(gym.Env):
             self._prev_py = self.py
 
             if self.php <= 0:
-                reward += 50.0
+                reward += 80.0    # v2.0.19 击杀奖励提高：主动出击、别苟
                 self.ep_kills += 1
                 terminated = True
                 break
@@ -540,7 +604,7 @@ class ZombieEnv(gym.Env):
                 truncated = True
                 break
 
-        reward -= 0.01
+        reward -= 0.02   # v2.0.19 时间惩罚加倍：消极避战扣分更快，逼AI进攻
         return self._get_obs(), float(reward), terminated, truncated, {}
 
     def render(self):

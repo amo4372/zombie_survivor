@@ -464,6 +464,23 @@ class PlayMixin:
             pygame.draw.circle(ring_surf, (240, 190, 255, alpha), (cc, cc), cr - 3, max(1, sr["width"] // 3))
             self.screen.blit(ring_surf, (cxp - cc, cyp - cc))
 
+        # v2.0.19 BOSS 锁定必中警告：蓄力期间红色锁定线 + 玩家头顶警告
+        try:
+            locks = getattr(self.game, "boss_lock_marks", None)
+            if locks:
+                _cam = camera
+                for _lm in locks:
+                    _e, _pl, _t = _lm
+                    _ex = (_e.x - _cam.x) * self.game.scale + self.game.scaled_width / 2
+                    _ey = (_e.y - _cam.y) * self.game.scale + self.game.scaled_height / 2
+                    _px = (_pl.x - _cam.x) * self.game.scale + self.game.scaled_width / 2
+                    _py = (_pl.y - _cam.y) * self.game.scale + self.game.scaled_height / 2
+                    _pul = 0.55 + 0.45 * abs(math.sin(pygame.time.get_ticks() / 90))
+                    pygame.draw.line(self.screen, (255, int(40 * _pul), int(40 * _pul)), (_ex, _ey), (_px, _py), 3)
+                    pygame.draw.circle(self.screen, (255, 60, 60), (int(_px), int(_py)), int(16 * _pul) + 8, 2)
+        except Exception:
+            pass
+
         # 绘制创伤效果（屏幕边缘血溅）
         self._draw_trauma_effect()
 
@@ -1127,8 +1144,9 @@ class PlayMixin:
             ba -= 12 * dt
             if ba <= 0 or new_y > sh + br:
                 continue
-            # 使用缓存的血渍模板
-            template_key = (br, int(ba))
+            # 使用缓存的血渍模板（alpha 按 16 分桶量化：alpha 每帧衰减但缓存可命中，
+            # 大伤害大量血渍时不再每帧重建 Surface —— 修复受伤卡顿）
+            template_key = (br, int(ba // 16) * 16)
             if template_key not in self._blood_template_cache:
                 # 限制缓存大小
                 if len(self._blood_template_cache) > 200:
@@ -1141,7 +1159,7 @@ class PlayMixin:
             if drip_enabled and boff > 5:
                 drip_h = int(min(boff * 0.6, 60 * scale))
                 drip_w = max(2, int(br * 0.25))
-                drip_key = (drip_w, drip_h, int(ba))
+                drip_key = (drip_w, int(drip_h // 4) * 4, int(ba // 16) * 16)
                 if drip_key not in self._blood_template_cache:
                     if len(self._blood_template_cache) > 200:
                         self._blood_template_cache.clear()
@@ -1170,12 +1188,15 @@ class PlayMixin:
                 if heartbeat > 0.7:
                     self.game.camera.shake_intensity = max(self.game.camera.shake_intensity, 2)
 
-        # === 4. 屏幕暗角 ===
+        # === 4. 屏幕暗角（预渲染缓存：按 trauma 10 级分桶，不每帧新建全屏 Surface）===
         if effective_trauma > 0.5:
-            vignette = pygame.Surface((sw, sh), pygame.SRCALPHA)
+            vig_key = (int(effective_trauma * 10), sw, sh)
+            if not hasattr(self, '_vig_cache') or self._vig_cache[0] != vig_key:
+                vignette = pygame.Surface((sw, sh), pygame.SRCALPHA)
             for r in range(int(min(sw, sh) // 2), int(min(sw, sh) // 2 * 0.3), -10):
                 a = int((effective_trauma - 0.5) * 2 * 30 * (1 - r / (min(sw, sh) // 2)))
                 pygame.draw.rect(vignette, (0, 0, 0, a), (0, 0, sw, sh), border_radius=r)
+            self._vig_cache = (vig_key, vignette)
             self.game.screen.blit(vignette, (0, 0))
 
     def _draw_lifesteal_effect(self):

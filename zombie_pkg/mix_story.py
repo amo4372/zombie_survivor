@@ -468,20 +468,86 @@ class StoryMixin:
         self.state = GameState.DIALOGUE
 
     def _boss_dialogue(self, boss_type):
-        if boss_type == EnemyType.BOSS_LONG:
-            dialogues = [
-                {"speaker": "龙某", "text": "吼...吼..."},
-                {"speaker": "你", "text": "龙某？是你吗？"},
-                {"speaker": "龙某", "text": "杀...杀了我...不...快逃..."},
-                {"speaker": "你", "text": "不，我会找到办法救你的！"},
-            ]
-        else:
-            dialogues = [
-                {"speaker": "向某", "text": "呃啊啊啊！"},
-                {"speaker": "你", "text": "向某！坚持住！"},
-                {"speaker": "向某", "text": "朋友...快走...我控制不住了..."},
-                {"speaker": "你", "text": "我不会放弃你的！"},
-            ]
+        # v2.0.19 六位 BOSS 专属台词（含交互式选项问答）
+        _d = {
+            EnemyType.BOSS_LONG: [
+                {"speaker": "龙某", "text": "吼...吼...是你吗...朋友..."},
+                {"speaker": "你", "text": "龙某！你还认得我？"},
+                {"speaker": "龙某", "text": "脑子里...全是血腥的命令...我快压不住了..."},
+                {"speaker": "你", "text": "撑住！我会想办法的！"},
+                {"speaker": "龙某", "text": "来不及了...趁我还清醒...你选吧...",
+                 "choices": [
+                     {"text": "我会救你", "effect": None},
+                     {"text": "对不起，只能送你走", "effect": None},
+                     {"text": "动手吧", "effect": None},
+                 ]},
+                {"speaker": "龙某", "text": "好...无论哪条路...你都是我最好的兄弟..."},
+            ],
+            EnemyType.BOSS_XIANG: [
+                {"speaker": "向某", "text": "呃啊啊啊！别过来！"},
+                {"speaker": "你", "text": "向某！是我！快醒醒！"},
+                {"speaker": "向某", "text": "我...我咬伤了好多人...我罪该万死..."},
+                {"speaker": "你", "text": "那不是你，是病毒！"},
+                {"speaker": "向某", "text": "答应我...如果救不了我...就亲手结束这一切...",
+                 "choices": [
+                     {"text": "我发誓一定会救你", "effect": None},
+                     {"text": "我会亲手送你安息", "effect": None},
+                 ]},
+                {"speaker": "向某", "text": "谢谢你...能遇见你，是我这辈子最幸运的事..."},
+            ],
+            EnemyType.BOSS_MUTANT: [
+                {"speaker": "突变体", "text": "呲——！实验体X-27，识别到入侵者！"},
+                {"speaker": "你", "text": "核电站的实验室造物……你还有人性吗？"},
+                {"speaker": "突变体", "text": "人性？我的记忆里只剩冰冷的培养槽和电击..."},
+                {"speaker": "你", "text": "我会结束你的痛苦。"},
+                {"speaker": "突变体", "text": "终于...有人愿意给我一个结局了...",
+                 "choices": [
+                     {"text": "我会让你解脱", "effect": None},
+                     {"text": "告诉我实验室的秘密", "effect": None},
+                 ]},
+                {"speaker": "突变体", "text": "秘密...都在地下三层...代号「原点」...快逃吧..."},
+            ],
+            EnemyType.BOSS_QUEEN: [
+                {"speaker": "尸后", "text": "臣民们…这就是闯入我领地的人类？"},
+                {"speaker": "你", "text": "你就是尸群的源头？"},
+                {"speaker": "尸后", "text": "我是新世界的母亲，而你，是旧世界的残渣。"},
+                {"speaker": "你", "text": "我的朋友们也在你的尸群里！"},
+                {"speaker": "尸后", "text": "他们现在是完美的子民。你也想加入吗？",
+                 "choices": [
+                     {"text": "我宁愿战死", "effect": None},
+                     {"text": "让我带走我的朋友", "effect": None},
+                 ]},
+                {"speaker": "尸后", "text": "那就用你的血，为我的王冠献祭吧。"},
+            ],
+            EnemyType.BOSS_TITAN: [
+                {"speaker": "泰坦", "text": "轰——！蝼蚁，为何挡我之路？"},
+                {"speaker": "你", "text": "你要去哪？城市已经被你毁了一半！"},
+                {"speaker": "泰坦", "text": "大地在颤抖……只有力量，才是唯一的真理。"},
+                {"speaker": "你", "text": "力量不该用来践踏生命！"},
+                {"speaker": "泰坦", "text": "那就用你的命，证明你的道理！",
+                 "choices": [
+                     {"text": "来吧，我不怕你", "effect": None},
+                     {"text": "我会召集所有人对抗你", "effect": None},
+                 ]},
+                {"speaker": "泰坦", "text": "呵呵……你的勇气，值得我认真碾碎。"},
+            ],
+            EnemyType.BOSS_WANG: [
+                {"speaker": "王某", "text": "呵…幸存者？还是来送死的？"},
+                {"speaker": "你", "text": "你手里的……是死神镰刀？"},
+                {"speaker": "王某", "text": "识货。可惜它只收割灵魂，从不讲价。"},
+                {"speaker": "你", "text": "你到底是谁？为什么有这种东西？"},
+                {"speaker": "王某", "text": "一个厌倦了当人类的前研究员。你——",
+                 "choices": [
+                     {"text": "我会夺走你的镰刀", "effect": None},
+                     {"text": "为什么背叛人类？", "effect": None},
+                 ]},
+                {"speaker": "王某", "text": "背叛？我只是看见了世界的终局。来，让你亲眼见证吧。"},
+            ],
+        }
+        dialogues = _d.get(boss_type, [
+            {"speaker": "？？？", "text": "呃啊啊啊！"},
+            {"speaker": "你", "text": "坚持住！我会找到办法的！"},
+        ])
         def on_complete():
             self.state = GameState.PLAYING
         self.dialogue.start_dialogue(dialogues, on_complete)

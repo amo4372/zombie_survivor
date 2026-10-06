@@ -62,6 +62,10 @@ class Enemy:
         # =========【新增Boss技能计时器】=========
         self.boss_dash_cd = 0.0
         self.boss_aoe_cd = 0.0
+        self.boss_lock_cd = 0.0          # v2.0.19 锁定必中
+        self.boss_debuff_cd = 0.0        # v2.0.19 恶心人(减速/缴械/诅咒)
+        self.boss_elite_cd = 0.0         # v2.0.19 特种召唤(精英怪)
+        self.boss_heal_cd = 0.0          # v2.0.19 回血
         self.boss_shoot_cd = 0.0
         self.boss_shield_cd = 0.0
         self.is_dashing = False
@@ -493,6 +497,26 @@ class Enemy:
                 if self.enemy_type == EnemyType.BOSS_WANG:
                     return "wang_scythe_sweep"
                 return "boss_aoe"
+            # ===== v2.0.19 新增 4 类技能（高伤害必中 / 恶心控制 / 特种召唤 / 回血）=====
+            if skill == 6 and self.boss_lock_cd <= 0:
+                # 锁定必中：标记蓄力，0.9s 后对目标玩家必中高伤（不可闪避）
+                self.boss_lock_cd = 9.0
+                self.skill_windup = 0.6
+                return "boss_lockon"
+            if skill == 7 and self.boss_debuff_cd <= 0:
+                # 恶心人：玩家减速+虚弱+诅咒
+                self.boss_debuff_cd = 7.0
+                self.skill_windup = 0.4
+                return "boss_debuff"
+            if skill == 8 and self.boss_elite_cd <= 0:
+                # 特种召唤：召唤 1~2 只精英怪（brute/assassin/sorcerer/guardian）
+                self.boss_elite_cd = 14.0
+                self.skill_windup = 0.6
+                return "boss_elite_summon"
+            if skill == 9 and self.boss_heal_cd <= 0:
+                # 回血：恢复 25% 最大生命
+                self.boss_heal_cd = 12.0
+                return "boss_heal"
         except Exception:
             pass
         return None
@@ -602,6 +626,14 @@ class Enemy:
             self.boss_dash_cd -= dt
         if self.boss_aoe_cd > 0:
             self.boss_aoe_cd -= dt
+        if self.boss_lock_cd > 0:
+            self.boss_lock_cd -= dt
+        if self.boss_debuff_cd > 0:
+            self.boss_debuff_cd -= dt
+        if self.boss_elite_cd > 0:
+            self.boss_elite_cd -= dt
+        if self.boss_heal_cd > 0:
+            self.boss_heal_cd -= dt
         if self.boss_shoot_cd > 0:
             self.boss_shoot_cd -= dt
         if self.boss_shield_cd > 0:

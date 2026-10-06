@@ -297,6 +297,28 @@ class PlayingMixin:
                     camera.shake(6, 0.4)
 
     def _update_playing(self, dt):
+        # v2.0.19 BOSS 锁定必中标记推进（蓄力结束 → 必中伤害）
+        locks = getattr(self, "boss_lock_marks", [])
+        if locks:
+            alive = []
+            for lm in locks:
+                _e, _pl, _t = lm
+                _t -= dt
+                if _t <= 0:
+                    try:
+                        _dmg = int(getattr(_e, "damage", 20) * 4.0)  # 必中高伤（4倍普攻）
+                        _dodge = getattr(_pl, "dodge_chance", 0.0)
+                        _pl.dodge_chance = 0.0   # 锁定必中：不可闪避
+                        _pl.take_damage(_dmg, "magic")
+                        _pl.dodge_chance = _dodge
+                        self.floating_texts.append(FloatingText(_pl.x, _pl.y - 40, "被锁定重创!", color=(255, 60, 60), lifetime=1.2))
+                        if hasattr(self, "camera") and self.camera is not None:
+                            self.camera.shake(8, 0.5)
+                    except Exception:
+                        pass
+                    continue
+                alive.append([_e, _pl, _t])
+            self.boss_lock_marks = alive
         # 衰减吸血屏幕效果
         # Mod 每帧钩子
         try:
@@ -1024,6 +1046,58 @@ class PlayingMixin:
                 # 龙某护盾再生/回血
                 self.particles.spawn_heal_particles(enemy.x, enemy.y, 15)
                 self.floating_texts.append(FloatingText(enemy.x, enemy.y - 30, "护盾再生!", color=GREEN, lifetime=1.5))
+
+            elif result == "boss_lockon":
+                # v2.0.19 锁定必中：标记目标玩家，蓄力 0.9s 后必中高伤（不可闪避）
+                if not hasattr(self, "boss_lock_marks"):
+                    self.boss_lock_marks = []
+                _tgt = None
+                for _pl in self._alive_players():
+                    if math.hypot(enemy.x - _pl.x, enemy.y - _pl.y) < 520:
+                        _tgt = _pl
+                        break
+                if _tgt is not None:
+                    self.boss_lock_marks.append([enemy, _tgt, 0.9])
+                    self.floating_texts.append(FloatingText(_tgt.x, _tgt.y - 50, "⚠ 已被锁定!", color=(255, 50, 50), lifetime=0.9))
+                    if hasattr(self, "assets"):
+                        self.assets.play_sound("curse_cast")
+
+            elif result == "boss_debuff":
+                # v2.0.19 恶心人：减速+虚弱+诅咒（缴械等效=虚弱降伤害）
+                for _pl in self._alive_players():
+                    if math.hypot(enemy.x - _pl.x, enemy.y - _pl.y) < 380:
+                        _pl.buff_manager.add_buff(BuffType.SLOW, duration=4.0)
+                        _pl.buff_manager.add_buff(BuffType.WEAKEN, duration=4.0)
+                        _pl.buff_manager.add_buff(BuffType.CURSE, duration=4.0)
+                        self.floating_texts.append(FloatingText(_pl.x, _pl.y - 40, "被诅咒! 减速+虚弱", color=(160, 60, 220), lifetime=1.4))
+                self.particles.spawn_explosion(enemy.x, enemy.y, PURPLE, 30)
+                if hasattr(self, "assets"):
+                    self.assets.play_sound("curse_cast")
+
+            elif result == "boss_elite_summon":
+                # v2.0.19 特种召唤：1~2 只精英怪（brute/assassin/sorcerer/guardian 随机）
+                _elites = [EnemyType.ELITE_BRUTE, EnemyType.ELITE_ASSASSIN,
+                           EnemyType.ELITE_SORCERER, EnemyType.ELITE_GUARDIAN]
+                _n = random.choice([1, 2])
+                for _ in range(_n):
+                    angle = random.uniform(0, math.pi * 2)
+                    sx = enemy.x + math.cos(angle) * 90
+                    sy = enemy.y + math.sin(angle) * 90
+                    _e = Enemy(sx, sy, random.choice(_elites), 1, self.config.difficulty)
+                    if getattr(self, "rl_ai", None) is not None:
+                        _e.ai_rl = self.rl_ai
+                    self.enemies.append(_e)
+                self.particles.spawn_explosion(enemy.x, enemy.y, DARK_GREEN, 34)
+                self.floating_texts.append(FloatingText(enemy.x, enemy.y - 40, "召唤精英护卫!", color=(120, 255, 120), lifetime=1.5))
+                if hasattr(self, "assets"):
+                    self.assets.play_sound("boss_queen_summon")
+
+            elif result == "boss_heal":
+                # v2.0.19 回血：恢复 25% 最大生命
+                _heal = int(enemy.max_hp * 0.25)
+                enemy.hp = min(enemy.max_hp, enemy.hp + _heal)
+                self.particles.spawn_heal_particles(enemy.x, enemy.y, 20)
+                self.floating_texts.append(FloatingText(enemy.x, enemy.y - 30, f"+{_heal} 回血!", color=GREEN, lifetime=1.5))
 
             elif result == "boss_barrage":
                 # 向某弹幕扫射：环形16发子弹
