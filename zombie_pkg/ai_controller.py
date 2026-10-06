@@ -32,6 +32,7 @@ class RLEnemyAI:
                       "total_ms": 0.0, "last_obs": None, "last_act": None,
                       "model_status": "disabled", "load_error": ""}
         self._npz = None          # 纯 numpy 推理权重（onnxruntime 不可用时的回退）
+        self._ppos = {}           # 玩家位置缓存（感知增强：速度差分）
         self._np_mod = None
         if enable and model_path and os.path.exists(model_path):
             try:
@@ -123,6 +124,27 @@ class RLEnemyAI:
                 pass
         if self.obs_dim >= 26:
             obs += [bs, bc, bd, bt]
+        # 玩家感知 5 维（精英/BOSS 专用新模型 31 维）：速度差分 + 朝向 + 射击冷却
+        if self.obs_dim >= 31 and player is not None:
+            try:
+                pfx = math.sin(math.radians(getattr(player, "facing_angle", 0.0)))
+                pfy = math.cos(math.radians(getattr(player, "facing_angle", 0.0)))
+                _k = id(player)
+                _pp = self._ppos.get(_k)
+                if _pp is not None:
+                    pvx = float(np.clip((player.x - _pp[0]) / 8.0, -1, 1))
+                    pvy = float(np.clip((player.y - _pp[1]) / 8.0, -1, 1))
+                else:
+                    pvx = pvy = 0.0
+                self._ppos[_k] = (player.x, player.y)
+                _w = getattr(player, "current_weapon", None) or getattr(player, "weapon", None)
+                _ft = getattr(_w, "cooldown", 0) if _w is not None else 0
+                if not _ft:
+                    _ft = getattr(_w, "fire_timer", 0) if _w is not None else 0
+                pfire = float(np.clip(_ft / 3.0, 0, 1))
+                obs += [pvx, pvy, pfx, pfy, pfire]
+            except Exception:
+                obs += [0.0, 0.0, 0.0, 0.0, 0.0]
         return np.array(obs, dtype=np.float32)
 
     def _ray_dist(self, enemy, world, ang, max_dist=400.0):
@@ -146,7 +168,7 @@ class RLEnemyAI:
         """返回 (vx, vy, attack)；缓存命中直接返回；过期则标记待批处理并返回上次动作。
         真正的推理由主循环每帧 flush_batch() 批量执行（一帧一次矩阵前向，argmax 确定性）。
         不可用/首帧无缓存 → (None, None, False) 回退原 AI。"""
-        if not self.ready:
+        if not self.ready or not getattr(enemy, "rl_eligible", True):
             return None, None, False
         now = _now()
         key = id(enemy)
@@ -166,7 +188,8 @@ class RLEnemyAI:
             return
         now = _now()
         ps = list(players or [])
-        ents = [e for e in (enemies or []) if id(e) in self._dirty and getattr(e, "alive", True)]
+        ents = [e for e in (enemies or []) if id(e) in self._dirty and getattr(e, "alive", True)
+                and getattr(e, "rl_eligible", True)]
         if not ents:
             self._dirty.clear()
             return

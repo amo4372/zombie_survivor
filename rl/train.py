@@ -48,7 +48,21 @@ def pick_device(device):
 
 def train(steps=200_000, checkpoint=None, n_envs=4, tensorboard=True, device="auto"):
     from stable_baselines3 import PPO
-    from stable_baselines3.common.callbacks import CheckpointCallback, EvalCallback
+    from stable_baselines3.common.callbacks import BaseCallback, EvalCallback
+
+    class StepCheckpoint(BaseCallback):
+        """按真实 timesteps 落盘（SB3 CheckpointCallback 的 save_freq 单位是 on_step 次数，
+        对 n_envs=4 会放大 4×n_steps 倍，导致长时间不触发——必须按 num_timesteps 保存）"""
+        def __init__(self, save_path, every, name_prefix="ppo_zombie_v2"):
+            super().__init__()
+            self.save_path, self.every, self.prefix = save_path, every, name_prefix
+        def _on_step(self):
+            ts = int(self.num_timesteps)
+            if ts > 0 and ts % self.every == 0:
+                path = f"{self.save_path}/{self.prefix}_{ts}_steps.zip"
+                self.model.save(path)
+                print(f"[RL] 断点已保存: {path}")
+            return True
 
     env = build_envs(n_envs)
     dev = pick_device(device)
@@ -68,8 +82,8 @@ def train(steps=200_000, checkpoint=None, n_envs=4, tensorboard=True, device="au
         )
     os.makedirs("rl/models", exist_ok=True)
     os.makedirs("rl/eval_envs", exist_ok=True)
-    ckpt = CheckpointCallback(save_freq=args.save_every, save_path="rl/models",
-                              name_prefix="ppo_zombie_v2")
+    ckpt = StepCheckpoint(save_path="rl/models", every=args.save_every,
+                          name_prefix="ppo_zombie_v2")
     # eval_freq 按 update 次数计：每约 25 万 timesteps 评估一次（曲线多点，避免两点直线）
     eval_freq = max(steps // n_envs // 20, 100)
     eval_env = ZombieEnv(player_mode="kite", zombie_type="normal",
@@ -81,8 +95,8 @@ def train(steps=200_000, checkpoint=None, n_envs=4, tensorboard=True, device="au
     t0 = time.time()
     model.learn(total_timesteps=steps, callback=[ckpt, eval_cb], progress_bar=False)
     cost = time.time() - t0
-    # 保存到断点路径（续训闭环：wrapper 每次以 checkpoint 路径续跑，被杀后自动接力）
-    path = checkpoint if (checkpoint and os.path.exists(os.path.dirname(checkpoint))) else "rl/models/ppo_zombie_v2.zip"
+    # 段末统一保存到 latest.zip（唯一权威最新档；wrapper 优先取它续训）
+    path = "rl/models/latest.zip"
     model.save(path)
     print(f"[RL] 训练完成: {steps} 步, 耗时 {cost/60:.1f} 分钟 → {path}")
     env.close()

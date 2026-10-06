@@ -79,7 +79,7 @@ class ZombieEnv(gym.Env):
         self._add_random_obstacles(abs(hash((zombie_type, seed or 0))) % 100000)
         # v2.0.14.1：动作14=投掷投掷物（对齐游戏端 try_throw：rock/acid/fire）
         self.action_space = spaces.Discrete(14)
-        self.observation_space = spaces.Box(low=-1.0, high=1.0, shape=(26,), dtype=np.float32)   # 22基础+4子弹感知
+        self.observation_space = spaces.Box(low=-1.0, high=1.0, shape=(31,), dtype=np.float32)   # 22基础+4子弹感知+5玩家感知
         self.rz = np.random.default_rng(seed)
         self._reset_state()
 
@@ -165,6 +165,8 @@ class ZombieEnv(gym.Env):
         self.ep_hazard_hits = 0     # 踩水坑/尖刺次数
         self.ep_skill_use = {"spit": 0, "dash": 0, "summon": 0, "aoe": 0, "throw": 0}  # 技能成功使用次数
         self._prev_dist = self._dist()
+        self._prev_px = self.px
+        self._prev_py = self.py
         self._flank_accum = 0.0
         # 群体队友（真实位置，多方向包抄）：分布在玩家另一侧/侧翼
         self.pack = []
@@ -236,6 +238,11 @@ class ZombieEnv(gym.Env):
             threat = math.cos(math.atan2(_best[3], _best[2]) - math.atan2(self.zy - _best[1], self.zx - _best[0]))
             bs, bc, bd, bt = math.sin(b_ang), math.cos(b_ang), float(np.clip(_bd / 600.0, 0, 1)), float(np.clip(threat, -1, 1))
         obs += [bs, bc, bd, bt]
+        # 玩家感知 5 维（精英/BOSS 专用 31 维）：速度差分 + 玩家朝向 + 射击冷却
+        pvx = float(np.clip((self.px - self._prev_px) / (PLAYER_SPEED * DT * SUBSTEPS), -1, 1))
+        pvy = float(np.clip((self.py - self._prev_py) / (PLAYER_SPEED * DT * SUBSTEPS), -1, 1))
+        obs += [pvx, pvy, math.sin(self.pfacing), math.cos(self.pfacing),
+                float(1.0 if self.fire_timer > 0 else 0.0)]
         return np.array(obs, dtype=np.float32)
 
     # ---------- 玩家脚本（行为多样化：kite风筝 / stand站桩 / strafe横向走位 / melee近战冲脸）----------
@@ -517,6 +524,8 @@ class ZombieEnv(gym.Env):
                 reward += 0.15 * team_side * prox * DT * 30 * 0.02
 
             self._prev_dist = d_now
+            self._prev_px = self.px
+            self._prev_py = self.py
 
             if self.php <= 0:
                 reward += 50.0

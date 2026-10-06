@@ -16,6 +16,16 @@ class Enemy:
         self.x = x
         self.y = y
         self.enemy_type = enemy_type
+        # v2.0.18 分层 AI：仅精英怪与 BOSS 走 RL（感知强、数量少、推理开销可控）；
+        # 普通僵尸（占尸潮 90%+）走原规则 AI——避免成百上千只僵尸 RL 推理拖垮性能
+        try:
+            from config import EnemyType as _ET
+            _RL_TYPES = {_ET.BOSS_LONG, _ET.BOSS_XIANG, _ET.BOSS_MUTANT, _ET.BOSS_QUEEN,
+                         _ET.BOSS_TITAN, _ET.BOSS_WANG, _ET.ELITE_BRUTE, _ET.ELITE_ASSASSIN,
+                         _ET.ELITE_SORCERER, _ET.ELITE_GUARDIAN, _ET.ZOMBIE_TANK}
+            self.rl_eligible = enemy_type in _RL_TYPES
+        except Exception:
+            self.rl_eligible = False
         self.wave = wave
         self.difficulty = difficulty
         self.alive = True
@@ -335,7 +345,8 @@ class Enemy:
         # ========== Boss智能AI增强（RL 模式下由 RL 接管，跳过原状态机） ==========
         _rl_act = (getattr(self, "ai_rl", None) is not None
                    and getattr(self.ai_rl, "ready", False)
-                   and not getattr(self, "rl_skip", False))
+                   and not getattr(self, "rl_skip", False)
+                   and getattr(self, "rl_eligible", True))
         if getattr(self, "is_boss", False) and self.alive and not _rl_act:
             self._update_boss_ai(dt, player_x, player_y, player)
 

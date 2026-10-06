@@ -1,0 +1,91 @@
+<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8">
+<title>僵尸AI 训练测评报告</title>
+<style>
+body{background:#0e1116;color:#ddd;font-family:"Microsoft YaHei",sans-serif;margin:0;padding:24px}
+h1{color:#fff;font-size:22px} h2{color:#4fc3f7;font-size:17px;margin-top:28px}
+.card{background:#1a1f27;border:1px solid #2a3140;border-radius:12px;padding:16px;margin-top:12px}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th,td{border:1px solid #2a3140;padding:8px 10px;text-align:center}
+th{background:#20272f;color:#8fd0ff} .tag{color:#ffb74d;font-size:12px}
+.verdict{color:#81c784;font-weight:bold}
+</style></head><body>
+<h1>🧟 僵尸AI 训练测评报告</h1>
+<div class="tag">模型: rl/models/latest.zip · 设备: cpu ·
+训练步数: 600,000 · 耗时: 6.6 分钟</div>
+<h2>训练过程</h2><div class="card"><svg viewBox="0 0 720 260" width="100%" style="background:#14171c;border-radius:10px">
+  <polygon points="24.0,236.0 24.0,63.8 59.4,61.9 94.7,111.6 130.1,192.6 165.5,24.1 200.8,27.9 236.2,93.6 271.6,95.7 306.9,236.0 342.3,109.8 377.7,50.2 413.1,142.5 448.4,81.9 483.8,24.0 519.2,189.2 554.5,165.7 589.9,135.0 625.3,111.0 660.6,93.3 696.0,102.5 696.0,236.0" fill="#4fc3f7" opacity="0.12"/>
+  <polyline points="24.0,63.8 59.4,61.9 94.7,111.6 130.1,192.6 165.5,24.1 200.8,27.9 236.2,93.6 271.6,95.7 306.9,236.0 342.3,109.8 377.7,50.2 413.1,142.5 448.4,81.9 483.8,24.0 519.2,189.2 554.5,165.7 589.9,135.0 625.3,111.0 660.6,93.3 696.0,102.5" fill="none" stroke="#4fc3f7" stroke-width="2.2"/>
+  <text x="18" y="240.0" font-size="11" fill="#999" text-anchor="end">-43</text><text x="18" y="133.99999999999997" font-size="11" fill="#999" text-anchor="end">37</text><text x="18" y="28.0" font-size="11" fill="#999" text-anchor="end">117</text><text x="24.0" y="252" font-size="11" fill="#999" text-anchor="middle">30000</text><text x="192.0" y="252" font-size="11" fill="#999" text-anchor="middle">172500</text><text x="360.0" y="252" font-size="11" fill="#999" text-anchor="middle">315000</text><text x="528.0" y="252" font-size="11" fill="#999" text-anchor="middle">457500</text><text x="696.0" y="252" font-size="11" fill="#999" text-anchor="middle">600000</text>
+  <text x="24" y="14" font-size="12" fill="#aaa">训练过程 平均奖励 (mean reward)</text>
+</svg></div>
+<h2>各僵尸类型平均奖励</h2><div class="card"><svg viewBox="0 0 720 260" width="100%" style="background:#14171c;border-radius:10px"><text x="82" y="42.33333333333333" font-size="12" fill="#ccc" text-anchor="end">normal</text>
+<rect x="90" y="24.0" width="4262.0" height="26.666666666666664" rx="4" fill="#ffb74d" opacity="0.85"/>
+<text x="4358.0" y="42.33333333333333" font-size="11" fill="#eee">-90.28851063298727</text><text x="82" y="79.0" font-size="12" fill="#ccc" text-anchor="end">fast</text>
+<rect x="90" y="60.666666666666664" width="3358.3" height="26.666666666666664" rx="4" fill="#ffb74d" opacity="0.85"/>
+<text x="3454.3" y="79.0" font-size="11" fill="#eee">-71.14369750949038</text><text x="82" y="115.66666666666666" font-size="12" fill="#ccc" text-anchor="end">tank</text>
+<rect x="90" y="97.33333333333333" width="570.0" height="26.666666666666664" rx="4" fill="#ffb74d" opacity="0.85"/>
+<text x="666.0" y="115.66666666666666" font-size="11" fill="#eee">-12.075114480612003</text><text x="82" y="152.33333333333334" font-size="12" fill="#ccc" text-anchor="end">spitter</text>
+<rect x="90" y="134.0" width="2181.6" height="26.666666666666664" rx="4" fill="#ffb74d" opacity="0.85"/>
+<text x="2277.6" y="152.33333333333334" font-size="11" fill="#eee">-46.21507735893038</text><text x="82" y="189.0" font-size="12" fill="#ccc" text-anchor="end">ranged</text>
+<rect x="90" y="170.66666666666666" width="3601.8" height="26.666666666666664" rx="4" fill="#ffb74d" opacity="0.85"/>
+<text x="3697.8" y="189.0" font-size="11" fill="#eee">-76.30261959222572</text><text x="82" y="225.66666666666666" font-size="12" fill="#ccc" text-anchor="end">boss</text>
+<rect x="90" y="207.33333333333331" width="4855.2" height="26.666666666666664" rx="4" fill="#ffb74d" opacity="0.85"/>
+<text x="4951.2" y="225.66666666666666" font-size="11" fill="#eee">-102.8553184238921</text></svg></div>
+<h2>各僵尸类型玩家击杀率 (%)</h2><div class="card"><svg viewBox="0 0 720 260" width="100%" style="background:#14171c;border-radius:10px"><text x="82" y="42.33333333333333" font-size="12" fill="#ccc" text-anchor="end">normal</text>
+<rect x="90" y="24.0" width="6.0" height="26.666666666666664" rx="4" fill="#81c784" opacity="0.85"/>
+<text x="102.0" y="42.33333333333333" font-size="11" fill="#eee">0.0</text><text x="82" y="79.0" font-size="12" fill="#ccc" text-anchor="end">fast</text>
+<rect x="90" y="60.666666666666664" width="6.0" height="26.666666666666664" rx="4" fill="#81c784" opacity="0.85"/>
+<text x="102.0" y="79.0" font-size="11" fill="#eee">0.0</text><text x="82" y="115.66666666666666" font-size="12" fill="#ccc" text-anchor="end">tank</text>
+<rect x="90" y="97.33333333333333" width="570.0" height="26.666666666666664" rx="4" fill="#81c784" opacity="0.85"/>
+<text x="666.0" y="115.66666666666666" font-size="11" fill="#eee">37.5</text><text x="82" y="152.33333333333334" font-size="12" fill="#ccc" text-anchor="end">spitter</text>
+<rect x="90" y="134.0" width="6.0" height="26.666666666666664" rx="4" fill="#81c784" opacity="0.85"/>
+<text x="102.0" y="152.33333333333334" font-size="11" fill="#eee">0.0</text><text x="82" y="189.0" font-size="12" fill="#ccc" text-anchor="end">ranged</text>
+<rect x="90" y="170.66666666666666" width="6.0" height="26.666666666666664" rx="4" fill="#81c784" opacity="0.85"/>
+<text x="102.0" y="189.0" font-size="11" fill="#eee">0.0</text><text x="82" y="225.66666666666666" font-size="12" fill="#ccc" text-anchor="end">boss</text>
+<rect x="90" y="207.33333333333331" width="380.0" height="26.666666666666664" rx="4" fill="#81c784" opacity="0.85"/>
+<text x="476.0" y="225.66666666666666" font-size="11" fill="#eee">25.0</text></svg></div>
+<h2>每局伤害：输出 vs 承受</h2><div class="card"><svg xmlns="http://www.w3.org/2000/svg" width="720" height="260" viewBox="0 0 720 260"><text x="44" y="14" font-size="12" fill="#aaa">每局平均伤害：输出(蓝) vs 承受(橙)</text><line x1="44" y1="30" x2="44" y2="220" stroke="#2a3140"/><line x1="44" y1="220" x2="704" y2="220" stroke="#2a3140"/><rect x="53.0" y="216.1" width="44.0" height="3.9" fill="#4fc3f7"/><rect x="101.0" y="164.9" width="44.0" height="55.1" fill="#ffb74d"/><rect x="163.0" y="219.3" width="44.0" height="1.0" fill="#4fc3f7"/><rect x="211.0" y="193.9" width="44.0" height="26.1" fill="#ffb74d"/><rect x="273.0" y="183.7" width="44.0" height="36.3" fill="#4fc3f7"/><rect x="321.0" y="30.0" width="44.0" height="190.0" fill="#ffb74d"/><rect x="383.0" y="216.0" width="44.0" height="4.0" fill="#4fc3f7"/><rect x="431.0" y="173.6" width="44.0" height="46.4" fill="#ffb74d"/><rect x="493.0" y="216.4" width="44.0" height="3.6" fill="#4fc3f7"/><rect x="541.0" y="173.6" width="44.0" height="46.4" fill="#ffb74d"/><rect x="603.0" y="173.1" width="44.0" height="46.9" fill="#4fc3f7"/><rect x="651.0" y="114.1" width="44.0" height="105.9" fill="#ffb74d"/><text x="99.0" y="236" font-size="11" fill="#aaa" text-anchor="middle">normal</text><text x="209.0" y="236" font-size="11" fill="#aaa" text-anchor="middle">fast</text><text x="319.0" y="236" font-size="11" fill="#aaa" text-anchor="middle">tank</text><text x="429.0" y="236" font-size="11" fill="#aaa" text-anchor="middle">spitter</text><text x="539.0" y="236" font-size="11" fill="#aaa" text-anchor="middle">ranged</text><text x="649.0" y="236" font-size="11" fill="#aaa" text-anchor="middle">boss</text><rect x="550" y="30" width="10" height="10" fill="#4fc3f7"/><text x="566" y="40" font-size="11" fill="#ccc">输出</text><rect x="550" y="48" width="10" height="10" fill="#ffb74d"/><text x="566" y="58" font-size="11" fill="#ccc">承受</text></svg></div>
+<h2>技能使用分布（含投掷）</h2><div class="card"><svg xmlns="http://www.w3.org/2000/svg" width="720" height="260" viewBox="0 0 720 260"><text x="44" y="14" font-size="12" fill="#aaa">各僵尸类型技能使用次数/局（含投掷）</text><line x1="44" y1="30" x2="44" y2="220" stroke="#2a3140"/><line x1="44" y1="220" x2="704" y2="220" stroke="#2a3140"/><rect x="399.0" y="208.5" width="60.0" height="11.5" fill="#4fc3f7"/><rect x="619.0" y="202.7" width="60.0" height="17.3" fill="#ffb74d"/><rect x="619.0" y="139.4" width="60.0" height="63.3" fill="#81c784"/><rect x="619.0" y="30.0" width="60.0" height="109.4" fill="#f06292"/><text x="99.0" y="236" font-size="11" fill="#aaa" text-anchor="middle">normal</text><text x="209.0" y="236" font-size="11" fill="#aaa" text-anchor="middle">fast</text><text x="319.0" y="236" font-size="11" fill="#aaa" text-anchor="middle">tank</text><text x="429.0" y="236" font-size="11" fill="#aaa" text-anchor="middle">spitter</text><text x="539.0" y="236" font-size="11" fill="#aaa" text-anchor="middle">ranged</text><text x="649.0" y="236" font-size="11" fill="#aaa" text-anchor="middle">boss</text><rect x="540" y="30" width="10" height="10" fill="#4fc3f7"/><text x="556" y="40" font-size="11" fill="#ccc">吐酸</text><rect x="540" y="46" width="10" height="10" fill="#ffb74d"/><text x="556" y="56" font-size="11" fill="#ccc">冲刺</text><rect x="540" y="62" width="10" height="10" fill="#81c784"/><text x="556" y="72" font-size="11" fill="#ccc">召唤</text><rect x="540" y="78" width="10" height="10" fill="#f06292"/><text x="556" y="88" font-size="11" fill="#ccc">咆哮</text><rect x="540" y="94" width="10" height="10" fill="#ba68c8"/><text x="556" y="104" font-size="11" fill="#ccc">投掷</text></svg></div>
+<h2>详细数据</h2><div class="card"><table>
+<tr><th>类型</th><th>平均奖励</th><th>击杀玩家</th><th>击杀率</th><th>自身死亡</th><th>伤害输出</th><th>承受伤害</th><th>移动(k)</th><th>咬中</th><th>吐酸命中</th><th>投掷命中</th><th>地形惩罚</th><th>技能次数</th><th>存活步数</th></tr>
+<tr><td><b>normal</b></td>
+<td>-90.3</td><td style="color:#999">0/8</td>
+<td>0%</td><td>7/8</td>
+<td>4</td><td>57</td>
+<td>0.2k</td><td>0.5</td>
+<td>0.0</td><td>0.0</td>
+<td>0.0</td><td>0.0</td><td>370</td></tr><tr><td><b>fast</b></td>
+<td>-71.1</td><td style="color:#999">0/8</td>
+<td>0%</td><td>6/8</td>
+<td>1</td><td>27</td>
+<td>0.1k</td><td>0.1</td>
+<td>0.0</td><td>0.0</td>
+<td>0.0</td><td>0.0</td><td>438</td></tr><tr><td><b>tank</b></td>
+<td>-12.1</td><td style="color:#4caf50">3/8</td>
+<td>38%</td><td>2/8</td>
+<td>38</td><td>196</td>
+<td>0.2k</td><td>1.9</td>
+<td>0.0</td><td>0.0</td>
+<td>0.0</td><td>0.0</td><td>601</td></tr><tr><td><b>spitter</b></td>
+<td>-46.2</td><td style="color:#999">0/8</td>
+<td>0%</td><td>8/8</td>
+<td>4</td><td>48</td>
+<td>0.2k</td><td>0.1</td>
+<td>0.2</td><td>0.0</td>
+<td>0.0</td><td>0.2</td><td>210</td></tr><tr><td><b>ranged</b></td>
+<td>-76.3</td><td style="color:#999">0/8</td>
+<td>0%</td><td>8/8</td>
+<td>4</td><td>48</td>
+<td>0.1k</td><td>0.0</td>
+<td>0.0</td><td>0.0</td>
+<td>0.0</td><td>0.0</td><td>285</td></tr><tr><td><b>boss</b></td>
+<td>-102.9</td><td style="color:#4caf50">2/8</td>
+<td>25%</td><td>0/8</td>
+<td>48</td><td>110</td>
+<td>0.2k</td><td>1.2</td>
+<td>0.0</td><td>0.0</td>
+<td>0.0</td><td>4.1</td><td>733</td></tr></table>
+<div style="margin-top:12px" class="tag">结论：
+综合最强: <b>tank</b>（平均奖励 -12.1，击杀率 38%）<br>整体策略<span class='verdict'>已学会击杀玩家</span>
+</div></div>
+</body></html>
