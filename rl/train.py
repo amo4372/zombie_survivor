@@ -47,7 +47,8 @@ def pick_device(device):
     return device
 
 
-def train(steps=200_000, checkpoint=None, n_envs=4, tensorboard=True, device="auto", eval_type="boss"):
+def train(steps=200_000, checkpoint=None, n_envs=4, tensorboard=True, device="auto", eval_type="boss",
+          log_every_sec=5.0):
     from stable_baselines3 import PPO
     from stable_baselines3.common.callbacks import BaseCallback, EvalCallback
 
@@ -64,6 +65,47 @@ def train(steps=200_000, checkpoint=None, n_envs=4, tensorboard=True, device="au
                 self.model.save(path)
                 print(f"[RL] 断点已保存: {path}")
             return True
+
+    class ProgressBar(BaseCallback):
+        """实时进度输出（进度/速度/ETA/奖励/状态），按时间触发，不拖慢训练。
+        TTY 下单行刷新；后台/nohup 自动转行日志。"""
+        def __init__(self, segment_steps, start_ts, interval=5.0):
+            super().__init__()
+            self.segment = max(segment_steps, 1)
+            self.start_ts = start_ts
+            self.interval = interval
+            self.tty = sys.stdout.isatty()
+            self._last = 0.0
+            self._last_line = ""
+            self._t0 = time.time()
+        def _on_step(self):
+            now = time.time()
+            if now - self._last < self.interval:
+                return True
+            self._last = now
+            ts = int(self.num_timesteps)
+            abs_ts = self.start_ts + ts
+            pct = min(100.0, ts / self.segment * 100)
+            el = now - self._t0
+            fps = ts / max(el, 1e-6)
+            eta = (self.segment - ts) / max(fps, 1e-6)
+            ep = self.model.ep_info_buffer
+            rew = float(np.mean([e.get("r", 0.0) for e in ep])) if ep else float("nan")
+            rew_s = f"{rew:+7.1f}" if not math.isnan(rew) else "     --"
+            text = (f"[进度] {pct:5.1f}% | 本段 {ts}/{self.segment} (绝对 {abs_ts}) | "
+                    f"{fps:,.0f}步/秒 | ETA {eta/60:.0f}分 | 最近奖励 {rew_s}")
+            if self.tty:
+                pad = max(0, len(self._last_line) - len(text))
+                sys.stdout.write("\r" + text + " " * pad)
+                sys.stdout.flush()
+                self._last_line = text
+            else:
+                print(f"{time.strftime('%H:%M:%S')} {text}", flush=True)
+            return True
+        def finish(self):
+            if self.tty and self._last_line:
+                sys.stdout.write("\r" + " " * len(self._last_line) + "\r")
+                sys.stdout.flush()
 
     env = build_envs(n_envs)
     dev = pick_device(device)
@@ -95,6 +137,8 @@ def train(steps=200_000, checkpoint=None, n_envs=4, tensorboard=True, device="au
     # 段起点绝对步数：SB3 learn() 会重置 num_timesteps 为相对值，
     # 曲线要跨段连续必须加回续训前的绝对步数（状态文件维护，被杀/续训不丢）
     start_ts = _load_abs()
+    progress_cb = ProgressBar(segment_steps=steps, start_ts=start_ts,
+                              interval=args.log_every_sec)
     # SB3 EvalCallback 的 eval_freq 按「每步 n_calls」计（每步 timesteps 前进 n_envs）：
     # 每 ~20 万 timesteps 一次评估 → 60 万步段内 ≥2 点、长训曲线密
     eval_freq = max(steps // n_envs // 20, 100)
@@ -163,12 +207,13 @@ def train(steps=200_000, checkpoint=None, n_envs=4, tensorboard=True, device="au
     t0 = time.time()
     stop_reason = None
     try:
-        model.learn(total_timesteps=steps, callback=[ckpt, eval_cb], progress_bar=False)
+        model.learn(total_timesteps=steps, callback=[ckpt, eval_cb, progress_cb], progress_bar=False)
     except _TargetMet as e:
         stop_reason = str(e)
     except KeyboardInterrupt:
         stop_reason = "用户主动停止(Ctrl+C)"
     cost = time.time() - t0
+    progress_cb.finish()  # 清掉进度行
     # 段末统一保存到 latest.zip（唯一权威最新档；wrapper 优先取它续训）
     path = "rl/models/latest.zip"
     model.save(path)
@@ -319,6 +364,8 @@ if __name__ == "__main__":
                     help="每次评估跑的局数（默认10，降低单点噪声，曲线更平滑可信）")
     ap.add_argument("--eval-type", default="boss",
                     help="训练期评估的僵尸类型（默认 boss：分层AI后的RL主体；可选 normal/tank/brute/assassin/sorcerer/guardian）")
+    ap.add_argument("--log-every-sec", type=float, default=5.0,
+                    help="实时进度刷新间隔（秒），默认 5 秒；后台/nohup 自动转行日志")
     args = ap.parse_args()
 
     os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -327,5 +374,5 @@ if __name__ == "__main__":
         sys.exit(0)
     path = train(args.steps, args.checkpoint, args.n_envs,
                  tensorboard=not args.no_tb, device=args.device,
-                 eval_type=args.eval_type)
+                 eval_type=args.eval_type, log_every_sec=args.log_every_sec)
     # 训练已完成（train 内部自动生成测评报告），无需重复评估

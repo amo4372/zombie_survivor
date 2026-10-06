@@ -274,6 +274,39 @@ def eval_policy(pol, episodes=EVAL_EPISODES):
     return out
 
 
+def _fmt_eta(sec):
+    sec = max(0, int(sec))
+    return f"{sec//3600}时{(sec%3600)//60:02d}分{sec%60:02d}秒" if sec >= 3600 else f"{sec//60}分{sec%60:02d}秒"
+
+
+class _Reporter:
+    """实时进度输出：TTY 下单行刷新（\r），非 TTY/后台 每行追加时间戳。
+    按时间触发（默认 2 秒），不按步数，慢速时更新及时、快速时不拖累训练。"""
+    def __init__(self, interval=2.0):
+        self.interval = interval
+        self.tty = sys.stdout.isatty()
+        self._last = 0.0
+        self._last_line = ""
+
+    def tick(self, text):
+        now = time.time()
+        if now - self._last < self.interval and not text.startswith("[save]"):
+            return
+        self._last = now
+        if self.tty:
+            pad = max(0, len(self._last_line) - len(text))
+            sys.stdout.write("\r" + text + " " * pad)
+            sys.stdout.flush()
+            self._last_line = text
+        else:
+            print(f"{time.strftime('%H:%M:%S')} {text}", flush=True)
+
+    def finish(self):
+        if self.tty and self._last_line:
+            sys.stdout.write("\r" + " " * len(self._last_line) + "\r")
+            sys.stdout.flush()
+
+
 def main():
     ap = argparse.ArgumentParser(description="Termux 兼容纯 NumPy PPO-lite 训练器")
     ap.add_argument("--steps", type=int, default=50000)
@@ -282,6 +315,8 @@ def main():
     ap.add_argument("--eval-episodes", type=int, default=EVAL_EPISODES)
     ap.add_argument("--n-envs", type=int, default=N_ENVS)
     ap.add_argument("--save-every", type=int, default=SAVE_EVERY)
+    ap.add_argument("--log-every-sec", type=float, default=2.0,
+                    help="实时进度刷新间隔（秒），默认 2 秒；后台/nohup 时自动转行日志")
     args = ap.parse_args()
 
     if args.eval_only:
@@ -313,7 +348,9 @@ def main():
     start = time.time()
     step_abs = abs0
     target = abs0 + args.steps
-    print(f"[训练] 目标 {args.steps} 步（绝对 {abs0} -> {target}）")
+    rep = _Reporter(args.log_every_sec)
+    best_rew = -1e9
+    print(f"[训练] 目标 {args.steps} 步（绝对 {abs0} -> {target}，每 {args.save_every} 步落盘）")
     while step_abs < target:
         progress = min(1.0, step_abs / TOTAL_TARGET)
         lr = max(LR0 * (1 - progress), LR_MIN)
@@ -323,20 +360,33 @@ def main():
         pl, vl, en = ppo_update(pol, obs, acts, old_logp, adv, ret, lr, ent)
         step_abs += roll
         mean_rew = total_rew / roll
+        best_rew = max(best_rew, mean_rew)
         with open(_hist_file(), "a") as f:
             f.write(json.dumps({"step": step_abs, "mean_reward": round(mean_rew, 2),
                                 "lr": round(lr, 6), "ent": round(ent, 5)}) + "\n")
+        el = time.time() - start
+        fps = step_abs / max(el, 1e-6)
+        pct = (step_abs - abs0) / max(args.steps, 1) * 100
+        eta = (target - step_abs) / max(fps, 1e-6)
+        rep.tick(
+            f"[训练] {pct:5.1f}% | {step_abs}/{target} | {fps:,.0f}步/秒 | "
+            f"ETA {_fmt_eta(eta)} | 奖励 {mean_rew:+7.1f} (最佳 {best_rew:+.1f}) | "
+            f"lr {lr:.1e} ent {ent:.4f}")
         if step_abs % args.save_every == 0 or step_abs >= target:
             os.makedirs(_MODEL_DIR, exist_ok=True)  # 保险：保存前确保目录存在
             p = os.path.join(_MODEL_DIR, f"termux_policy_{step_abs}_steps.npz")
             pol.save(p)
             pol.save(os.path.join(_MODEL_DIR, "latest_termux.npz"))
             write_abs(step_abs)
-            el = (time.time() - start) / 60.0
-            fps = step_abs / max(el * 60, 1e-6)
-            print(f"[{step_abs}] 平均奖励 {mean_rew:7.1f} | {el:.1f}min | {fps:.0f}步/秒 | "
-                  f"lr {lr:.1e} | ent {ent:.4f} | ploss {pl:.2f} | vloss {vl:.2f}")
+            rep.tick(f"[save] 断点已保存: {os.path.basename(p)}（绝对 {step_abs}）")
+            rep.tick(
+                f"[save] {pct:5.1f}% | {step_abs}/{target} | {fps:,.0f}步/秒 | 本段奖励 {mean_rew:+7.1f}")
+    rep.finish()
+    el = time.time() - start
+    fps = args.steps / max(el, 1e-6)
     print(f"===== 训练完成（{target} 绝对步数）=====")
+    print(f"===== 统计: {args.steps} 步 | 耗时 {el/60:.1f} 分钟 | 平均 {fps:,.0f}步/秒 | "
+          f"最佳奖励 {best_rew:+.1f} =====")
     pol.save(os.path.join(_MODEL_DIR, "latest_termux.npz"))
     write_abs(target)
 
