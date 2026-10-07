@@ -112,15 +112,20 @@ PY
       log "🚀 触发发布标记: $(cat "$FLAG_FILE")"
     fi
   else
-    FAIL=$(fail_count); FAIL=$((FAIL + 1)); echo "$FAIL" > "$FAIL_FILE"
-    log "退化标记 ${FAIL}/${FAIL_LIMIT}（当前 ${EVAL} ≤ 最佳 ${BEST} - 容忍）"
-    if [ "$FAIL" -ge "$FAIL_LIMIT" ]; then
-      log "连续 ${FAIL} 次退化 → 回退最优档并终止"
-      if [ -f "$MODEL_DIR/latest_pre_mixed.zip" ]; then
-        cp -f "$MODEL_DIR/latest_pre_mixed.zip" "$MODEL_DIR/latest.zip"
+    # 退化容忍：仅当明显差于最佳(>12)才计退化（评估波动正常，防止误杀）
+    if python3 -c "exit(0 if float('$EVAL') < float('$BEST') - 12.0 else 1)"; then
+      FAIL=$(fail_count); FAIL=$((FAIL + 1)); echo "$FAIL" > "$FAIL_FILE"
+      log "退化标记 ${FAIL}/${FAIL_LIMIT}（当前 ${EVAL} vs 最佳 ${BEST}）"
+      if [ "$FAIL" -ge "$FAIL_LIMIT" ]; then
+        log "连续 ${FAIL} 次退化 → 回退最优档并终止"
+        if [ -f "$MODEL_DIR/latest_pre_mixed.zip" ]; then
+          cp -f "$MODEL_DIR/latest_pre_mixed.zip" "$MODEL_DIR/latest.zip"
+        fi
+        echo "连续 ${FAIL} 次退化——回退最优档并终止" > "$LOG_DIR/train_mixed_fail_done.txt"
+        break
       fi
-      echo "连续 ${FAIL} 次退化——回退最优档并终止" > "$LOG_DIR/train_mixed_fail_done.txt"
-      break
+    else
+      log "评估 ${EVAL} 在容忍带内（最佳 ${BEST}）→ 不计退化"
     fi
   fi
 
