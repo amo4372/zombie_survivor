@@ -22,3 +22,7 @@ data/
 # v2.0.12 RL 研究原型（不发布）
 rl/models/
 rl/logs/
+# RL 训练产物不入库
+rl/reports/
+rl/logs/
+rl/models/
