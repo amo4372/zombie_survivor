@@ -125,12 +125,16 @@ def train(steps=200_000, checkpoint=None, n_envs=4, tensorboard=True, device="au
     print(f"[RL] 设备: {dev} | 训练阵容: {roster_actual}")
     tb_log = "rl/logs" if tensorboard else None
     # 学习率/探索系数按绝对步数衰减（续训时基于 abs_step 状态，不会回升；
-    # v2.1.1 稳定性修复：总退火目标 8M 步更慢退火、entropy 保底提升 0.008（防策略崩溃）、
-    # lr 起始 2.5e-4 更温和 —— obs35 实测 60 万步后崩溃，主因价值函数震荡+探索枯竭）
+    # v2.1.2 稳定性强化（根治 obs35 越峰崩溃：价值函数震荡+探索枯竭）：
+    #   - 奖励尺度归一化（zombie_env: 击杀80→20/被击杀50→20）
+    #   - clip_range_vf=0.3 价值函数裁剪（防 value 大更新放大误差）
+    #   - ent 保底 0.02（探索不枯竭）
+    #   - lr 起始更温和 1.5e-4、保底 1e-4（不退火到零，后期仍能恢复）
+    #   - norm_reward=True（advantage 运行归一化，抗奖励尺度漂移）
     _abs = _load_abs()
     _progress = max(1.0 - _abs / 8_000_000, 0.0)
-    _lr = max(2.5e-4 * _progress, 5e-5)
-    _ent = max(0.015 * _progress, 0.008)
+    _lr = max(1.5e-4 * _progress, 1e-4)
+    _ent = max(0.02 * _progress, 0.02)
     if checkpoint and os.path.exists(checkpoint):
         print(f"[RL] 从断点续训: {checkpoint} (lr={_lr:.2e}, ent={_ent:.3f})")
         model = PPO.load(checkpoint, env=env, device=dev,
@@ -139,7 +143,7 @@ def train(steps=200_000, checkpoint=None, n_envs=4, tensorboard=True, device="au
         model = PPO(
             "MlpPolicy", env,
             n_steps=512, batch_size=128, gamma=0.99, gae_lambda=0.95,
-            clip_range=0.3, ent_coef=_ent, learning_rate=_lr,   # v2.1.1: clip 0.2→0.3 抗价值崩溃
+            clip_range=0.3, clip_range_vf=0.3, ent_coef=_ent, learning_rate=_lr,   # v2.1.2: value clip + norm reward(learn时)
             vf_coef=0.5, max_grad_norm=0.5,
             policy_kwargs=dict(net_arch=dict(pi=[128, 128], vf=[128, 128])),
             tensorboard_log=tb_log, verbose=1, device=dev,

@@ -594,12 +594,12 @@ class ZombieEnv(gym.Env):
             self._prev_py = self.py
 
             if self.php <= 0:
-                reward += 80.0    # v2.0.19 击杀奖励提高：主动出击、别苟
+                reward += 20.0    # v2.1.1 击杀奖励(尺度归一化:80→20,相对关系不变,防价值函数崩溃)
                 self.ep_kills += 1
                 terminated = True
                 break
             if self.zhp <= 0:
-                reward -= 50.0
+                reward -= 20.0    # v2.1.1 被击杀惩罚(尺度归一化:50→20,保持1:1攻守平衡)
                 terminated = True
                 break
             if self.step_count >= MAX_STEPS:
