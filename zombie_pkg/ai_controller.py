@@ -26,6 +26,7 @@ class RLEnemyAI:
         self._cache = {}            # id(enemy) -> (下次决策时间, vx, vy, skill)：决策节流缓存
         self._dirty = set()         # 待批量重算的敌人 id（主循环每帧 flush 一次批前向）
         self._DECIDE_INTERVAL = 0.25  # 决策节流：同怪 0.25s 内复用上次动作（精英少，减推理量）
+        self._DECIDE_FAR_INTERVAL = 0.5  # v2.1.3 动态节流：距玩家>320px 时降频到 0.5s（远处变化慢）
         self._input_name = None
         self.obs_dim = 22   # 默认旧模型维度；加载后按权重自动适配（22 或 26 子弹感知）
         # 遥测统计（开发者面板/数据导出用）
@@ -263,7 +264,13 @@ class RLEnemyAI:
             else:
                 ang = (act - 1) * (math.pi / 4)
                 res = (math.cos(ang), math.sin(ang), skill)
-            self._cache[id(e)] = (now + self._DECIDE_INTERVAL, res[0], res[1], res[2])
+            # v2.1.3 动态节流：远处(>320px)降频到 0.5s，近处保持 0.25s（省 CPU 不影响近战反应）
+            far = False
+            if ps:
+                p = min(ps, key=lambda pl: (pl.x - e.x) ** 2 + (pl.y - e.y) ** 2)
+                far = ((p.x - e.x) ** 2 + (p.y - e.y) ** 2) > 320.0 ** 2
+            self._cache[id(e)] = (now + (self._DECIDE_FAR_INTERVAL if far else self._DECIDE_INTERVAL),
+                                  res[0], res[1], res[2])
             self.stats["decisions"] += 1
             self.stats["action_hist"][act] = self.stats["action_hist"].get(act, 0) + 1
             self.stats["total_ms"] += ms / max(len(ents), 1)

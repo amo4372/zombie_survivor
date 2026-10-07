@@ -15,7 +15,7 @@ import argparse
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 
-def export(model_path):
+def export(model_path, out_path=None):
     import torch
     import torch.nn as nn
     import numpy as np
@@ -43,7 +43,7 @@ def export(model_path):
     obs_dim = policy.observation_space.shape[0]
     dummy = torch.zeros((1, obs_dim), dtype=torch.float32)
 
-    onnx_path = os.path.join(os.path.dirname(model_path), "zombie_policy.onnx")
+    onnx_path = out_path or os.path.join(os.path.dirname(model_path), "zombie_policy.onnx")
     with torch.no_grad():
         torch.onnx.export(
             net, dummy, onnx_path,
@@ -76,6 +76,7 @@ def export(model_path):
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default="rl/models/ppo_zombie_v2.zip")
+    ap.add_argument("-o", "--out", default=None, help="输出 onnx 路径（默认模型同目录 zombie_policy.onnx）")
     args = ap.parse_args()
     os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    export(args.model)
+    export(args.model, args.out)
