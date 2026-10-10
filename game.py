@@ -15,8 +15,10 @@ _SAFE_BASE = os.path.dirname(os.path.abspath(__file__))
 
 
 def _ensure_package_dirs():
-    """包目录缺失时从 assets/_pkg_compat.zip 自愈解包。返回 0=无需处理 / N=解包数 / -1=失败"""
-    missing = [p for p in ("zombie_pkg", "renderer_pkg")
+    """包目录缺失时从 assets/_pkg_compat.zip 自愈解包。返回 0=无需处理 / N=解包数 / -1=失败
+    v2.1.3：检查清单覆盖全部包目录（zombie_pkg/renderer_pkg/ui_pkg/entities_pkg），
+    平铺旧版升级不再因 ui_pkg/entities_pkg 缺失崩溃（ui.py/entities.py 顶层 shim 依赖它们）。"""
+    missing = [p for p in ("zombie_pkg", "renderer_pkg", "ui_pkg", "entities_pkg")
                if not os.path.isdir(os.path.join(_SAFE_BASE, p))]
     if not missing:
         return 0

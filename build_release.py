@@ -166,15 +166,17 @@ def _md5(file_path, chunk=65536):
 
 
 def add_pkg_compat(files_to_pack):
-    """v2.0.10 兼容旧版平铺更新器：把 zombie_pkg/renderer_pkg 打成
-    assets/_pkg_compat.zip 一并发布（旧版更新器必复制 assets 目录），
-    包结构新版本启动时若发现包目录缺失，会从该 zip 自愈解包。
+    """v2.0.10 兼容旧版平铺更新器：把所有包目录（zombie_pkg/renderer_pkg/
+    ui_pkg/entities_pkg）打成 assets/_pkg_compat.zip 一并发布（旧版更新器必复制
+    assets 目录），包结构新版本启动时若发现包目录缺失，会从该 zip 自愈解包。
+    v2.1.3：扩展至 ui_pkg/entities_pkg——ui.py/entities.py 顶层 shim 依赖它们，
+    平铺旧版升级缺失这两个目录会直接崩溃。
     """
     import tempfile
     compat_tmp = tempfile.NamedTemporaryFile('wb', suffix='.zip', delete=False)
     compat_tmp.close()
     with zipfile.ZipFile(compat_tmp.name, 'w', zipfile.ZIP_DEFLATED) as zf:
-        for d in ("zombie_pkg", "renderer_pkg"):
+        for d in ("zombie_pkg", "renderer_pkg", "ui_pkg", "entities_pkg"):
             dpath = os.path.join(PROJECT_DIR, d)
             if not os.path.isdir(dpath):
                 continue
