@@ -99,14 +99,18 @@ class LightingSystem:
         self._light_surface = None
         self._dark_surface = None
         self._gradient_cache = {}  # 预渲染径向渐变缓存
+        self._render_scale = 1  # 降采样系数（性能优化：小表面渲染后放大）
         self._init_surfaces()
         self._flashlight_angle = 0.0
         self.set_quality(quality)
 
     def _init_surfaces(self):
-        """初始化表面"""
-        self._dark_surface = pygame.Surface((self.screen_width, self.screen_height), pygame.SRCALPHA)
-        self._light_surface = pygame.Surface((self.screen_width, self.screen_height), pygame.SRCALPHA)
+        """初始化表面（按降采样分辨率，渲染后 smoothscale 回目标尺寸）"""
+        rs = getattr(self, '_render_scale', 1)
+        lw = max(2, self.screen_width // rs)
+        lh = max(2, self.screen_height // rs)
+        self._dark_surface = pygame.Surface((lw, lh), pygame.SRCALPHA)
+        self._light_surface = pygame.Surface((lw, lh), pygame.SRCALPHA)
 
     def set_quality(self, quality):
         """根据画质设置调整光照参数"""
@@ -122,6 +126,9 @@ class LightingSystem:
         self.gradient_layers = preset["gradient_layers"]
         self.vignette_enabled = preset.get("vignette", False)
         self.flashlight_enabled = preset.get("flashlight", False)
+        # v2.1.3 性能优化：移动端/中低配降采样渲染（性能=2，均衡=2，高=1 全分辨率）
+        self._render_scale = 2 if quality in ("performance", "balanced") else 1
+        self._init_surfaces()
         self._gradient_cache.clear()  # 清除缓存，用新层数重新渲染
 
     def resize(self, w, h):
@@ -132,10 +139,11 @@ class LightingSystem:
         self._gradient_cache.clear()
 
     def _get_gradient(self, radius, color):
-        """获取或创建预渲染的径向渐变光"""
-        key = (int(radius), color)
+        """获取或创建预渲染的径向渐变光（v2.1.3：半径量化 4px 粒度，减少缓存重建）"""
+        key = (int(radius / 4.0) * 4, color)
         if key in self._gradient_cache:
             return self._gradient_cache[key]
+        radius = key[0]
 
         # 渲染径向渐变
         size = int(radius * 2)
@@ -165,7 +173,7 @@ class LightingSystem:
 
         self._gradient_cache[key] = surf
         # 限制缓存大小
-        if len(self._gradient_cache) > 50:
+        if len(self._gradient_cache) > 128:
             oldest = list(self._gradient_cache.keys())[0]
             del self._gradient_cache[oldest]
         return surf
@@ -210,33 +218,41 @@ class LightingSystem:
         # v2.1.3 修复：按目标屏幕尺寸工作（分屏 subsurface 宽度为半屏），
         # 表面尺寸不匹配时重建，避免光源坐标越界/错位导致光照不可见
         vw, vh = screen.get_size()
-        if self._light_surface.get_size() != (vw, vh) or self._dark_surface.get_size() != (vw, vh):
+        rs = self._render_scale
+        if self._light_surface.get_size() != (max(2, vw // rs), max(2, vh // rs)) \
+                or self._dark_surface.get_size() != (max(2, vw // rs), max(2, vh // rs)):
             self.resize(vw, vh)
 
         # 清空光表面
         self._light_surface.fill((0, 0, 0, 0))
+        lw, lh = self._light_surface.get_size()
+
+        def _in_view(sx, sy, r=0):
+            """屏幕外光源裁剪：降采样坐标系下是否与视口相交"""
+            return -r - 4 <= sx <= lw + r + 4 and -r - 4 <= sy <= lh + r + 4
 
         # 1. 玩家恒定光源
         if player:
-            px = int((player.x - camera_x) * scale) - viewport_x
-            py = int((player.y - camera_y) * scale)
-            player_radius = int(getattr(self, 'player_light_radius', 280) * scale)
+            px = int((player.x - camera_x) * scale / rs) - (viewport_x // rs)
+            py = int((player.y - camera_y) * scale / rs)
+            player_radius = max(8, int(getattr(self, 'player_light_radius', 280) * scale / rs))
             player_intensity = getattr(self, 'player_light_intensity', 1.3)
-            gradient = self._get_gradient(player_radius, (255, 245, 210))
-            if player_intensity > 1.0:
-                gradient = gradient.copy()
-                # 叠加一层增强中心亮度
-                boost = pygame.Surface(gradient.get_size(), pygame.SRCALPHA)
-                boost_r = int(player_radius * 0.5 * min(1.5, player_intensity))
-                pygame.draw.circle(boost, (255, 250, 220, int(80 * (player_intensity - 1))),
-                                   (player_radius, player_radius), boost_r)
-                gradient.blit(boost, (0, 0), special_flags=pygame.BLEND_RGBA_ADD)
-            self._light_surface.blit(gradient, (px - player_radius, py - player_radius),
-                                      special_flags=pygame.BLEND_RGBA_ADD)
+            if _in_view(px, py, player_radius):
+                gradient = self._get_gradient(player_radius, (255, 245, 210))
+                if player_intensity > 1.0:
+                    gradient = gradient.copy()
+                    # 叠加一层增强中心亮度
+                    boost = pygame.Surface(gradient.get_size(), pygame.SRCALPHA)
+                    boost_r = int(player_radius * 0.5 * min(1.5, player_intensity))
+                    pygame.draw.circle(boost, (255, 250, 220, int(80 * (player_intensity - 1))),
+                                       (player_radius, player_radius), boost_r)
+                    gradient.blit(boost, (0, 0), special_flags=pygame.BLEND_RGBA_ADD)
+                self._light_surface.blit(gradient, (px - player_radius, py - player_radius),
+                                          special_flags=pygame.BLEND_RGBA_ADD)
             # 手电筒：玩家朝向的锥形光源
             if getattr(self, 'flashlight_enabled', False) and hasattr(self, '_flashlight_angle'):
                 flash_angle = self._flashlight_angle
-                flash_length = int(350 * scale)
+                flash_length = max(8, int(350 * scale / rs))
                 flash_width = 0.6  # 弧度，约35度
                 # 绘制锥形光（用多个扇形叠加模拟渐变）
                 for layer in range(8, 0, -1):
@@ -262,52 +278,55 @@ class LightingSystem:
                     self._light_surface.blit(cone_surf, (px - cone_len, py - cone_len),
                                               special_flags=pygame.BLEND_RGBA_ADD)
 
-        # 2. 燃烧/发光的敌人（受画质控制）
+        # 2. 燃烧/发光的敌人（受画质控制；屏幕外裁剪）
         if enemies and getattr(self, 'enemy_lights_enabled', True):
             for enemy in enemies:
                 if not getattr(enemy, 'alive', True):
                     continue
                 # 燃烧中的敌人
                 if hasattr(enemy, 'buff_manager') and enemy.buff_manager.is_burning():
-                    ex = int((enemy.x - camera_x) * scale) - viewport_x
-                    ey = int((enemy.y - camera_y) * scale)
-                    er = int(80 * scale)
-                    gradient = self._get_gradient(er, (255, 120, 30))
-                    self._light_surface.blit(gradient, (ex - er, ey - er),
-                                              special_flags=pygame.BLEND_RGBA_ADD)
+                    ex = int((enemy.x - camera_x) * scale / rs) - (viewport_x // rs)
+                    ey = int((enemy.y - camera_y) * scale / rs)
+                    er = max(6, int(80 * scale / rs))
+                    if _in_view(ex, ey, er):
+                        gradient = self._get_gradient(er, (255, 120, 30))
+                        self._light_surface.blit(gradient, (ex - er, ey - er),
+                                                  special_flags=pygame.BLEND_RGBA_ADD)
                 # Boss自带微光（受画质控制）
                 elif getattr(enemy, 'is_boss', False) and getattr(self, 'boss_lights_enabled', True):
-                    ex = int((enemy.x - camera_x) * scale) - viewport_x
-                    ey = int((enemy.y - camera_y) * scale)
-                    er = int(120 * scale)
-                    gradient = self._get_gradient(er, (180, 50, 200))
-                    self._light_surface.blit(gradient, (ex - er, ey - er),
-                                              special_flags=pygame.BLEND_RGBA_ADD)
+                    ex = int((enemy.x - camera_x) * scale / rs) - (viewport_x // rs)
+                    ey = int((enemy.y - camera_y) * scale / rs)
+                    er = max(6, int(120 * scale / rs))
+                    if _in_view(ex, ey, er):
+                        gradient = self._get_gradient(er, (180, 50, 200))
+                        self._light_surface.blit(gradient, (ex - er, ey - er),
+                                                  special_flags=pygame.BLEND_RGBA_ADD)
 
-        # 3. 投射物尾迹光（受画质控制）
+        # 3. 投射物尾迹光（受画质控制；屏幕外裁剪）
         if projectiles and getattr(self, 'projectile_lights_enabled', True):
             for proj in projectiles:
                 if not getattr(proj, 'alive', True):
                     continue
-                proj_x = int((proj.x - camera_x) * scale) - viewport_x
-                proj_y = int((proj.y - camera_y) * scale)
+                proj_x = int((proj.x - camera_x) * scale / rs) - (viewport_x // rs)
+                proj_y = int((proj.y - camera_y) * scale / rs)
                 color = getattr(proj, 'color', (255, 255, 200))
-                pr = int(40 * scale)
-                gradient = self._get_gradient(pr, color[:3])
-                self._light_surface.blit(gradient, (proj_x - pr, proj_y - pr),
-                                          special_flags=pygame.BLEND_RGBA_ADD)
+                pr = max(4, int(40 * scale / rs))
+                if _in_view(proj_x, proj_y, pr):
+                    gradient = self._get_gradient(pr, color[:3])
+                    self._light_surface.blit(gradient, (proj_x - pr, proj_y - pr),
+                                              special_flags=pygame.BLEND_RGBA_ADD)
 
-        # 4. 动态光源（爆炸、技能特效等）
+        # 4. 动态光源（爆炸、技能特效等；屏幕外裁剪）
         for light in self.lights:
             if not light.alive:
                 continue
-            lx = int((light.x - camera_x) * scale) - viewport_x
-            ly = int((light.y - camera_y) * scale)
+            lx = int((light.x - camera_x) * scale / rs) - (viewport_x // rs)
+            ly = int((light.y - camera_y) * scale / rs)
             # 性能模式下禁用闪烁
             if not getattr(self, 'flicker_enabled', True):
                 light.flicker = False
-            eff_r = int(light.get_effective_radius() * scale)
-            if eff_r <= 0:
+            eff_r = max(4, int(light.get_effective_radius() * scale / rs))
+            if not _in_view(lx, ly, eff_r):
                 continue
             alpha = light.get_alpha()
             gradient = self._get_gradient(eff_r, light.color[:3])
@@ -317,26 +336,32 @@ class LightingSystem:
             self._light_surface.blit(gradient, (lx - eff_r, ly - eff_r),
                                       special_flags=pygame.BLEND_RGBA_ADD)
 
-        # 5. 构建黑暗层：全屏黑暗 - 光源区域 = 最终黑暗
+        # 5. 构建黑暗层：全屏黑暗 - 光源区域 = 最终黑暗（降采样表面）
         self._dark_surface.fill((0, 0, 0, self.ambient_darkness))
         # 用光源表面"挖洞"（从黑暗中减去光）
         self._dark_surface.blit(self._light_surface, (0, 0), special_flags=pygame.BLEND_RGBA_SUB)
 
-        # 6. 暗角效果（vignette）
+        # 6. 暗角效果（vignette，降采样表面绘制后随整体缩放）
         if getattr(self, 'vignette_enabled', False):
-            vw, vh = self.screen_width, self.screen_height
-            vignette_surf = pygame.Surface((vw, vh), pygame.SRCALPHA)
+            dlw, dlh = self._dark_surface.get_size()
+            vignette_surf = pygame.Surface((dlw, dlh), pygame.SRCALPHA)
             # 四角渐变暗化
             v_steps = 8
             for i in range(v_steps, 0, -1):
                 t = i / v_steps
-                margin = int(min(vw, vh) * 0.12 * t)
+                margin = int(min(dlw, dlh) * 0.12 * t)
                 alpha = int(50 * (1 - t) ** 1.5)
                 if margin > 0 and alpha > 0:
                     pygame.draw.rect(vignette_surf, (0, 0, 0, alpha),
-                                     (margin//2, margin//2, vw - margin, vh - margin),
+                                     (margin//2, margin//2, dlw - margin, dlh - margin),
                                      border_radius=20)
             self._dark_surface.blit(vignette_surf, (0, 0), special_flags=pygame.BLEND_RGBA_ADD)
 
-        # 7. 应用到屏幕
-        screen.blit(self._dark_surface, (0, 0))
+        # 7. 应用到屏幕（降采样表面平滑放大）
+        if rs == 1:
+            screen.blit(self._dark_surface, (0, 0))
+        else:
+            try:
+                pygame.transform.smoothscale(self._dark_surface, (vw, vh), screen)
+            except Exception:
+                screen.blit(self._dark_surface, (0, 0))

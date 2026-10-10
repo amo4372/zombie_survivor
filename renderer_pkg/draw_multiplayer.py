@@ -15,6 +15,7 @@ UI 与单人完全分离：单人走 draw_play._draw_playing/_draw_hud（全屏�
 未来扩展 N 人同屏：只需让 build_split_viewports 返回 N 个 SplitViewport，
 分割线/标签循环与渲染循环自动适配，无需改动 draw_play 核心。
 """
+import math
 import pygame
 from dataclasses import dataclass
 
@@ -27,6 +28,80 @@ class SplitViewport:
     label: str          # "P1"/"P2"/...，用于 HUD 标注与升级选卡归属
     rect: pygame.Rect   # 全屏坐标系下的视口矩形（subsurface 区域）
     index: int          # 视口序号（从 0 开始，用于分隔线/标签定位）
+
+
+def _screen_pos_of(wx, wy, camera, scale, shake=True):
+    """世界坐标 → 视口局部屏幕坐标（与 _draw_playing_core 同口径）"""
+    if shake and hasattr(camera, "shake_x"):
+        cam_x = camera.x - getattr(camera, "shake_x", 0)
+        cam_y = camera.y - getattr(camera, "shake_y", 0)
+    else:
+        cam_x, cam_y = camera.x, camera.y
+    return (wx - cam_x) * scale, (wy - cam_y) * scale
+
+
+def draw_teammate_arrow(surface, vw, vh, sx, sy, label, downed,
+                        font_small, scale, dist_m=0):
+    """对方玩家不在本视口内时，在视口边缘绘制方位箭头（倒地也显示）
+
+    Args:
+        surface: 目标表面（同屏传 subsurface，全屏网络模式传 screen）
+        vw/vh: 该视口逻辑宽高（像素）
+        sx/sy: 对方在视口局部坐标系下的屏幕坐标
+        label: 对方玩家标签（"P1"/"P2"）
+        downed: 是否倒地（倒地显示红色+“倒地”提示）
+        font_small: 小号字体
+        scale: 缩放
+        dist_m: 世界距离（米/格），>0 时显示
+    """
+    margin = max(18, int(22 * scale))
+    if -margin <= sx <= vw + margin and -margin <= sy <= vh + margin:
+        return  # 在视口内，无需指示
+    cx, cy = vw / 2.0, vh / 2.0
+    dx, dy = sx - cx, sy - cy
+    dist = math.hypot(dx, dy)
+    if dist < 1:
+        return
+    ux, uy = dx / dist, dy / dist
+    # 射线从视口中心指向对方方向，与视口内边（留 margin）求交
+    txs = ((vw / 2.0 - margin) / abs(ux)) if abs(ux) > 1e-6 else float("inf")
+    tys = ((vh / 2.0 - margin) / abs(uy)) if abs(uy) > 1e-6 else float("inf")
+    t = min(txs, tys)
+    px = int(cx + ux * t)
+    py = int(cy + uy * t)
+    # 朝向角
+    ang = math.atan2(uy, ux)
+    col = (220, 90, 80) if downed else (110, 220, 110)
+    # 箭头三角形（沿方向旋转）
+    r = max(8, int(12 * scale))
+    pts = [
+        (px + int(math.cos(ang) * r), py + int(math.sin(ang) * r)),
+        (px + int(math.cos(ang + 2.6) * r * 0.7), py + int(math.sin(ang + 2.6) * r * 0.7)),
+        (px + int(math.cos(ang - 2.6) * r * 0.7), py + int(math.sin(ang - 2.6) * r * 0.7)),
+    ]
+    pygame.draw.polygon(surface, col, pts)
+    pygame.draw.polygon(surface, (20, 20, 20), pts, max(1, int(scale)))
+    # 标签与距离
+    tag_text = label + (" 倒地!" if downed else "")
+    if dist_m > 0:
+        tag_text += f" {dist_m:.0f}m"
+    tag = font_small.render(tag_text, True, col)
+    surface.blit(tag, tag.get_rect(center=(px, py + (r + 10) * (1 if uy >= 0 else -1))))
+
+
+def draw_teammate_indicators(renderer, game, viewports, vp):
+    """为指定视口绘制其余队友的方位指示（同屏 N 人通用）"""
+    sw = vp.rect.width
+    sh = vp.rect.height
+    for other in viewports:
+        if other is vp or other.player is None:
+            continue
+        sx, sy = _screen_pos_of(other.player.x, other.player.y, vp.camera, game.scale)
+        dx, dy = other.player.x - vp.player.x, other.player.y - vp.player.y
+        dist_m = math.hypot(dx, dy)
+        draw_teammate_arrow(renderer.screen, sw, sh, sx, sy, other.label,
+                            bool(getattr(other.player, "downed", False)),
+                            game.font_small, game.scale, dist_m=dist_m)
 
 
 def build_split_viewports(game):
@@ -78,6 +153,8 @@ def render_split_viewports(renderer, game, viewports):
         # 场景渲染在 subsurface（视口偏移由 viewport_x 补偿）
         renderer.screen = orig_screen.subsurface(vp.rect)
         renderer._draw_playing_core(vp.player, vp.camera, viewport_x=vp.rect.x)
+        # v2.1.3：队友方位指示（对方不在本视口内时边缘箭头，倒地仍显示）
+        draw_teammate_indicators(renderer, game, viewports, vp)
         # HUD 必须回全屏绘制（_draw_hud_split 内部用全屏绝对坐标 rect.x+…，
         # 且双人触控控件 base_x 本身含半屏偏移）
         renderer.screen = orig_screen

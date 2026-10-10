@@ -717,7 +717,8 @@ class PlayingMixin:
 
         if auto_shoot and self.player.can_act() and not self.player.riot_gear.equipped and self.riot_anim_state != "equipping":
             weapon = self.player.get_current_weapon()
-            if weapon.can_fire():
+            # v2.1.3：防御 weapon/weapon_type 为 None（异常存档/联机同步兜底，不再崩溃）
+            if weapon is not None and getattr(weapon, "weapon_type", None) is not None and weapon.can_fire():
                 # 过热倾泻buff：无限弹药
                 if getattr(self.player, 'overdrive_timer', 0) > 0 and hasattr(weapon, 'current_ammo') and weapon.current_ammo != "∞":
                     weapon.current_ammo = min(weapon.max_ammo, weapon.current_ammo + 1)
@@ -752,7 +753,9 @@ class PlayingMixin:
                 elif getattr(weapon, "is_throwable", False):
                     self.assets.play_sound("grenade_throw")
                 else:
-                    wtype = weapon.weapon_type.name.lower()
+                    # v2.1.3：weapon_type 兜底（防御 Weapon(None) 遗留对象）
+                    _wt = getattr(weapon, "weapon_type", None)
+                    wtype = _wt.name.lower() if _wt is not None else "pistol"
                     sound_key = wtype if wtype in SOUND_MAP else "pistol"
                     self.assets.play_sound_random(SOUND_MAP.get(sound_key, ["shoot_pistol"]))
                 if self.config.screen_shake:

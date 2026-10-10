@@ -14,6 +14,9 @@ from buff import BuffManager, BuffType
 
 class Player:
     def __init__(self, x, y, start_weapon=WeaponType.PISTOL, start_weapon_level=1):
+        # v2.1.3：防御 None 武器（存档/联机同步异常时兜底手枪，避免 weapon_type 为 None 导致崩溃）
+        if start_weapon is None:
+            start_weapon = WeaponType.PISTOL
         self.x = x
         self.y = y
         self.size = 16
@@ -143,6 +146,9 @@ class Player:
 
     def add_weapon(self, weapon_type):
         """添加武器，已有同类型则升级，避免重复"""
+        # v2.1.3：防御 None 武器（避免 Weapon(None) 进列表后 weapon_type 崩溃）
+        if weapon_type is None:
+            return
         # 统一转为枚举值进行比较（兼容int和枚举）
         from weapons import WeaponType
         if isinstance(weapon_type, int):

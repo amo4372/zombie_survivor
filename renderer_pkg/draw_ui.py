@@ -2248,6 +2248,21 @@ class UiMixin:
             if wname:
                 wt = g.font_small.render(wname, True, GOLD)
                 self.screen.blit(wt, (px - wt.get_width() // 2, py + r + int(4 * scale)))
+        # v2.1.3：网络客户端方位指示——主机（P1）不在本视口内时，边缘箭头指向其方位（倒地也显示）
+        if me is not None and len(players) > 1:
+            try:
+                from renderer_pkg.draw_multiplayer import draw_teammate_arrow
+                _peer = players[0]  # 主机 P1
+                _sx = int((_peer["x"] - cam_x) * scale)
+                _sy = int((_peer["y"] - cam_y) * scale)
+                _dx = _peer["x"] - me["x"]
+                _dy = _peer["y"] - me["y"]
+                draw_teammate_arrow(self.screen, sw, sh, _sx, _sy, "P1",
+                                    bool(_peer.get("downed")),
+                                    g.font_small, scale,
+                                    dist_m=math.hypot(_dx, _dy))
+            except Exception:
+                pass
         # HUD：时间与状态
         tl = max(0, int(snap.get("time_left", 0)))
         time_txt = g.font.render(f"网络联机  {tl // 60:02d}:{tl % 60:02d}", True, WHITE)
