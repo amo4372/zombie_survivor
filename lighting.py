@@ -113,7 +113,12 @@ class LightingSystem:
         self._light_surface = pygame.Surface((lw, lh), pygame.SRCALPHA)
 
     def set_quality(self, quality):
-        """根据画质设置调整光照参数"""
+        """根据画质设置调整光照参数
+
+        v2.1.5：performance/balanced 画质档直接关闭动态光照（enabled=False），
+        彻底消除低档黑屏（降采样 smoothscale 整屏覆盖成黑暗层）与性能开销；
+        仅 quality 档保留完整光照效果。
+        """
         self.quality = quality
         preset = self.QUALITY_PRESETS.get(quality, self.QUALITY_PRESETS["balanced"])
         self.ambient_darkness = preset["ambient_darkness"]
@@ -128,6 +133,8 @@ class LightingSystem:
         self.flashlight_enabled = preset.get("flashlight", False)
         # v2.1.3 性能优化：移动端/中低配降采样渲染（性能=2，均衡=2，高=1 全分辨率）
         self._render_scale = 2 if quality in ("performance", "balanced") else 1
+        # v2.1.5：仅高画质启用动态光照；低档完全关闭（黑屏+性能根因）
+        self.enabled = (quality == "quality")
         self._init_surfaces()
         self._gradient_cache.clear()  # 清除缓存，用新层数重新渲染
 

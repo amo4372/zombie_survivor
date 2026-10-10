@@ -1739,6 +1739,12 @@ class UiMixin:
                     cur = self.game.config.graphics_quality
                     idx = qs.index(cur) if cur in qs else 1
                     self.game.config.graphics_quality = qs[(idx + 1) % len(qs)]
+                    # v2.1.5：切画质同步动态光照（低档关闭光照 / 高档启用），避免切换后光照状态残留
+                    if getattr(self.game, 'lighting', None) is not None:
+                        try:
+                            self.game.lighting.set_quality(self.game.config.graphics_quality)
+                        except Exception:
+                            pass
                     # 画质变化时清除缓存
                     for attr in ['_trauma_cache_key', '_blood_template_cache', '_buff_edge_cache',
                                  '_heat_cache', '_frost_cache', '_hb_cache']:
