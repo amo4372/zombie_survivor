@@ -419,6 +419,9 @@ class Player:
         # 开发者模式：无敌
         if getattr(self, 'dev_god', False):
             return 0
+        # v2.1.3：同屏双人升级选卡期间该玩家免伤（临时脱锁，选卡完成后恢复）
+        if getattr(self, 'upgrade_paused', False):
+            return 0
         # 角色受伤减免（如铁壁）
         dmg_reduce = getattr(self, 'dmg_reduce', 0.0)
         if dmg_reduce > 0:

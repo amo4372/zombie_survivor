@@ -263,6 +263,17 @@ class GameCore:
         self.font_large = FontManager.get(24)
         self.font_title = FontManager.get(40)
 
+        # v2.1.3 修复：实例化动态光照系统（此前仅 import 从未创建实例
+        # → hasattr(game,'lighting') 恒 False → render 永不执行 → 光照完全不可见）
+        try:
+            from lighting import LightingSystem
+            self.lighting = LightingSystem(self.scaled_width, self.scaled_height,
+                                           getattr(self.config, 'graphics_quality', "balanced"))
+            logger.info(f"动态光照已启用 (quality={getattr(self.config, 'graphics_quality', 'balanced')})")
+        except Exception as e:
+            self.lighting = None
+            logger.warning(f"动态光照初始化失败: {e}")
+
         self.state = GameState.MENU
         self.previous_state = None
 
@@ -329,6 +340,9 @@ class GameCore:
         self.skill_caster = None
         self.skill_card_selector = SkillCardSelector()
         self.pending_upgrade_for = None  # 同屏双人：当前升级的玩家 "P1"/"P2"
+        # v2.1.3：同屏双人 per-player 升级暂停（P1 升级选卡时 P2 继续游戏、怪物脱锁升级玩家）。
+        # 值为 "P1"/"P2"/None；单机模式不用（仍走全局 SKILL_SELECT 状态）
+        self._upgrade_pause_player = None
         self.hud_layout_feedback = None  # HUD布局保存/重置的屏幕反馈提示
         self.skill_tree_renderer = SkillTreeRenderer()
         # 加载 mod

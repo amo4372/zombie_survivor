@@ -191,7 +191,7 @@ class LightingSystem:
         """设置手电筒朝向（弧度）"""
         self._flashlight_angle = angle
 
-    def render(self, screen, camera_x, camera_y, scale, player=None, enemies=None, projectiles=None, particles=None):
+    def render(self, screen, camera_x, camera_y, scale, player=None, enemies=None, projectiles=None, particles=None, viewport_x=0):
         """渲染光照层到屏幕
 
         Args:
@@ -202,16 +202,23 @@ class LightingSystem:
             enemies: 敌人列表（燃烧的敌人提供光源）
             projectiles: 投射物列表（提供尾迹光）
             particles: 粒子系统（爆炸提供光源）
+            viewport_x: 视口屏幕偏移（分屏：P2 传 half，画进右半屏 subsurface）
         """
         if not self.enabled:
             return
+
+        # v2.1.3 修复：按目标屏幕尺寸工作（分屏 subsurface 宽度为半屏），
+        # 表面尺寸不匹配时重建，避免光源坐标越界/错位导致光照不可见
+        vw, vh = screen.get_size()
+        if self._light_surface.get_size() != (vw, vh) or self._dark_surface.get_size() != (vw, vh):
+            self.resize(vw, vh)
 
         # 清空光表面
         self._light_surface.fill((0, 0, 0, 0))
 
         # 1. 玩家恒定光源
         if player:
-            px = int((player.x - camera_x) * scale)
+            px = int((player.x - camera_x) * scale) - viewport_x
             py = int((player.y - camera_y) * scale)
             player_radius = int(getattr(self, 'player_light_radius', 280) * scale)
             player_intensity = getattr(self, 'player_light_intensity', 1.3)
@@ -262,7 +269,7 @@ class LightingSystem:
                     continue
                 # 燃烧中的敌人
                 if hasattr(enemy, 'buff_manager') and enemy.buff_manager.is_burning():
-                    ex = int((enemy.x - camera_x) * scale)
+                    ex = int((enemy.x - camera_x) * scale) - viewport_x
                     ey = int((enemy.y - camera_y) * scale)
                     er = int(80 * scale)
                     gradient = self._get_gradient(er, (255, 120, 30))
@@ -270,7 +277,7 @@ class LightingSystem:
                                               special_flags=pygame.BLEND_RGBA_ADD)
                 # Boss自带微光（受画质控制）
                 elif getattr(enemy, 'is_boss', False) and getattr(self, 'boss_lights_enabled', True):
-                    ex = int((enemy.x - camera_x) * scale)
+                    ex = int((enemy.x - camera_x) * scale) - viewport_x
                     ey = int((enemy.y - camera_y) * scale)
                     er = int(120 * scale)
                     gradient = self._get_gradient(er, (180, 50, 200))
@@ -282,7 +289,7 @@ class LightingSystem:
             for proj in projectiles:
                 if not getattr(proj, 'alive', True):
                     continue
-                proj_x = int((proj.x - camera_x) * scale)
+                proj_x = int((proj.x - camera_x) * scale) - viewport_x
                 proj_y = int((proj.y - camera_y) * scale)
                 color = getattr(proj, 'color', (255, 255, 200))
                 pr = int(40 * scale)
@@ -294,7 +301,7 @@ class LightingSystem:
         for light in self.lights:
             if not light.alive:
                 continue
-            lx = int((light.x - camera_x) * scale)
+            lx = int((light.x - camera_x) * scale) - viewport_x
             ly = int((light.y - camera_y) * scale)
             # 性能模式下禁用闪烁
             if not getattr(self, 'flicker_enabled', True):

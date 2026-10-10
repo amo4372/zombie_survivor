@@ -1178,8 +1178,10 @@ class SkillsMixin:
 
     def _apply_skill_card(self, skill):
         """应用选中的技能卡（双人：作用于当前升级的玩家）"""
-        player = self.player2 if getattr(self, 'pending_upgrade_for', None) == "P2" and self.player2 else self.player
-        tag = getattr(self, 'pending_upgrade_for', "P1") or "P1"
+        # v2.1.3：双人 per-player 升级优先读 _upgrade_pause_player（单机仍走 pending_upgrade_for）
+        _upw = getattr(self, '_upgrade_pause_player', None)
+        player = self.player2 if (_upw == "P2" or getattr(self, 'pending_upgrade_for', None) == "P2") and self.player2 else self.player
+        tag = _upw or getattr(self, 'pending_upgrade_for', "P1") or "P1"
         if player.skill_tree.upgrade_skill(skill.skill_type):
             self.floating_texts.append(FloatingText(
                 player.x, player.y - 40, 
@@ -1210,5 +1212,9 @@ class SkillsMixin:
         player.pending_level_up = False
         player.skill_cards = []
         self.pending_upgrade_for = None
+        # v2.1.3：双人 per-player 升级结束 → 恢复该玩家（重新可被怪物锁定/可移动）
+        if getattr(self, '_upgrade_pause_player', None):
+            self._upgrade_pause_player = None
+            player.upgrade_paused = False
         self.skill_card_selector.hide()
         self.state = GameState.PLAYING

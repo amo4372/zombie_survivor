@@ -252,6 +252,37 @@ class InputMixin:
         # 开发者模式：密码输入 / 局内面板开关
         self._handle_dev_keys(all_events)
 
+        # v2.1.3：同屏双人 per-player 升级 —— 升级玩家半屏点击/数字键选卡，
+        # 另一玩家半屏输入保留给正常流程，互不阻塞（此前切全局 SKILL_SELECT 直接 return 吞掉双人输入）
+        _upw = getattr(self, '_upgrade_pause_player', None)
+        if self.is_multiplayer_active() and _upw and self.multiplayer_mode == "same_screen":
+            _half = max(320, self.scaled_width // 2)
+            _up_pl = self.player2 if _upw == "P2" else self.player
+            _sel = None
+            for event in all_events:
+                if event.type == pygame.KEYDOWN and event.key in (pygame.K_1, pygame.K_2, pygame.K_3):
+                    _idx = {pygame.K_1: 0, pygame.K_2: 1, pygame.K_3: 2}[event.key]
+                    if 0 <= _idx < len(_up_pl.skill_cards):
+                        _sel = _up_pl.skill_cards[_idx]
+                elif event.type in (pygame.FINGERDOWN, pygame.MOUSEBUTTONDOWN):
+                    if event.type == pygame.FINGERDOWN:
+                        _x = event.x * self.scaled_width
+                        _y = event.y * self.scaled_height
+                        _fid = event.finger_id
+                    else:
+                        _x, _y = event.pos
+                        _fid = -1
+                    _in_half = (_x < _half) if _upw == "P1" else (_x >= _half)
+                    if _in_half:
+                        _sel = self.skill_card_selector.handle_input(
+                            (0, 0), (0, 0, 0),
+                            [{"type": "down", "pos": (_x, _y), "id": _fid}],
+                            self.scale
+                        )
+            if _sel is not None:
+                self._apply_skill_card(_sel)
+            # 无论是否选中：不 return，另一玩家输入继续正常流程
+
         # 技能卡选择界面
         if self.state == GameState.SKILL_SELECT:
             _up_pl = self.player2 if getattr(self, 'pending_upgrade_for', None) == "P2" and self.player2 else self.player

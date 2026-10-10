@@ -590,16 +590,21 @@ class PlayingMixin:
                 _zone_mult = apply_player_zones(self.world, self.player, dt)
             except Exception:
                 pass
-        self.player.update(dt, move_x * _zone_mult, move_y * _zone_mult,
-                           mouse_angle, self.world, sprinting=sprinting)
-        # 符文：再生效果
-        if hasattr(self, 'rune_manager'):
-            regen = self.rune_manager.get_bonus("regen")
-            if regen > 0 and self.player.hp < self.player.max_hp:
-                self.player.hp = min(self.player.max_hp, self.player.hp + regen * dt)
+        # v2.1.3：同屏双人 P1 升级选卡时暂停 P1 移动/受击（怪物脱锁由目标选择处处理）
+        _p1_paused = self.is_multiplayer_active() and getattr(self, '_upgrade_pause_player', None) == "P1"
+        if not _p1_paused:
+            self.player.update(dt, move_x * _zone_mult, move_y * _zone_mult,
+                               mouse_angle, self.world, sprinting=sprinting)
+            # 符文：再生效果
+            if hasattr(self, 'rune_manager'):
+                regen = self.rune_manager.get_bonus("regen")
+                if regen > 0 and self.player.hp < self.player.max_hp:
+                    self.player.hp = min(self.player.max_hp, self.player.hp + regen * dt)
+        # speed_mult 已乘符文加成，无论暂停与否都必须恢复
         self.player.speed_mult = orig_speed_mult
-        # 盾牌冲撞更新（移动+碰撞伤害）
-        self._update_charge(dt)
+        # 盾牌冲撞更新（移动+碰撞伤害；P1 升级暂停时不更新）
+        if not _p1_paused:
+            self._update_charge(dt)
         # 过热倾泻：计时 + 射速加成（冷却额外递减）+ 灼烧枪口特效
         if getattr(self.player, 'overdrive_timer', 0) > 0:
             self.player.overdrive_timer -= dt
@@ -662,20 +667,30 @@ class PlayingMixin:
             self._update_story_mode(dt)
 
         # 检查升级选择（同屏双人：P1/P2 各自升级，半屏显示并标注是谁）
-        if self.state != GameState.SKILL_SELECT:
+        # v2.1.3：双人模式改为 per-player 暂停升级 —— 不再切全局 SKILL_SELECT，
+        # 升级玩家进入选卡弹窗（半屏）且怪物脱锁/免伤，另一玩家游戏完全不受影响
+        _mp = self.is_multiplayer_active() and self.multiplayer_mode == "same_screen"
+        if self.state != GameState.SKILL_SELECT and not (_mp and self._upgrade_pause_player):
             for _pl, _tag in ((self.player, "P1"), (self.player2, "P2")):
                 if not _pl or not _pl.pending_level_up:
                     continue
                 if _pl.skill_cards:
-                    self.state = GameState.SKILL_SELECT
-                    self.pending_upgrade_for = _tag
-                    _region = None
-                    if self.is_multiplayer_active() and self.multiplayer_mode == "same_screen":
+                    if _mp:
+                        # 双人：per-player 暂停，不切全局状态
+                        self.pending_upgrade_for = _tag
+                        self._upgrade_pause_player = _tag
+                        _pl.upgrade_paused = True
                         _half = max(320, self.scaled_width // 2)
                         _region = pygame.Rect(0 if _tag == "P1" else self.scaled_width - _half, 0, _half, self.scaled_height)
-                    self.skill_card_selector.show(_pl.skill_cards, region=_region,
-                                                  title=f"{_tag} 升级！选择你的强化",
-                                                  subtitle=f"{_tag} 等级 {_pl.level} → 选择技能卡")
+                        self.skill_card_selector.show(_pl.skill_cards, region=_region,
+                                                      title=f"{_tag} 升级！选择你的强化",
+                                                      subtitle=f"{_tag} 等级 {_pl.level} → 选择技能卡")
+                    else:
+                        self.state = GameState.SKILL_SELECT
+                        self.pending_upgrade_for = _tag
+                        self.skill_card_selector.show(_pl.skill_cards, region=None,
+                                                      title=f"{_tag} 升级！选择你的强化",
+                                                      subtitle=f"{_tag} 等级 {_pl.level} → 选择技能卡")
                     # 记录升级
                     if self.session:
                         self.session.add_level_up()
@@ -687,16 +702,18 @@ class PlayingMixin:
 
         # 自动射击 / 盾肘击【修改】
         auto_shoot = False
-        if self.config.control_mode == ControlMode.KEYBOARD:
-            mouse_left = pygame.mouse.get_pressed()[0]
-            # 装备防爆套装，鼠标左键执行肘击，不再开火
-            if mouse_left and self.player.can_act():
-                if self.player.riot_gear.equipped and self.riot_anim_state == "idle":
-                    self._perform_bash(math.degrees(mouse_angle))
-                else:
-                    auto_shoot = True
-        else:
-            auto_shoot = self.aim_button.is_shooting
+        # v2.1.3：P1 升级选卡暂停射击/肘击（触控模式下 P1 输入也已暂停）
+        if not (self.is_multiplayer_active() and getattr(self, '_upgrade_pause_player', None) == "P1"):
+            if self.config.control_mode == ControlMode.KEYBOARD:
+                mouse_left = pygame.mouse.get_pressed()[0]
+                # 装备防爆套装，鼠标左键执行肘击，不再开火
+                if mouse_left and self.player.can_act():
+                    if self.player.riot_gear.equipped and self.riot_anim_state == "idle":
+                        self._perform_bash(math.degrees(mouse_angle))
+                    else:
+                        auto_shoot = True
+            else:
+                auto_shoot = self.aim_button.is_shooting
 
         if auto_shoot and self.player.can_act() and not self.player.riot_gear.equipped and self.riot_anim_state != "equipping":
             weapon = self.player.get_current_weapon()
@@ -849,12 +866,15 @@ class PlayingMixin:
 
         # 更新敌人
         for enemy in self.enemies[:]:
-            # 选择最近的玩家作为目标（双人模式支持多目标，倒地玩家不成为目标）
+            # 选择最近的玩家作为目标（双人模式支持多目标，倒地/升级选卡中的玩家不成为目标）
+            # v2.1.3：upgrade_paused 玩家临时脱锁（升级选卡期间怪物不追不攻该玩家）
             if self.player2:
+                _p1_free = getattr(self.player, 'downed', False) or getattr(self.player, 'upgrade_paused', False)
+                _p2_free = getattr(self.player2, 'downed', False) or getattr(self.player2, 'upgrade_paused', False)
                 d1 = (enemy.x - self.player.x) ** 2 + (enemy.y - self.player.y) ** 2 \
-                    if not getattr(self.player, 'downed', False) else 1e18
+                    if not _p1_free else 1e18
                 d2 = (enemy.x - self.player2.x) ** 2 + (enemy.y - self.player2.y) ** 2 \
-                    if (self.player2 and not getattr(self.player2, 'downed', False)) else 1e18
+                    if not _p2_free else 1e18
                 if d2 < d1:
                     target_x, target_y, target_obj = self.player2.x, self.player2.y, self.player2
                 else:
@@ -1790,10 +1810,19 @@ class PlayingMixin:
                     self.grenades.remove(grenade)
 
         # 更新经验球
+        # v2.1.3：同屏双人经验球按距离磁吸到最近玩家，P1/P2 均可吸经验
+        # （此前只吸 self.player，P2 永远吃不到经验）
         for orb in self.exp_orbs[:]:
-            orb.update(dt, self.player.x, self.player.y, self.player.pickup_range)
-            if math.hypot(orb.x - self.player.x, orb.y - self.player.y) < 20:
-                self.player.gain_exp(orb.value)
+            _targets = [self.player]
+            if self.is_multiplayer_active() and self.player2 and getattr(self.player2, 'alive', True):
+                _targets.append(self.player2)
+            if len(_targets) > 1:
+                _best = min(_targets, key=lambda _pl: math.hypot(orb.x - _pl.x, orb.y - _pl.y))
+            else:
+                _best = _targets[0]
+            orb.update(dt, _best.x, _best.y, _best.pickup_range)
+            if math.hypot(orb.x - _best.x, orb.y - _best.y) < 20:
+                _best.gain_exp(orb.value)
                 # 记录经验收集
                 if self.session:
                     self.session.add_exp(orb.value)
@@ -1860,7 +1889,9 @@ class PlayingMixin:
         if self.player2:
             if self.camera2:
                 self.camera2.follow(self.player2.x, self.player2.y, dt)
-            self._update_player2(dt)
+            # v2.1.3：P2 升级选卡时暂停 P2 游戏进程（怪物已脱锁，选卡完成后恢复）
+            if not (self.is_multiplayer_active() and getattr(self, '_upgrade_pause_player', None) == "P2"):
+                self._update_player2(dt)
 
         if self.is_multiplayer_active():
             # 双人/联机：救援系统——全部倒地才游戏结束

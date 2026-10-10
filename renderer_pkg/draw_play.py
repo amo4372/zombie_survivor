@@ -20,37 +20,26 @@ class PlayMixin:
             return
         if self.game.is_multiplayer_active():
             self._draw_playing_split()
+            # v2.1.3：同屏双人 per-player 升级选卡弹窗（半屏 region，不阻塞另一玩家画面）
+            if getattr(self.game, '_upgrade_pause_player', None) and self.game.skill_card_selector.visible:
+                self.game.skill_card_selector.draw(self.screen, self.game.font, self.game.font_large, self.game.scale)
             return
         self._draw_playing_core(self.game.player, self.game.camera)
         self._draw_hud()
 
     def _draw_playing_split(self):
-        """同屏双人：左右分屏，各玩家一个视口"""
-        orig_screen = self.screen
-        sw = self.game.scaled_width
-        sh = self.game.scaled_height
-        half = sw // 2
-        pairs = [(self.game.player, self.game.camera, "P1"), (self.game.player2, self.game.camera2, "P2")]
-        for idx, (player, camera, label) in enumerate(pairs):
-            if player is None or camera is None:
-                continue
-            rect = pygame.Rect(idx * half, 0, half, sh)
-            self.screen = orig_screen.subsurface(rect)
-            self._draw_playing_core(player, camera)
-            self.screen = orig_screen
-            # P2 键控技能 U 长按预瞄（右半屏；照 P1 G 键模板）
-            if idx == 1 and self.game.config.control_mode == ControlMode.KEYBOARD:
-                c2 = self.game.p2_controls
-                if c2 and c2["skill_caster"].is_aiming:
-                    c2["skill_caster"]._draw_aim_preview(self.screen, self.game.p2_selected_skill or SkillType.GRENADE, self.game.scale)
-            # 分屏 HUD
-            self._draw_hud_split(player, label, rect)
-        # 中线与标签
-        pygame.draw.line(orig_screen, (120, 90, 140), (half, 0), (half, sh), max(2, int(2 * self.game.scale)))
-        for idx, label in enumerate(["P1", "P2"]):
-            tag = self.game.font_small.render(label, True, GOLD)
-            orig_screen.blit(tag, (idx * half + 8, 6))
-        self.screen = orig_screen
+        """同屏双人：左右分屏，各玩家一个视口（v2.1.3 结构化：编排下沉到
+        renderer_pkg/draw_multiplayer.py 数据驱动视口模型，N 人同屏扩展点）"""
+        from renderer_pkg.draw_multiplayer import build_split_viewports, render_split_viewports
+        viewports = build_split_viewports(self.game)
+        if not viewports:
+            return
+        render_split_viewports(self, self.game, viewports)
+        # P2 键控技能 U 长按预瞄（右半屏；照 P1 G 键模板）——分屏特有交互，保留在原渲染器
+        if len(viewports) > 1 and self.game.config.control_mode == ControlMode.KEYBOARD:
+            c2 = self.game.p2_controls
+            if c2 and c2["skill_caster"].is_aiming:
+                c2["skill_caster"]._draw_aim_preview(self.screen, self.game.p2_selected_skill or SkillType.GRENADE, self.game.scale)
 
     def _draw_hud_split(self, player, label, rect):
         """双人分屏 HUD：完整迷你HUD（血条/经验/武器弹药/技能/时间/得分/键位提示/倒地救援/触控控件）"""
@@ -205,6 +194,10 @@ class PlayMixin:
         else:
             c2 = g.p2_controls
             pl = g.player2
+            # v2.1.3：P2 控件 base_x 为右半屏全屏坐标（_setup_multiplayer_controls 已 +half），
+            # _draw_hud_split 在全屏 screen 上绘制，坐标直接使用，无需额外平移；
+            # 跨屏串染根因是 _draw_playing_core 在分屏时也画全屏控件（已在 core 加多人守卫），
+            # 双人控件全屏只此一份，杜绝"P1 按钮在 P2 侧重合"
             c2["joystick"].draw(self.screen, scale)
             c2["aim"].draw(self.screen, fs, scale)
             sb = c2.get("shoot")
@@ -235,7 +228,7 @@ class PlayMixin:
                 self.screen.blit(_bb, (int(_bx + _br - _bt.get_width() - 4), int(_by - _br + 2)))
                 self.screen.blit(_bt, (int(_bx + _br - _bt.get_width()), int(_by - _br + 4)))
 
-    def _draw_playing_core(self, player, camera):
+    def _draw_playing_core(self, player, camera, viewport_x=0):
         if not self.game.world or not player:
             return
 
@@ -494,16 +487,18 @@ class PlayMixin:
         self._draw_muzzle_flash()
 
         # 动态光照层（在世界/实体之后，HUD之前）
-        if hasattr(self.game, 'lighting') and self.game.state == GameState.PLAYING:
+        if hasattr(self.game, 'lighting') and self.game.state == GameState.PLAYING and self.game.lighting is not None:
             self.game.lighting.render(
                 self.screen, camera.x, camera.y, self.game.scale,
                 player=player,
                 enemies=self.game.enemies,
                 projectiles=getattr(self.game, 'projectiles', []),
+                viewport_x=viewport_x,
             )
 
-        # 绘制触控控件
-        if self.game.config.control_mode == ControlMode.TOUCH or self.game.is_android:
+        # 绘制触控控件（v2.1.3 修复：同屏双人分屏由 _draw_hud_split/_draw_touch_controls_split
+        # 按各自半屏绘制，此处只画单机全屏控件，避免 P1 控件串染进 P2 半屏造成按钮重合）
+        if not self.game.is_multiplayer_active() and (self.game.config.control_mode == ControlMode.TOUCH or self.game.is_android):
             self.game.joystick.draw(self.screen, scale)
 
             if hasattr(self.game, 'aim_button') and self.game.aim_button:
@@ -1189,14 +1184,19 @@ class PlayMixin:
                     self.game.camera.shake_intensity = max(self.game.camera.shake_intensity, 2)
 
         # === 4. 屏幕暗角（预渲染缓存：按 trauma 10 级分桶，不每帧新建全屏 Surface）===
+        # v2.1.3 修复：vignette 仅在缓存未命中分支内定义，缓存命中时引用未定义变量
+        # 触发 UnboundLocalError（用户报的"v 开头变量 + U 开头错误"，draw_play 1198 行）
         if effective_trauma > 0.5:
             vig_key = (int(effective_trauma * 10), sw, sh)
             if not hasattr(self, '_vig_cache') or self._vig_cache[0] != vig_key:
                 vignette = pygame.Surface((sw, sh), pygame.SRCALPHA)
-            for r in range(int(min(sw, sh) // 2), int(min(sw, sh) // 2 * 0.3), -10):
-                a = int((effective_trauma - 0.5) * 2 * 30 * (1 - r / (min(sw, sh) // 2)))
-                pygame.draw.rect(vignette, (0, 0, 0, a), (0, 0, sw, sh), border_radius=r)
-            self._vig_cache = (vig_key, vignette)
+                for r in range(int(min(sw, sh) // 2), int(min(sw, sh) // 2 * 0.3), -10):
+                    a = int((effective_trauma - 0.5) * 2 * 30 * (1 - r / (min(sw, sh) // 2)))
+                    pygame.draw.rect(vignette, (0, 0, 0, a), (0, 0, sw, sh), border_radius=r)
+                self._vig_cache = (vig_key, vignette)
+            else:
+                # 缓存命中：直接复用已渲染暗角，避免未定义引用
+                vignette = self._vig_cache[1]
             self.game.screen.blit(vignette, (0, 0))
 
     def _draw_lifesteal_effect(self):
