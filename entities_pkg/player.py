@@ -315,7 +315,7 @@ class Player:
                 del self.active_skills[skill_type]
 
         if self.riot_gear.equipped or self.riot_gear.riot_gear_cd_timer > 0 or self.riot_gear.grapple_active or self.riot_gear.grapple_cooldown > 0:
-            self.riot_gear.update(dt, self.x, self.y, self.facing_angle, self.speed_mult, cd_reduction_mult=self.cooldown_mult)
+            self.riot_gear.update(dt, self.x, self.y, self.facing_angle, self.speed_mult, cd_reduction_mult=self.cooldown_mult, player=self)
 
         if self.riot_gear_cooldown > 0:
             self.riot_gear_cooldown -= dt

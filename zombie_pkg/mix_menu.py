@@ -207,6 +207,10 @@ class MenuMixin:
                     return
                 try:
                     import updater as _up
+                    # v2.2.5：点过"稍后"→ 整个程序生命周期不再弹版本更新
+                    if _up.UPDATE_STATE.get("notice_dismissed"):
+                        self.update_notice_dismissed = True
+                        return
                     _up.clear_release_notes_cache()
                     result = _up.check_for_updates(timeout=8)
                     if result:
@@ -222,9 +226,14 @@ class MenuMixin:
         t.start()
 
     def _dismiss_update_notice(self):
-        """用户点『稍后』：本次运行不再弹窗"""
+        """用户点『稍后』：整个程序生命周期内忽略版本更新（持久化到 updater 全局，返回菜单/重进不再弹）"""
         self.update_notice_dismissed = True
         self.update_notice = None
+        try:
+            import updater as _up
+            _up.UPDATE_STATE["notice_dismissed"] = True
+        except Exception:
+            pass
 
     def _apply_update_now(self):
         """用户点『立即更新』：进入更新界面并自动开始下载应用"""

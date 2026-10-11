@@ -95,10 +95,8 @@ mod_loader.mod_hooks._global_classes = {
 }
 
 class Config:
-    # ===== v2.0.13 RL 研究原型接入开关（默认关闭，不影响原玩法） =====
-    AI_MODE = "auto"             # "auto" 自动检查（有模型→RL；无→原AI）/ "off" 强制原AI / "rl" 强制RL（缺模型回退）
+    # ===== v2.2.5：RL 已完全移除，AI 由 ai_pkg 决策树硬编程接管 =====
     MAP_FILE = ""                # .zmap 二进制大地图（空=默认随机地图；如 rl/maps/demo.zmap）
-    RL_MODEL_PATH = "rl/models/zombie_policy.onnx"
 
     def __init__(self):
         self.control_mode = ControlMode.KEYBOARD
@@ -289,10 +287,9 @@ class GameCore:
 
         self.rune_manager = RuneManager()  # 符文系统（修复：此前从未初始化导致不生效）
         self.enemies = []
-        # v2.2.4：完全更换 RL 强化学习为无训练硬编程决策树 AI（ai_pkg）
+        # v2.2.5：完全移除 RL，统一由无训练硬编程决策树 AI（ai_pkg）接管
         # 决策树 AI 恒可用（无需模型/无需训练），异常时 enemy 自动回退原生规则 AI
         self.ai_controller = None
-        self.rl_ai = None  # 保留字段名兼容旧引用，但不再加载任何模型
         try:
             from ai_pkg import ZombieTreeAI
             self.ai_controller = ZombieTreeAI()
@@ -404,7 +401,11 @@ class GameCore:
         self._DEV_PASSWORD = "dev4372"   # 开发者密码
         self.update_status_text = ""     # 主菜单提示文本
         self.update_notice = None        # 自动检查发现的新版本弹窗 (latest_version, changelog)
-        self.update_notice_dismissed = False  # 用户已点"稍后"
+        # v2.2.5：点"稍后"后整个程序生命周期忽略版本更新（读 updater 全局持久标记）
+        try:
+            self.update_notice_dismissed = bool(updater.UPDATE_STATE.get("notice_dismissed", False))
+        except Exception:
+            self.update_notice_dismissed = False
         self.asset_issues = None        # 资源完整性检查结果 (missing, corrupted) 或 None
 
         #键鼠相关【新版：Tab/R只有短按；G支持短按快放 / 长按瞄准】
@@ -966,13 +967,7 @@ class GameCore:
                 dt *= 0.3
 
         if self.state == GameState.PLAYING:
-            # v2.0.17：RL 批处理推理（每帧一次矩阵前向 + argmax 确定性，替代逐怪即时推理防卡顿/随机游走）
-            if getattr(self, "rl_ai", None) is not None and getattr(self.rl_ai, "ready", False):
-                try:
-                    _ps = [self.player] + ([self.player2] if getattr(self, "player2", None) else [])
-                    self.rl_ai.flush_batch(world=self, enemies=self.enemies, players=_ps)
-                except Exception:
-                    pass
+            # v2.2.5：决策树 AI 无批处理需求（即时 decide），无模型加载
             self._update_playing(dt)
             # 主机广播世界快照给客户端
             if self.multiplayer_mode == "network" and self.net_role == "host" and self.net_started:

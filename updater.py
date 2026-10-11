@@ -43,6 +43,7 @@ UPDATE_STATE = {
     "apply_phase": "",       # 应用阶段文字（解压/写入/校验）
     "applied_count": 0,
     "pending_count": 0,      # 延迟替换文件数（被占用，重启后生效）
+    "notice_dismissed": False,  # v2.2.5：用户点过"稍后"→整个程序生命周期忽略版本更新
     "cache_reused": False,   # 是否复用了已下载的缓存包
     "error": None,
     "changelog": "",

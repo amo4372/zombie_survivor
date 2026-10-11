@@ -42,10 +42,22 @@ class ZombieTreeAI:
             nx, ny = dx / dist, dy / dist
         else:
             nx, ny = 0.0, 0.0
+        # v2.2.5 强化：稳定包抄扇区（按 id 派生，同一只怪方向恒定）+ 玩家弹幕感知
+        pid = (id(enemy) >> 4) & 7
+        pz = []
+        try:
+            if world is not None:
+                _projs = getattr(world, "projectiles", None) or []
+                for _pr in _projs:
+                    if getattr(_pr, "alive", False):
+                        pz.append(_pr)
+        except Exception:
+            pass
         return {
             "enemy": enemy, "player": player, "world": world,
             "teammates": teammates or [],
             "dist": dist, "nx": nx, "ny": ny,
+            "pid": pid, "pz": pz,
             "vx": 0.0, "vy": 0.0, "skill": 0,
             "_tree": "unknown",
         }
@@ -117,6 +129,15 @@ class ZombieTreeAI:
         ctx["vy"] = ctx["nx"] * k
 
     @staticmethod
+    def _move_flank(ctx, k=0.9):
+        """v2.2.5 包抄协同：按稳定扇区 id 向玩家侧前方包围，
+        多怪各自取不同侧向 → 分散站位、从多方向夹击，避免挤成一堆被 AOE 清场"""
+        side = 1.0 if (ctx["pid"] % 2 == 0) else -1.0
+        blend = 0.55  # 侧向占比
+        ctx["vx"] = (ctx["nx"] - ctx["ny"] * side * blend) * k
+        ctx["vy"] = (ctx["ny"] + ctx["nx"] * side * blend) * k
+
+    @staticmethod
     def _stay(ctx):
         ctx["vx"] = 0.0
         ctx["vy"] = 0.0
@@ -165,6 +186,23 @@ class ZombieTreeAI:
                     return True
         return False
 
+    def _c_dodge(self, ctx, r=150):
+        """v2.2.5 弹幕规避：玩家弹在 r 内且朝自己飞来 → 触发横向闪避"""
+        e = ctx["enemy"]
+        for pr in ctx["pz"]:
+            if not getattr(pr, "alive", True):
+                continue
+            dx = e.x - pr.x
+            dy = e.y - pr.y
+            d = math.hypot(dx, dy)
+            if d > r:
+                continue
+            # 相对速度是否逼近（弹速点积 敌人方向 > 0）
+            vdot = pr.vx * dx + pr.vy * dy
+            if vdot > 0:
+                return True
+        return False
+
     # ==================== 决策树构建（按敌人类型） ====================
     def _get_tree(self, enemy):
         tid = id(enemy)
@@ -188,24 +226,37 @@ class ZombieTreeAI:
         return tree
 
     def _build_melee_tree(self, enemy):
-        """普通僵尸：近身停止（接触伤害由碰撞判定）→ 追击"""
+        """普通僵尸：弹幕规避 → 近身停止（接触伤害由碰撞判定）→ 中距包抄围堵 → 远距追击"""
         melee_r = getattr(enemy, "size", 20) + 22
         return {
             "name": "melee",
             "root": Selector("melee", [
+                Sequence("dodge", [
+                    Condition("bullet", self._c_dodge),
+                    Action("strafe_dodge", lambda c: self._move_strafe(c, 1.0)),
+                ]),
                 Sequence("attack", [
                     Condition("near", lambda c, r=melee_r: self._c_near(c, r)),
                     Action("stand_fight", lambda c: self._stay(c)),
+                ]),
+                Sequence("flank", [
+                    Condition("mid", lambda c: 0 < c["dist"] < 170),
+                    Action("flank_in", lambda c: self._move_flank(c, 1.1)),
                 ]),
                 Action("chase", lambda c: self._move_toward(c)),
             ]),
         }
 
     def _build_ranged_tree(self, enemy):
-        """远程/投掷：保持中距开火/投掷，过近后撤，过远追击"""
+        """远程/投掷：弹幕规避 → 保持中距开火/投掷，过近后撤，过远追击"""
         r = getattr(enemy, "attack_range", 300)
         melee_r = getattr(enemy, "size", 20) + 22
         children = []
+        # v2.2.5：弹幕规避（远程僵尸最怕被玩家点射压制）
+        children.append(Sequence("dodge", [
+            Condition("bullet", self._c_dodge),
+            Action("strafe_dodge", lambda c: self._move_strafe(c, 1.0)),
+        ]))
         if getattr(enemy, "can_throw", False):
             # 投掷优先：中距投掷
             children.append(Sequence("throw", [

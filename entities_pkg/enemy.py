@@ -358,13 +358,11 @@ class Enemy:
                     self.invisible_timer = self.invisible_duration
                     self.invisible_cooldown = self.visible_duration
 
-        # 治疗僵尸逻辑
+        # 治疗僵尸逻辑（v2.2.5：此处只递减计时，不再提前重置——
+        # 原先在 <=0 时重置为 interval，导致 mix_playing 的 heal_timer<=0 判定永远不成立，治疗永不触发）
         if getattr(self, "is_healer", False):
             self.heal_timer -= dt
-            if self.heal_timer <= 0:
-                self.heal_timer = self.heal_interval
-                # 治疗周围僵尸
-                # 这个在 game.py 中处理
+            # 治疗动作由 mix_playing 执行：持续光环回血 + 间隔脉冲，触发后统一重置 heal_timer
 
         # 爆炸僵尸逻辑
         if getattr(self, "is_exploder", False):

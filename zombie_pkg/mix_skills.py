@@ -591,9 +591,22 @@ class SkillsMixin:
         return True
 
     def _skill_grapple(self):
-        """钩爪技能（独立技能，无需防爆套装）"""
+        """钩爪技能（独立技能，无需防爆套装）
+        v2.2.5：持有死神镰刀时切换为『死神钩爪』——CD 3s，长按显示锁定圈：
+        松开后圈内锁定僵尸→无视沿途直飞锁定目标；未锁定→自我拉拽+沿途旋转镰刀伤害+全程免伤"""
         self._perform_grapple()
         return True
+
+    def _is_wielding_scythe(self):
+        """判断玩家当前武器是否为死神镰刀（切换钩爪索引为死神钩爪）"""
+        try:
+            _w = self.player.get_current_weapon()
+            if _w is None:
+                return False
+            _wt = getattr(_w, "weapon_type", None)
+            return _wt is not None and getattr(_wt, "name", "") == "SCYTHE"
+        except Exception:
+            return False
 
     def _skill_time_slow(self):
         """时间减缓技能"""
@@ -1245,15 +1258,26 @@ class SkillsMixin:
             if perp_dist < search_radius + item.size and proj < target_dist:
                 target_dist = proj
 
-        # 使用钩爪
-        if target:
-            success = self.player.riot_gear.use_grapple(
-                target.x, target.y, self.player.x, self.player.y, target
-            )
+        # v2.2.5 钩爪发射决策：
+        # 1) 瞄准圈锁定的僵尸 → 无视沿途可勾取物，直飞锁定目标（沿途可造成伤害）
+        # 2) 路径上检测到敌人 → 勾取拉回
+        # 3) 未命中任何目标 → 自我拉拽（把自己拉向目标点；死神钩爪沿途旋转镰刀伤害）
+        scythe = self._is_wielding_scythe()
+        rg = self.player.riot_gear
+        locked = getattr(rg, "grapple_locked_target", None)
+        if locked is not None and getattr(locked, "alive", False) and not getattr(locked, "is_boss", False):
+            success = rg.use_grapple(locked.x, locked.y, self.player.x, self.player.y, locked, scythe=scythe)
+            _locked_name = "锁定直飞"
+        elif target:
+            success = rg.use_grapple(target.x, target.y, self.player.x, self.player.y, target, scythe=scythe)
+            _locked_name = "勾取拉回"
         else:
-            success = self.player.riot_gear.use_grapple(
-                target_x, target_y, self.player.x, self.player.y, None
-            )
+            success = rg.use_grapple(target_x, target_y, self.player.x, self.player.y, None, scythe=scythe)
+            _locked_name = "自我拉拽"
+
+        # 发射后关闭瞄准锁定态
+        rg.grapple_aiming = False
+        rg.grapple_locked_target = None
 
         if success:
             # 记录钩爪使用
@@ -1261,8 +1285,10 @@ class SkillsMixin:
                 self.session.add_grapple()
             # 播放音效
             self.assets.play_sound("grapple")
+            _txt = "死神钩爪·" + _locked_name if scythe else "钩爪·" + _locked_name
             self.floating_texts.append(FloatingText(
-                self.player.x, self.player.y - 40, "钩爪发射!", color=GREEN, lifetime=1.0
+                self.player.x, self.player.y - 40, _txt,
+                color=(200, 120, 255) if scythe else GREEN, lifetime=1.2
             ))
         return success
 

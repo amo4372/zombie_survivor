@@ -127,7 +127,7 @@ def collect_files():
 
     # v2.0.13：RL 发布规则 —— 训练工具不公开（train/zombie_env/export/inference/report/editor 均不上包）
     # 只打包：rl/maps/*.zmap（游戏端 MAP_FILE 可用）+ rl/map_format.py（map_loader 依赖）
-    # ONNX 推理模型由 create_zip 单独追加（rl/models/zombie_policy.onnx）
+    # v2.2.5：已完全移除 RL，onnx/npz 模型不再追加进发布包（无模型文件上包）
     _rl_maps = os.path.join(PROJECT_DIR, "rl", "maps")
     if os.path.isdir(_rl_maps):
         for _fn in sorted(os.listdir(_rl_maps)):
@@ -201,14 +201,8 @@ def create_zip(version, files, changelog=""):
     zip_name = f"zombie_survivor_v{version}_update.zip"
     zip_path = os.path.join(PROJECT_DIR, OUTPUT_DIR, zip_name)
 
-    # v2.0.13：ONNX 推理模型单独追加（rl/models/ 目录整体排除）
-    _onnx = os.path.join(PROJECT_DIR, "rl", "models", "zombie_policy.onnx")
-    if os.path.exists(_onnx):
-        files = files + [(_onnx, os.path.join("rl", "models", "zombie_policy.onnx"))]
-    # v2.0.15：纯 numpy 推理权重（onnxruntime 不可用时的回退，Pydroid3 零依赖可跑 RL）
-    _npz = os.path.join(PROJECT_DIR, "rl", "models", "policy_weights.npz")
-    if os.path.exists(_npz):
-        files = files + [(_npz, os.path.join("rl", "models", "policy_weights.npz"))]
+    # v2.2.5：RL 已完全移除——不再追加 onnx/npz 模型进发布包
+    # 发布包 rl/ 白名单仅保留 map_format.py + 5 张地图（训练工具绝不上发布）
 
     # 生成完整性清单（覆盖全部打包文件）
     manifest = {"version": version, "files": {}}

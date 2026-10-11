@@ -508,6 +508,16 @@ class PlayingMixin:
                     ))
             # === 单武器模式：无武器轮盘/切换（局内只有一种武器） ===
 
+            # ===== v2.2.5 钩爪瞄准锁定圈：长按瞄准期间每帧更新圈内锁定目标 =====
+            _rg_aim = self.player.riot_gear
+            if self.skill_caster.is_aiming and self.selected_skill == SkillType.GRAPPLE_PULL:
+                _rg_aim.grapple_aiming = True
+                _rg_aim.update_grapple_lock(self.player.x, self.player.y, self.enemies)
+            else:
+                _rg_aim.grapple_aiming = False
+                if not _rg_aim.grapple_active:
+                    _rg_aim.grapple_locked_target = None
+
             # 技能释放按钮 - 支持拖拽改变方向和距离
             self.skill_caster.set_player_pos(self.player.x, self.player.y, self.camera.x, self.camera.y)
             self.skill_caster.set_max_distance(self._get_skill_max_distance(self.selected_skill))
@@ -876,8 +886,6 @@ class PlayingMixin:
             # v2.2.4：决策树 AI（无训练硬编程）挂载；未挂载/异常 → 回退原规则 AI
             if getattr(self, "ai_controller", None) is not None:
                 enemy.ai_rl = self.ai_controller
-            elif getattr(self, "rl_ai", None) is not None:
-                enemy.ai_rl = self.rl_ai
             if drops_vaccine:
                 enemy.drops_vaccine = True  # 标记此Boss必爆疫苗
             self.enemies.append(enemy)
@@ -1093,8 +1101,6 @@ class PlayingMixin:
                     _e = Enemy(sx, sy, EnemyType.ZOMBIE_NORMAL, 1, self.config.difficulty)
                     if getattr(self, "ai_controller", None) is not None:
                         _e.ai_rl = self.ai_controller
-                    elif getattr(self, "rl_ai", None) is not None:
-                        _e.ai_rl = self.rl_ai
                     self.enemies.append(_e)
                 self.particles.spawn_explosion(enemy.x, enemy.y, DARK_GREEN, 24)
                 if hasattr(self, "assets"):
@@ -1163,8 +1169,6 @@ class PlayingMixin:
                     _e = Enemy(sx, sy, random.choice(_elites), 1, self.config.difficulty)
                     if getattr(self, "ai_controller", None) is not None:
                         _e.ai_rl = self.ai_controller
-                    elif getattr(self, "rl_ai", None) is not None:
-                        _e.ai_rl = self.rl_ai
                     self.enemies.append(_e)
                 self.particles.spawn_explosion(enemy.x, enemy.y, DARK_GREEN, 34)
                 self.floating_texts.append(FloatingText(enemy.x, enemy.y - 40, "召唤精英护卫!", color=(120, 255, 120), lifetime=1.5))
@@ -1513,14 +1517,24 @@ class PlayingMixin:
                                 enemy.x += push_x
                                 enemy.y += push_y
 
-            # 治疗僵尸治疗周围僵尸
-            if getattr(enemy, "is_healer", False) and enemy.heal_timer <= 0:
-                enemy.heal_timer = enemy.heal_interval
+            # 治疗僵尸治疗周围僵尸（v2.2.5：修复重置互踩 bug——enemy.update 不再提前重置，
+            # 这里触发后统一重置；并新增持续范围回血光环）
+            if getattr(enemy, "is_healer", False):
+                # 持续光环：半径内僵尸平滑回血（等效 heal_amount/秒，按帧平滑）
+                _per_sec = max(getattr(enemy, "heal_amount", 5), 1) / max(getattr(enemy, "heal_interval", 2.0), 0.5)
                 for other in self.enemies:
-                    if other is not enemy and other.alive:
+                    if other is not enemy and other.alive and other.hp < other.max_hp:
                         dist = math.hypot(other.x - enemy.x, other.y - enemy.y)
                         if dist < enemy.heal_radius:
-                            other.hp = min(other.max_hp, other.hp + enemy.heal_amount)
+                            other.hp = min(other.max_hp, other.hp + _per_sec * dt)
+                # 间隔脉冲治疗
+                if enemy.heal_timer <= 0:
+                    enemy.heal_timer = enemy.heal_interval
+                    for other in self.enemies:
+                        if other is not enemy and other.alive and other.hp < other.max_hp:
+                            dist = math.hypot(other.x - enemy.x, other.y - enemy.y)
+                            if dist < enemy.heal_radius:
+                                other.hp = min(other.max_hp, other.hp + enemy.heal_amount * 2.0)
 
             # 限制怪物在地图内
             enemy.x, enemy.y = self.world.clamp_position(enemy.x, enemy.y, enemy.size)
@@ -2079,18 +2093,93 @@ class PlayingMixin:
             target["obj"].take_damage(damage, damage_type=damage_type, attack_x=attack_x, attack_y=attack_y)
 
     def _update_grapple_collision(self):
-        """更新钩爪碰撞检测 - 敌人/道具/经验球/文本资料/宝箱全部可勾"""
-        if not self.player.riot_gear.grapple_active:
-            return
-        if self.player.riot_gear.grapple_state != "shooting":
+        """更新钩爪碰撞检测 - 敌人/道具/经验球/文本资料/宝箱全部可勾
+        v2.2.5：新增自我拉拽沿途伤害 / 锁定目标直飞 / 拉敌撞击词条"""
+        rg = self.player.riot_gear
+        if not rg.grapple_active:
             return
 
-        head_pos = self.player.riot_gear.grapple_head_pos
+        # ===== v2.2.5 自我拉拽状态：沿途伤害处理（每帧调用） =====
+        if rg.grapple_state == "self_pull":
+            _p = self.player
+            # 死神钩爪：沿途旋转挥舞镰刀造成范围伤害（间隔 ticks）+ 旋转刀光特效
+            if getattr(rg, "grapple_is_scythe", False):
+                rg.grapple_swing_timer -= self.dt if hasattr(self, "dt") else 1 / 60
+                if rg.grapple_swing_timer <= 0:
+                    rg.grapple_swing_timer = rg.grapple_swing_interval
+                    _swing_r = 85
+                    for e in self.enemies:
+                        if not e.alive:
+                            continue
+                        d = math.hypot(e.x - _p.x, e.y - _p.y)
+                        if d < _swing_r + getattr(e, "size", 20):
+                            e.take_damage(35)
+                            self.damage_numbers.append(DamageNumber(e.x, e.y, 35, color=(210, 130, 255)))
+                            # 击退
+                            if hasattr(e, "knockback_x"):
+                                _a = math.atan2(e.y - _p.y, e.x - _p.x)
+                                e.knockback_x = math.cos(_a) * 90
+                                e.knockback_y = math.sin(_a) * 90
+                    # 旋转刀光特效（环绕整圆）
+                    self.slash_arcs.append(SlashArc(
+                        _p.x, _p.y, _p.facing_angle, _swing_r, (200, 120, 255),
+                        lifetime=0.22, kind="scythe", start_radius=_swing_r * 0.6,
+                        end_angle_offset=4.8))
+            else:
+                # 普通钩爪自我拉拽：无范围伤害，仅免伤（gear 已刷新无敌）
+                pass
+            return
+
+        # ===== v2.2.5 拉敌撞击词条：被拉回敌人沿途撞击其他敌人造成伤害 =====
+        if rg.grapple_state == "pulling" and rg.grapple_target is not None \
+                and getattr(rg.grapple_target, "alive", False):
+            _gt = rg.grapple_target
+            _impact = getattr(rg, "_grapple_impact_damage", 25)
+            for e2 in self.enemies:
+                if e2 is _gt or not e2.alive:
+                    continue
+                if id(e2) in rg.grapple_pull_impact_hit:
+                    continue
+                if math.hypot(e2.x - _gt.x, e2.y - _gt.y) < getattr(e2, "size", 20) + getattr(_gt, "size", 20):
+                    rg.grapple_pull_impact_hit.add(id(e2))
+                    e2.take_damage(_impact)
+                    self.damage_numbers.append(DamageNumber(e2.x, e2.y, _impact, color=ORANGE))
+                    if hasattr(e2, "knockback_x"):
+                        _a = math.atan2(e2.y - _gt.y, e2.x - _gt.x)
+                        e2.knockback_x = math.cos(_a) * 120
+                        e2.knockback_y = math.sin(_a) * 120
+
+        if rg.grapple_state != "shooting":
+            return
+
+        head_pos = rg.grapple_head_pos
         if not head_pos:
             return
 
         grapple_skill = self.player.skill_tree.get_skill(SkillType.GRAPPLE_PULL)
         grapple_lvl = grapple_skill.current_level if grapple_skill else 1
+
+        # ===== v2.2.5 锁定目标直飞：无视沿途其他可勾取物，只检测锁定目标 =====
+        _locked = rg.grapple_target
+        if _locked is not None and getattr(_locked, "alive", False) \
+                and not getattr(_locked, "is_boss", False):
+            dist = math.hypot(_locked.x - head_pos[0], _locked.y - head_pos[1])
+            if dist < getattr(_locked, "size", 20) + 12:
+                base_dmg = 15 + grapple_lvl * 10
+                _locked.take_damage(base_dmg)
+                self.damage_numbers.append(DamageNumber(_locked.x, _locked.y, base_dmg, color=ORANGE))
+                rg._grapple_impact_damage = base_dmg
+                # 4级以上眩晕
+                if grapple_lvl >= 4:
+                    _locked.apply_buff(BuffType.STUN, duration=1.0)
+                rg.set_grapple_target(_locked)
+                rg.grapple_state = "hit"
+                rg.grapple_hit_stun_timer = rg.grapple_hit_stun_duration
+                _locked.grappled = True
+                self.floating_texts.append(FloatingText(
+                    _locked.x, _locked.y - 30, "锁定直飞!", color=(200, 120, 255), lifetime=1.0
+                ))
+                return
 
         # 检测钩爪头与敌人的碰撞
         for enemy in self.enemies:
@@ -2101,6 +2190,7 @@ class PlayingMixin:
                 # 钩爪伤害
                 base_dmg = 15 + grapple_lvl * 10
                 enemy.take_damage(base_dmg)
+                rg._grapple_impact_damage = base_dmg
                 self.damage_numbers.append(DamageNumber(enemy.x, enemy.y, base_dmg, color=ORANGE))
                 # 高等级AOE
                 if grapple_lvl >= 5:

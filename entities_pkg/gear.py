@@ -47,6 +47,20 @@ class RiotGear:
         self.grapple_hit_stun_duration = 0.6
         self.grapple_max_range = 800
         self.grapple_stamina_cost = 0
+        # ===== v2.2.5 钩爪重做（死神钩爪 / 自我拉拽 / 锁定圈） =====
+        self.grapple_is_scythe = False        # 本次发射是否为死神钩爪（持死神镰刀时）
+        self.grapple_scythe_max_cooldown = 3.0  # 死神钩爪 CD（普通 0.8）
+        self.grapple_aiming = False           # 长按瞄准中（显示预瞄线+锁定圈）
+        self.grapple_locked_target = None     # 瞄准圈锁定的僵尸（松开后直飞目标）
+        self.grapple_lock_radius = 110        # 锁定圈半径（世界单位）
+        self.self_pull_active = False         # 自我拉拽中（未命中目标 → 把自己拉向目标点）
+        self.self_pull_speed = 260            # 自我拉拽速度（世界单位/秒）
+        self.self_pull_immune = False         # 自我拉拽期间免伤标记
+        self.self_pull_start = (0, 0)         # 自我拉拽起点（世界坐标）
+        self.self_pull_end = (0, 0)           # 自我拉拽终点（世界坐标）
+        self.grapple_swing_timer = 0.0        # 死神自我拉拽沿途镰刀旋转伤害间隔
+        self.grapple_swing_interval = 0.12    # 沿途伤害间隔（秒）
+        self.grapple_pull_impact_hit = set()  # 拉敌过程中已撞击过的敌人 id（避免重复伤害）
         self.bash_auto = False
         self.bash_direction = 0
         self.bash_stamina_cost = 14
@@ -106,7 +120,7 @@ class RiotGear:
         # 卸下瞬间开启冷却
         self.riot_gear_cd_timer = self.riot_gear_base_cd * cd_reduction_mult
 
-    def update(self, dt, player_x, player_y, facing_angle, move_speed_mult=1.0, cd_reduction_mult=1.0):
+    def update(self, dt, player_x, player_y, facing_angle, move_speed_mult=1.0, cd_reduction_mult=1.0, player=None):
         self.facing_angle = facing_angle
         # 冷却计时
         if self.riot_gear_cd_timer > 0:
@@ -121,7 +135,7 @@ class RiotGear:
         if self.bash_anim_timer > 0:
             self.bash_anim_timer -= dt
 
-        self._update_grapple(dt, player_x, player_y)
+        self._update_grapple(dt, player_x, player_y, player)
 
         if self.equipped:
             self.equip_time += dt
@@ -136,8 +150,9 @@ class RiotGear:
             return 1.0 - self.debuff_speed_penalty
         return 1.0
 
-    def _update_grapple(self, dt, player_x, player_y):
-        """更新钩爪状态 - 修复秒断勾：追踪目标、稳定拉回、最小拉回时间"""
+    def _update_grapple(self, dt, player_x, player_y, player=None):
+        """更新钩爪状态 - 修复秒断勾：追踪目标、稳定拉回、最小拉回时间
+        v2.2.5：新增 self_pull（自我拉拽）状态 + 锁定目标直飞"""
         if not self.grapple_active:
             return
 
@@ -184,9 +199,12 @@ class RiotGear:
                         self.grapple_hit_stun_timer = self.grapple_hit_stun_duration
                         self._pulling_timer = 0.0  # 初始化拉回计时器
                 else:
-                    self.grapple_state = "retracting"
+                    # v2.2.5：钩爪头到达目标点但未勾中任何物体 →
+                    # 自我拉拽（把自己拉向目标点），普通/死神钩爪均适用
+                    self._begin_self_pull(player_x, player_y, player)
             elif total_dist >= self.grapple_max_range:
-                self.grapple_state = "retracting"
+                # v2.2.5：超出射程同样触发自我拉拽（拉向最远点），而非空收回
+                self._begin_self_pull(player_x, player_y, player)
 
         elif self.grapple_state == "hit":
             # 僵直阶段 - 钩爪绷紧
@@ -213,6 +231,21 @@ class RiotGear:
                 dx = player_x - self.grapple_target.x
                 dy = player_y - self.grapple_target.y
                 dist = math.hypot(dx, dy)
+
+                # v2.2.5 词条应用：被拉回的敌人沿途撞击其他敌人（造成撞击伤害）
+                # 撞击伤害=钩爪基础伤害量级（由 mix_playing 传入，默认走 buff 判定）
+                try:
+                    if hasattr(self.grapple_target, 'knockback_x'):
+                        _impact_dmg = getattr(self, '_grapple_impact_damage', 25)
+                        _impact_r = getattr(self.grapple_target, 'size', 20) + 30
+                        _gt_id = id(self.grapple_target)
+                        # 在全局敌人列表由 mix_playing 执行（gear 无 enemies 引用），
+                        # 这里只记录轨迹：mix_playing 每帧在 pulling 状态做撞击检测
+                        self._grapple_impact_damage = _impact_dmg
+                        self._grapple_impact_radius = _impact_r
+                        self._grapple_pulling_target = self.grapple_target
+                except Exception:
+                    pass
 
                 # 最小拉回时间0.2秒，确保不会秒断
                 min_pull_time = 0.2
@@ -263,6 +296,65 @@ class RiotGear:
                     self.grapple_head_pos[0] += (dx / dist) * move_dist
                     self.grapple_head_pos[1] += (dy / dist) * move_dist
 
+        elif self.grapple_state == "self_pull":
+            # ===== v2.2.5：自我拉拽——把自己拉向目标点 =====
+            # 玩家位置移动由 gear 驱动（传入 player 对象）
+            if player is None:
+                self._reset_grapple()
+                return
+            tx, ty = self.grapple_target_pos
+            dx = tx - player.x
+            dy = ty - player.y
+            dist = math.hypot(dx, dy)
+            move_dist = self.self_pull_speed * dt
+            if dist <= move_dist + 2:
+                # 到达目标点：结束自我拉拽
+                player.x, player.y = tx, ty
+                self._reset_grapple()
+            else:
+                player.x += (dx / dist) * move_dist
+                player.y += (dy / dist) * move_dist
+            # 自我拉拽期间全程免伤（刷新无敌计时；恢复后由 mix_playing 关闭）
+            if self.self_pull_immune and player is not None:
+                player.invincible_timer = max(getattr(player, "invincible_timer", 0), 0.1)
+            # 钩爪线跟随玩家
+            self.grapple_head_pos = [player.x, player.y]
+
+    def _begin_self_pull(self, player_x, player_y, player=None):
+        """进入自我拉拽状态：钩爪头到目标点后把自己拉过去。
+        普通钩爪：拉自己过程中免伤且可操控枪械/技能（无范围伤害）。
+        死神钩爪：沿途旋转挥舞镰刀造成范围伤害 + 全程免伤。"""
+        if player is None:
+            self.grapple_state = "retracting"
+            return
+        self.grapple_state = "self_pull"
+        self.self_pull_active = True
+        self.self_pull_immune = True
+        self.self_pull_start = (player_x, player_y)
+        self.self_pull_end = self.grapple_target_pos
+        self.grapple_swing_timer = 0.0
+        if player is not None:
+            player.invincible_timer = max(getattr(player, "invincible_timer", 0), 0.1)
+
+    def update_grapple_lock(self, player_x, player_y, enemies):
+        """瞄准期间更新锁定圈内的最近敌人（死神钩爪/普通钩爪通用）"""
+        if not self.grapple_aiming:
+            self.grapple_locked_target = None
+            return None
+        best = None
+        best_d = self.grapple_lock_radius
+        for e in enemies:
+            if not getattr(e, "alive", False):
+                continue
+            if getattr(e, "is_boss", False):
+                continue  # Boss 不可锁定（只能命中僵直）
+            d = math.hypot(e.x - player_x, e.y - player_y)
+            if d < best_d:
+                best_d = d
+                best = e
+        self.grapple_locked_target = best
+        return best
+
     def _reset_grapple(self):
         """重置钩爪状态"""
         self.grapple_active = False
@@ -272,6 +364,12 @@ class RiotGear:
         self.grapple_target_pos = None
         self.grapple_head_pos = None
         self.grapple_state = "idle"
+        # v2.2.5：清理自我拉拽/锁定状态
+        self.self_pull_active = False
+        self.self_pull_immune = False
+        self.grapple_locked_target = None
+        self.grapple_aiming = False
+        self.grapple_pull_impact_hit = set()
 
     def get_shield_rect(self, player_x, player_y):
         if not self.equipped:
@@ -358,8 +456,9 @@ class RiotGear:
         # 钩爪为独立技能，无需装备防爆套装
         return self.grapple_cooldown <= 0
 
-    def use_grapple(self, target_x, target_y, player_x, player_y, target=None):
-        """使用钩爪 - 新逻辑：直接发射"""
+    def use_grapple(self, target_x, target_y, player_x, player_y, target=None, scythe=False):
+        """使用钩爪 - 新逻辑：直接发射
+        v2.2.5：scythe=True 时启用死神钩爪（CD 3s，锁定直飞）"""
         if not self.can_grapple():
             return False
 
@@ -375,13 +474,15 @@ class RiotGear:
             target_y = player_y + dy
             dist = self.grapple_max_range
 
-        # 只消耗CD，不消耗体力
-        self.grapple_cooldown = self.grapple_max_cooldown
+        # 只消耗CD，不消耗体力（死神钩爪 3s / 普通 0.8s）
+        self.grapple_is_scythe = bool(scythe)
+        self.grapple_cooldown = self.grapple_scythe_max_cooldown if scythe else self.grapple_max_cooldown
         self.grapple_active = True
         self.grapple_target_pos = (target_x, target_y)
         self.grapple_head_pos = [player_x, player_y]
         self.grapple_state = "shooting"
         self.grapple_target = target
+        self.grapple_pull_impact_hit = set()
         return True
 
     def start_aim(self, angle):
@@ -420,12 +521,17 @@ class RiotGear:
         if self.grapple_active and self.grapple_head_pos:
             hx = int((self.grapple_head_pos[0] - camera_x) * scale)
             hy = int((self.grapple_head_pos[1] - camera_y) * scale)
-            # 绳索
-            pygame.draw.line(screen, (80, 80, 80), (px, py), (hx, hy), max(2, int(3 * scale)))
-            pygame.draw.line(screen, (160, 160, 160), (px, py), (hx, hy), max(1, int(1 * scale)))
+            # 绳索（自我拉拽状态画粗一点 + 发光色）
+            if self.grapple_state == "self_pull":
+                pygame.draw.line(screen, (40, 120, 60), (px, py), (hx, hy), max(2, int(4 * scale)))
+                pygame.draw.line(screen, (120, 230, 140), (px, py), (hx, hy), max(1, int(2 * scale)))
+            else:
+                pygame.draw.line(screen, (80, 80, 80), (px, py), (hx, hy), max(2, int(3 * scale)))
+                pygame.draw.line(screen, (160, 160, 160), (px, py), (hx, hy), max(1, int(1 * scale)))
             # 钩爪头
             head_size = max(4, int(8 * scale))
-            pygame.draw.circle(screen, (60, 60, 60), (hx, hy), head_size)
+            _hc = (200, 80, 90) if self.grapple_is_scythe else (60, 60, 60)
+            pygame.draw.circle(screen, _hc, (hx, hy), head_size)
             pygame.draw.circle(screen, (180, 180, 180), (hx, hy), head_size - 2)
             # 钩子三叉
             hook_len = int(6 * scale)
@@ -446,6 +552,23 @@ class RiotGear:
                     sx = hx + random.randint(-6, 6)
                     sy = hy + random.randint(-6, 6)
                     pygame.draw.circle(screen, ORANGE, (sx, sy), max(1, int(2 * scale)))
+            # 自我拉拽：目标点标记
+            if self.grapple_state == "self_pull" and self.self_pull_end:
+                ex = int((self.self_pull_end[0] - camera_x) * scale)
+                ey = int((self.self_pull_end[1] - camera_y) * scale)
+                pygame.draw.circle(screen, (120, 230, 140), (ex, ey), max(3, int(6 * scale)), max(1, int(2 * scale)))
+                pygame.draw.circle(screen, (*((120, 230, 140))[:3], 60), (ex, ey), max(5, int(10 * scale)))
+
+        # 瞄准锁定圈（长按瞄准中，圈内最近敌人将被锁定直飞）
+        if self.grapple_aiming and not self.grapple_active:
+            lr = int(self.grapple_lock_radius * scale)
+            pygame.draw.circle(screen, (60, 200, 90), (px, py), lr, max(1, int(2 * scale)))
+            pygame.draw.circle(screen, (60, 200, 90), (px, py), lr + int(4 * scale), max(1, int(1 * scale)))
+            if self.grapple_locked_target is not None and getattr(self.grapple_locked_target, "alive", False):
+                lx = int((self.grapple_locked_target.x - camera_x) * scale)
+                ly = int((self.grapple_locked_target.y - camera_y) * scale)
+                pygame.draw.circle(screen, (255, 80, 80), (lx, ly), max(4, int(10 * scale)), max(1, int(2 * scale)))
+                pygame.draw.line(screen, (255, 80, 80), (px, py), (lx, ly), max(1, int(1 * scale)))
 
         if not self.equipped:
             return

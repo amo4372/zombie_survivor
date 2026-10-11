@@ -162,10 +162,26 @@ class UiMixin:
             # v2.0.12：按钮使用设计坐标（Button 内部统一缩放，修复安卓双重缩放错位/点击无效）
             yes_btn = Button(sw // 2 // scale - 160, 360, 130, 45, "立即更新", color=GREEN)
             no_btn = Button(sw // 2 // scale + 30, 360, 130, 45, "稍后", color=GRAY)
-            if yes_btn.update(mouse_pos, mouse_pressed, self.game.touch_events, scale):
+            _yes_hit = yes_btn.update(mouse_pos, mouse_pressed, self.game.touch_events, scale)
+            _no_hit = no_btn.update(mouse_pos, mouse_pressed, self.game.touch_events, scale)
+            # v2.2.5 触控容错：Button 判定之外再做大命中矩形 fallback，杜绝点不到/无反应
+            if not _yes_hit and not _no_hit:
+                try:
+                    _yr = yes_btn.get_scaled_rect(scale).inflate(28, 28)
+                    _nr = no_btn.get_scaled_rect(scale).inflate(28, 28)
+                    for _te in self.game.touch_events:
+                        if _te["type"] == "up":
+                            _pos = _te["pos"]
+                            if _yr.collidepoint(_pos):
+                                _yes_hit = True
+                            elif _nr.collidepoint(_pos):
+                                _no_hit = True
+                except Exception:
+                    pass
+            if _yes_hit:
                 self.game.logger.info("弹窗：立即更新")
                 self.game._apply_update_now()
-            elif no_btn.update(mouse_pos, mouse_pressed, self.game.touch_events, scale):
+            elif _no_hit:
                 self.game.logger.info("弹窗：稍后")
                 self.game._dismiss_update_notice()
             yes_btn.draw(self.screen, self.game.font_large, scale)
