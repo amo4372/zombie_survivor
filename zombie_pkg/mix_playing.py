@@ -899,8 +899,8 @@ class PlayingMixin:
                     ))
             enemy.buff_damage_events = []
 
-            # 光照系统更新（同步画质设置）
-            if hasattr(self, 'lighting'):
+            # 光照系统更新（同步画质设置；lighting 可能因初始化失败为 None，防御跳过）
+            if getattr(self, 'lighting', None) is not None:
                 if self.lighting.quality != self.config.graphics_quality:
                     self.lighting.set_quality(self.config.graphics_quality)
                 self.lighting.update(dt)
@@ -914,7 +914,7 @@ class PlayingMixin:
                 self.particles.spawn_explosion(enemy.x, enemy.y, RUST, 40)
                 self.camera.shake(10, 0.5)
                 # 爆炸光源（性能模式下跳过）
-                if hasattr(self, 'lighting') and getattr(self.lighting, 'quality', 'balanced') != 'performance':
+                if getattr(self, 'lighting', None) is not None and getattr(self.lighting, 'quality', 'balanced') != 'performance':
                     self.lighting.add_light(enemy.x, enemy.y, 200, (255, 150, 50), intensity=1.0, lifetime=0.4, flicker=True)
                 for other in self.enemies[:]:
                     if other is not enemy and other.alive:
@@ -1553,7 +1553,7 @@ class PlayingMixin:
                         actual_damage = proj.damage * (self.player.crit_damage if is_crit else 1)
                         enemy.take_damage(actual_damage)
                         self._apply_rune_elemental_on_hit(enemy, actual_damage)
-                        self._vampire_heal(actual_damage)
+                        self._vampire_heal(actual_damage, sx=enemy.x, sy=enemy.y)
                         self.damage_numbers.append(DamageNumber(enemy.x, enemy.y, actual_damage, is_crit=is_crit, damage_type="ranged"))
                         self.particles.spawn(enemy.x, enemy.y, PURPLE, 5, (2, 5), (-3, 3), (0.2, 0.5))
                         if not enemy.alive:
@@ -1631,7 +1631,7 @@ class PlayingMixin:
                                     is_crit = random.random() < self.player.crit_chance
                                     actual_damage = damage * (self.player.crit_damage if is_crit else 1)
                                     e.take_damage(actual_damage)
-                                    self._vampire_heal(actual_damage)
+                                    self._vampire_heal(actual_damage, sx=e.x, sy=e.y)
                                     # 火箭筒爆炸施加燃烧
                                     if getattr(proj, 'explosive', False) and random.random() < 0.6:
                                         e.apply_buff(BuffType.BURN, duration=3.0)
@@ -1687,7 +1687,7 @@ class PlayingMixin:
                             ))
 
                     enemy.take_damage(actual_damage)
-                    self._vampire_heal(actual_damage)
+                    self._vampire_heal(actual_damage, sx=enemy.x, sy=enemy.y)
                     # 根据武器类型施加debuff
                     wtype = weapon.weapon_type
                     if wtype == WeaponType.FLAMETHROWER or getattr(weapon, 'is_flame', False):

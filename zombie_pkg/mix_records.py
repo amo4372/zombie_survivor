@@ -1056,12 +1056,33 @@ class RecordsMixin:
         except Exception:
             pass
 
-    def _vampire_heal(self, amount):
-        """吸血符文：造成伤害时按lifesteal回复生命值"""
+    def _vampire_heal(self, amount, sx=None, sy=None, player=None):
+        """吸血符文：造成伤害时按lifesteal回复生命值（v2.1.8：加血滴/绿光画面效果）"""
         try:
-            ls = getattr(self.player, 'lifesteal', 0.0)
+            p = player if player is not None else self.player
+            ls = getattr(p, 'lifesteal', 0.0)
             if ls > 0 and amount > 0:
-                self.player.heal(int(amount * ls))
+                healed = int(amount * ls)
+                if healed <= 0:
+                    return
+                p.heal(healed)
+                # 画面效果：血滴从伤害点飞向玩家 + 玩家身上绿色回光
+                if sx is None or sy is None:
+                    sx, sy = p.x, p.y
+                _ps = getattr(self, 'particles', None)
+                if _ps is not None:
+                    dx, dy = p.x - sx, p.y - sy
+                    d = math.hypot(dx, dy) or 1.0
+                    _ps.spawn_particle(sx, sy, dx / d * random.uniform(60, 120),
+                                      dy / d * random.uniform(60, 120),
+                                      (230, 40, 40), 0.4, 3)
+                    _ps.spawn_particle(sx, sy, dx / d * random.uniform(60, 120),
+                                      dy / d * random.uniform(60, 120),
+                                      (255, 90, 90), 0.5, 4)
+                    _ps.spawn_heal_particles(p.x, p.y - 10, 8)
+                _ft = getattr(self, 'floating_texts', None)
+                if _ft is not None:
+                    _ft.append(FloatingText(p.x, p.y - 28, f"+{healed}", color=(120, 255, 120), lifetime=0.8))
         except Exception:
             pass
 

@@ -103,8 +103,12 @@ class LightingSystem:
         self._init_surfaces()
         self._flashlight_angle = 0.0
         # v2.1.6/2.1.7：可选 OpenGL/OpenGL ES 光照合成后端（GLRenderer 单例，探测失败自动回退 CPU）
-        from gl_renderer import GLRenderer
-        self._gl = GLRenderer.get()
+        try:
+            from gl_renderer import GLRenderer
+            self._gl = GLRenderer.get()
+        except Exception:
+            # gl_renderer 缺失/损坏时也不阻塞游戏：纯 CPU 光照
+            self._gl = None
         self.set_quality(quality)
 
     def _init_surfaces(self):

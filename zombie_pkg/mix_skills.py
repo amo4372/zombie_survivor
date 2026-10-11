@@ -606,11 +606,37 @@ class SkillsMixin:
         return True
 
     def _skill_overload(self):
-        """超载模式技能"""
+        """超载模式技能（v2.1.8：特效加强——金色电弧+双光环+闪光+强震屏）"""
+        _sk = self.player.skill_tree.get_skill(SkillType.OVERLOAD) if self.player.skill_tree else None
+        lv = _sk.current_level if _sk is not None else 1
         self.player.damage_boost_timer = 8.0
         self.player.damage_boost_mult = 2.5
         self.particles.spawn_explosion(self.player.x, self.player.y, RED, 40)
         self.camera.shake(12, 0.5)
+        # v2.1.8 加强：金色电弧粒子 + 双扩散光环 + 全屏浮字 + 音效
+        try:
+            _cnt = 16 + lv * 2
+            for i in range(_cnt):
+                ang = math.pi * 2 * i / _cnt + random.uniform(-0.4, 0.4)
+                rr = random.uniform(20, 60)
+                self.particles.spawn_particle(
+                    self.player.x + math.cos(ang) * rr,
+                    self.player.y + math.sin(ang) * rr,
+                    math.cos(ang) * random.uniform(60, 140),
+                    math.sin(ang) * random.uniform(60, 140),
+                    (255, 200, 60) if i % 3 else (255, 240, 150), 0.6, 4)
+            if hasattr(self, 'sweep_rings'):
+                for _clr, _mr in (((255, 220, 80), 260), ((255, 160, 40), 180)):
+                    self.sweep_rings.append({
+                        "x": self.player.x, "y": self.player.y,
+                        "r": 30, "max_r": _mr, "color": _clr,
+                        "width": 7, "life": 0.55, "max_life": 0.55,
+                    })
+            self.floating_texts.append(FloatingText(
+                self.player.x, self.player.y - 60, "超载爆发!", color=(255, 220, 80), lifetime=1.4))
+            self.assets.play_sound_random(["boss_death", "explosion"])
+        except Exception:
+            pass
         return True
 
     def _skill_ice_nova(self):
@@ -724,7 +750,9 @@ class SkillsMixin:
         return False
 
     def _skill_berserk(self):
-        """狂暴技能"""
+        """狂暴技能（v2.1.8：特效加强——火焰环绕+红色光环+音效）"""
+        _sk = self.player.skill_tree.get_skill(SkillType.BERSERK) if self.player.skill_tree else None
+        lv = _sk.current_level if _sk is not None else 1
         self.player.berserk_active = True
         self.player.damage_boost_timer = 10.0
         self.player.damage_boost_mult = 2.0
@@ -734,6 +762,27 @@ class SkillsMixin:
         ))
         self.particles.spawn_explosion(self.player.x, self.player.y, RED, 35)
         self.camera.shake(10, 0.4)
+        # v2.1.8 加强：火焰环绕粒子（玩家四周一圈）+ 扩散红色光环 + 音效
+        try:
+            _cnt = 14 + lv * 3
+            for i in range(_cnt):
+                ang = math.pi * 2 * i / _cnt + random.uniform(-0.3, 0.3)
+                rr = 30.0
+                self.particles.spawn_particle(
+                    self.player.x + math.cos(ang) * rr,
+                    self.player.y + math.sin(ang) * rr,
+                    math.cos(ang) * random.uniform(40, 90),
+                    math.sin(ang) * random.uniform(40, 90),
+                    (255, 60, 40) if i % 2 else (255, 140, 40), 0.5, 4)
+            if hasattr(self, 'sweep_rings'):
+                self.sweep_rings.append({
+                    "x": self.player.x, "y": self.player.y,
+                    "r": 40, "max_r": 220, "color": (255, 60, 40),
+                    "width": 8, "life": 0.6, "max_life": 0.6,
+                })
+            self.assets.play_sound_random(["boss_death", "zombie_leap"])
+        except Exception:
+            pass
         return True
 
     def _skill_phantom_strike(self):

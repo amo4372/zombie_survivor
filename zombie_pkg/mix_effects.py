@@ -1124,10 +1124,48 @@ class EffectsMixin:
             mult = 1.0
         return max(1, int(base * mult))
 
+    def _apply_kill_cd_slash(self):
+        """v2.1.8：击杀冷却削减（P1/P2 都生效）
+        - 死亡轮回（SCYTHE_DANCE）：每击杀一个敌人，当前死亡轮回冷却缩短 1%（满级 2%）
+        - 死亡咏唱（KILL_CD_SLASH）：每击杀一个敌人，所有冷却中技能冷却缩短 1%/2%/3%
+        """
+        try:
+            _alive = getattr(self, '_alive_players', None)
+            if _alive is not None:
+                _players = _alive()
+            else:
+                _players = [self.player]
+                if getattr(self, 'player2', None) is not None:
+                    _players.append(self.player2)
+            for _p in _players:
+                if _p is None:
+                    continue
+                _st = getattr(_p, 'skill_tree', None)
+                if _st is None:
+                    continue
+                _acs = getattr(_p, 'active_skills', {})
+                _scy = _st.get_skill(SkillType.SCYTHE_DANCE)
+                if _scy is not None and _scy.current_level > 0:
+                    _cd_scy = _acs.get(SkillType.SCYTHE_DANCE, 0.0)
+                    if _cd_scy > 0:
+                        _cut = 0.01 if _scy.current_level < 5 else 0.02
+                        _acs[SkillType.SCYTHE_DANCE] = max(0.0, _cd_scy * (1.0 - _cut))
+                _kcs = _st.get_skill(SkillType.KILL_CD_SLASH)
+                if _kcs is not None and _kcs.current_level > 0:
+                    _cut = 0.01 * _kcs.current_level
+                    for _k in list(_acs.keys()):
+                        _acs[_k] = max(0.0, _acs[_k] * (1.0 - _cut))
+                    if _kcs.current_level >= 3 and getattr(_p, 'alive', False):
+                        _p.heal(int(getattr(_p, 'max_hp', 100) * 0.01))
+        except Exception:
+            pass
+
     def _on_enemy_death(self, enemy):
         if getattr(enemy, '_death_processed', False):
             return
         enemy._death_processed = True
+        # v2.1.8：击杀冷却削减
+        self._apply_kill_cd_slash()
         # 记录击杀
         # Mod 敌人死亡钩子
         try:

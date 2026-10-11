@@ -725,6 +725,7 @@ class SkillType(Enum):
     SCYTHE_DANCE = auto()      # 死神镰刀·死亡轮回 - 360°满月斩收割周围一切
     MINIGUN_OVERDRIVE = auto() # 加特林·过热倾泻 - 射速暴增+弹药无限
     RAILGUN_ANNIHILATION = auto() # 轨道炮·湮灭射线 - 超粗贯穿射线+爆炸
+    KILL_CD_SLASH = auto()     # 死亡咏唱 - 每击杀一个敌人，所有冷却中技能冷却缩短（高级技能）
 
 
 # ==================== 局外商店：武器价格（金币） ====================
