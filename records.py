@@ -877,6 +877,18 @@ class GameSession:
             self.data[key] = value
     def set_got_vaccine(self, value=True):
         self.data["got_vaccine"] = value
+    def end_session(self, victory=False):
+        """结束本局会话（v2.1.9 补：故事模式结算调用）"""
+        self.data["ended"] = True
+        self.data["end_time"] = datetime.datetime.now().isoformat()
+        if victory:
+            self.data["died"] = False
+            self.data["ending"] = "victory"
+    def to_dict(self):
+        """导出会话统计字典（供 records.on_game_end 结算）"""
+        d = dict(self.data)
+        d["time_survived"] = max(d.get("time_survived", 0), (datetime.datetime.now() - self.start_time).total_seconds())
+        return d
     def add_chat_message(self):
         self.data["chat_messages"] += 1
     def set_reconnected(self, value=True):

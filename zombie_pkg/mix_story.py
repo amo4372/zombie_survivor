@@ -463,7 +463,7 @@ class StoryMixin:
             self.state = GameState.VICTORY
             if self.session:
                 self.session.end_session(victory=True)
-                self.records.on_game_end(self.session)
+                self.records.on_game_end(self.session.to_dict())
         self.dialogue.start_dialogue(dialogues, on_complete)
         self.state = GameState.DIALOGUE
 
