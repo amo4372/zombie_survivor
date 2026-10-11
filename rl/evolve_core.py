@@ -109,14 +109,26 @@ def _run_episode(vec, ztype, ep_seed, verbose=False):
             "move": float(env.ep_move_dist), "skills": sum(env.ep_skill_use.values())}
 
 
-def evaluate_vec(vec, ztypes=("boss", "tank"), episodes=4):
-    """个体综合评估：多个类型 × 多局 → 平均奖励"""
+def evaluate_vec(vec, ztypes=("boss", "tank"), episodes=4, trim=0):
+    """个体综合评估：多个类型 × 多局 → 平均奖励。
+
+    trim>0：去掉每类型得分最低的 trim 局再平均（抗异常局方差，进化搜索更稳）。
+    """
     rs, wins, deaths, dmgs, moves, skills = [], 0, 0, [], [], []
     for zt in ztypes:
+        per_type = []
         for ep in range(episodes):
             r = _run_episode(vec, zt, ep)
+            per_type.append(r)
+        if trim > 0 and len(per_type) > trim:
+            per_type.sort(key=lambda r: r["reward"])
+            per_type = per_type[trim:]  # 丢弃最差 trim 局
+        for r in per_type:
             rs.append(r["reward"]); wins += r["win"]; deaths += r["death"]
             dmgs.append(r["dmg"]); moves.append(r["move"]); skills.append(r["skills"])
+    if not rs:
+        return {"reward": -1e18, "wins": 0, "deaths": 0,
+                "dmg": 0.0, "move": 0.0, "skills": 0.0, "n": 0}
     return {"reward": float(np.mean(rs)), "wins": wins, "deaths": deaths,
             "dmg": float(np.mean(dmgs)), "move": float(np.mean(moves)),
             "skills": float(np.mean(skills)), "n": len(rs)}
@@ -126,7 +138,7 @@ def evaluate_vec(vec, ztypes=("boss", "tank"), episodes=4):
 class Evolver:
     def __init__(self, pop_size=24, elites=6, mutate=0.15, sigma=0.08,
                  cross_prob=0.3, init_vec=None, seed=0, ztypes=("boss", "tank"),
-                 episodes=4, workers=1, verbose=True):
+                 episodes=4, workers=1, verbose=True, trim=0, stagnate=8):
         self.pop_size = pop_size
         self.elites = max(2, min(elites, pop_size // 2))
         self.mutate = mutate
@@ -134,6 +146,9 @@ class Evolver:
         self.cross_prob = cross_prob
         self.ztypes = ztypes
         self.episodes = episodes
+        self.trim = trim
+        self.stagnate = max(2, stagnate)   # 连续无改进代数 → σ 重启跳跃
+        self._stall = 0
         self.workers = max(1, workers)
         self.verbose = verbose
         self.rng = random.Random(seed)
@@ -152,7 +167,7 @@ class Evolver:
 
     # —— 评估（支持多进程） ——
     def _eval_one(self, vec):
-        return evaluate_vec(vec, self.ztypes, self.episodes)
+        return evaluate_vec(vec, self.ztypes, self.episodes, trim=self.trim)
 
     def evaluate_pop(self):
         if self.workers <= 1 or self.pop_size < 2:
@@ -167,8 +182,6 @@ class Evolver:
     # —— 变异 / 交叉 ——
     def _mutate(self, vec):
         v = vec.copy()
-        for _ in range(self.pop_size):
-            pass
         mask = self._np.rand(v.shape[0]) < self.mutate
         noise = self._np.normal(0, self.sigma, v.shape[0]).astype(np.float32)
         v[mask] += noise[mask]
@@ -184,30 +197,42 @@ class Evolver:
         return c
 
     def step(self):
-        """一代：评估 → 选精英 → 生成子代"""
+        """一代：评估 → 选精英 → 生成子代（真 1/5 成功规则 + 停滞重启）"""
         scores = self.evaluate_pop()
         pairs = sorted(zip(scores, self.pop), key=lambda x: -x[0]["reward"])
         gen_best = pairs[0]
+        prev_best = self.best_reward
         # 记录
         mean_r = float(np.mean([s["reward"] for s, _ in pairs]))
-        self.history.append({"gen": self.gen, "best": gen_best[0]["reward"],
-                             "mean": mean_r, "sigma": self.sigma,
-                             "wins": gen_best[0]["wins"],
-                             "deaths": gen_best[0]["deaths"],
-                             "dmg": gen_best[0]["dmg"], "skills": gen_best[0]["skills"]})
+        # 真 1/5 成功规则：本代中严格优于上代最优的个体占比（精英自身拷贝不算）
+        better = sum(1 for s, _ in pairs if s["reward"] > prev_best)
+        imp_rate = better / max(1, len(pairs))
         # 最优跟踪
         improved = False
         if gen_best[0]["reward"] > self.best_reward:
             self.best_reward = gen_best[0]["reward"]
             self.best_vec = gen_best[1].copy()
             improved = True
-        # 1/5 成功规则：本代改进率 → σ 自适应
-        imp_rate = (1.0 if improved else 0.0)
-        if improved:
-            self.sigma *= 1.06
+        # σ 自适应（经典 1/5：成功率高于 20% → 加大步长，低于 → 缩小）
+        if imp_rate > 0.2:
+            self.sigma *= 1.12
         else:
-            self.sigma *= 0.97
+            self.sigma *= 0.92
+        # 停滞重启：连续 stagnate 代无改进 → σ 跳增跳出局部最优（最优个体永保留）
+        if improved:
+            self._stall = 0
+        else:
+            self._stall += 1
+            if self._stall >= self.stagnate:
+                self.sigma = max(self.sigma * 3.0, 0.02)
+                self._stall = 0
         self.sigma = float(np.clip(self.sigma, 1e-4, 1.0))
+        self.history.append({"gen": self.gen, "best": gen_best[0]["reward"],
+                             "mean": mean_r, "sigma": self.sigma,
+                             "imp_rate": imp_rate,
+                             "wins": gen_best[0]["wins"],
+                             "deaths": gen_best[0]["deaths"],
+                             "dmg": gen_best[0]["dmg"], "skills": gen_best[0]["skills"]})
         # 选择父代：精英 + 锦标赛
         elites = [v.copy() for _, v in pairs[:self.elites]]
         parents = elites + [pairs[self.rng.randrange(self.pop_size)][1].copy()
@@ -272,6 +297,10 @@ def add_common_args(p):
     p.add_argument("--target-reward", type=float, default=None, help="达标自动停止")
     p.add_argument("--timeout-min", type=float, default=None, help="超时自动停止(分钟)")
     p.add_argument("--seed", type=int, default=0, help="随机种子")
+    p.add_argument("--trim", type=int, default=1,
+                   help="评估抗噪：每类型丢弃最低的 N 局再平均（默认 1，0=不丢弃）")
+    p.add_argument("--stagnate", type=int, default=8,
+                   help="连续无改进代数 → σ 重启跳跃（默认 8）")
     p.add_argument("--eval-only", action="store_true", help="只评估给定权重生成报告")
     p.add_argument("--export", type=str, default="rl/models/best_evolved.npz", help="最优个体输出 npz 路径")
     p.add_argument("--log-every-sec", type=float, default=2.0, help="进度刷新间隔(秒)")

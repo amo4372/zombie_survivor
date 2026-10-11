@@ -11,6 +11,45 @@ from buff import BuffType
 from codex import codex_unlock_manager
 from weapons import Weapon
 
+def _gl_postprocess(game, screen, state):
+    """v2.1.7：GLSL 后处理链（锐化/饱和度/低血量红屏）——GL 可用时在 flip 前执行。
+
+    只在局内（PLAYING/DIALOGUE/PAUSED 等仍在播放画面的状态）生效，
+    避免菜单/UI 被调色。任何异常静默回退（screen 原样 flip）。
+    """
+    try:
+        from gl_renderer import GLRenderer
+        gl = GLRenderer.get()
+        if not gl.available:
+            return
+        if state not in (GameState.PLAYING, GameState.PAUSED, GameState.DIALOGUE,
+                         GameState.SKILL_SELECT, GameState.GAME_OVER,
+                         GameState.VICTORY, GameState.ENDING):
+            return
+        # 低血量红屏强度：存活玩家平均血量比例（双人取平均）
+        hurt = 0.0
+        _pls = [game.player]
+        _p2 = getattr(game, 'player2', None)
+        if _p2 is not None:
+            _pls.append(_p2)
+        _ratios = []
+        for _p in _pls:
+            if _p is not None and getattr(_p, 'max_hp', 0) > 0:
+                _ratios.append(max(0.0, _p.hp / _p.max_hp))
+        if _ratios:
+            hurt = (1.0 - sum(_ratios) / len(_ratios)) * 0.9
+        # 画质档：quality 全开锐化+饱和度；balanced 轻锐化；performance 仅红屏（保性能）
+        _q = getattr(game, 'lighting', None)
+        _qname = _q.quality if _q is not None else 'balanced'
+        _sharpen = _qname == 'quality'
+        _sat = 1.10 if _qname == 'quality' else (1.04 if _qname == 'balanced' else 1.0)
+        out = gl.postprocess(screen, hurt=hurt, flash=0.0,
+                             sharpen=_sharpen, sat=_sat, bright=0.0)
+        if out is not None:
+            screen.blit(out, (0, 0))
+    except Exception:
+        pass
+
 class RenderCore:
 
     def __init__(self, screen, game):
@@ -104,6 +143,9 @@ class RenderCore:
         elif state == GameState.RUNE_VIEW:
             self._draw_playing()
             self._draw_rune_view()
+
+        # v2.1.7：GLSL 后处理（GL 可用时；不可用/异常静默跳过，pygame 原生渲染完整保留）
+        _gl_postprocess(self.game, self.screen, state)
 
         pygame.display.flip()
 

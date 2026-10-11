@@ -84,9 +84,10 @@ def main():
     start_vec, src = load_start_vec(args)
     ev = Evolver(pop_size=args.population, elites=args.elites, mutate=args.mutate,
                  sigma=args.sigma, cross_prob=args.cross_prob, init_vec=start_vec,
-                 seed=args.seed, ztypes=ztypes, episodes=args.episodes, workers=args.workers)
+                 seed=args.seed, ztypes=ztypes, episodes=args.episodes, workers=args.workers,
+                 trim=getattr(args, "trim", 1), stagnate=getattr(args, "stagnate", 8))
     print(f"[EVO] 进化训练启动 | 种群 {args.population} | 精英 {args.elites} | σ {args.sigma} | "
-          f"类型 {ztypes} | 起点: {src} | 设备 {device} | 并行 {args.workers}")
+          f"类型 {ztypes} | 起点: {src} | 设备 {device} | 并行 {args.workers} | 抗噪trim {getattr(args, 'trim', 1)}")
     os.makedirs(os.path.dirname(args.export), exist_ok=True)
     prog = Progress(args.log_every_sec)
     t0 = time.time()

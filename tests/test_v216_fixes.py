@@ -9,7 +9,8 @@ sys.path.insert(0, "/home/user/zombie_survivor")
 
 import pygame
 pygame.init()
-from lighting import LightingSystem, _GLightBackend
+from lighting import LightingSystem
+from gl_renderer import GLRenderer
 from entities_pkg.player import Player
 
 ok = 0
@@ -150,10 +151,10 @@ ls2._dark_surface.blit(ls2._light_surface, (0, 0), special_flags=pygame.BLEND_RG
 check("单人旧参数调用正常", ls2._dark_surface.get_at((320, 180)).a < ls2.ambient_darkness - 20, "")
 
 # ========== 5. OpenGL 后端自动探测与 CPU 回退 ==========
-gl = _GLightBackend()
+gl = GLRenderer.get()
 check("moderngl 缺失时 GPU 后端禁用（available=False）", gl.available is False, f"avail={gl.available}")
 ls3 = LightingSystem(640, 360, "quality")
-# 无 moderngl → self._gl 探测失败；render 必须走 CPU 且正常出暗层
+# 无 moderngl → 探测失败；render 必须走 CPU 且正常出暗层
 ls3.render(scr, 0, 0, 1.0, player=p1)
 ls3._dark_surface.fill((0, 0, 0, ls3.ambient_darkness))
 ls3._dark_surface.blit(ls3._light_surface, (0, 0), special_flags=pygame.BLEND_RGBA_SUB)
@@ -171,6 +172,45 @@ try:
     check("GPU 异常永久回退 CPU（渲染成功）", True, "")
 except Exception as e:
     check("GPU 异常永久回退 CPU（渲染成功）", False, str(e))
+
+# ========== 6. GLRenderer 后处理 API（无 moderngl → 返回 None，不崩溃）==========
+scr2 = pygame.Surface((320, 180), pygame.SRCALPHA)
+scr2.fill((120, 120, 120, 255))
+out_c = gl.composite(scr2, 150, True, 320, 180)
+check("GLRenderer.composite 不可用时返回 None", out_c is None, "")
+out_p = gl.postprocess(scr2, hurt=0.5, flash=0.2, sharpen=True, sat=1.1)
+check("GLRenderer.postprocess 不可用时返回 None", out_p is None, "")
+# 模拟 moderngl 可用：monkeypatch 后 postprocess 走 GL 逻辑但异常 → 返回 None（静默回退）
+class FakeModernglCtx:
+    def __init__(self):
+        self._texs = []
+    def program(self, **k):
+        class P:
+            def __getitem__(self, n): return type("U", (), {"value": 0})()
+            def __setitem__(self, n, v): pass
+        return P()
+    def buffer(self, data): return object()
+    def vertex_array(self, *a): return type("VA", (), {"render": lambda self, p: None})()
+    def texture(self, size, comps):
+        t = type("T", (), {"size": size, "filter": None, "write": lambda self, d: None, "use": lambda self, n: None, "release": lambda self: None})()
+        return t
+    def framebuffer(self, **k):
+        class F:
+            def use(self): pass
+            def read(self, components=4): return b"\x00" * (320 * 180 * 4)
+        return F()
+import sys
+sys.modules["moderngl"] = type("moderngl", (), {
+    "create_standalone_context": staticmethod(lambda: FakeModernglCtx()),
+    "TRIANGLE_STRIP": 5,
+})()
+try:
+    gl2 = GLRenderer()
+    check("模拟 moderngl 可用时 GLRenderer.available=True", gl2.available is True, f"avail={gl2.available}")
+    out2 = gl2.postprocess(scr2, hurt=0.3, flash=0.1)
+    check("模拟 GL 后处理返回表面", out2 is not None and out2.get_size() == (320, 180), f"out={out2}")
+finally:
+    del sys.modules["moderngl"]
 
 print(f"\n共 {ok} 项断言全绿" if ok >= 20 else f"\n仅 {ok}/20 通过")
 sys.exit(0 if ok >= 20 else 1)
