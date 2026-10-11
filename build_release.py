@@ -42,6 +42,7 @@ ESSENTIAL_DIRS = [
     "renderer_pkg",    # v2.0.9：渲染系统包（由 renderer.py 拆分）
     "ui_pkg",          # v2.0.11：UI 组件包（由 ui.py 拆分）
     "entities_pkg",    # v2.0.11：实体包（由 entities.py 拆分）
+    "ai_pkg",          # v2.2.4：无训练硬编程 AI 抽象模块（决策树僵尸 AI）
     # 注意：rl/ 不进 ESSENTIAL_DIRS —— 训练工具不公开，只白名单打包
     # 地图 .zmap + map_format.py（游戏端依赖）+ ONNX 模型（create_zip 单独追加）
 ]
@@ -177,7 +178,7 @@ def add_pkg_compat(files_to_pack):
     compat_tmp = tempfile.NamedTemporaryFile('wb', suffix='.zip', delete=False)
     compat_tmp.close()
     with zipfile.ZipFile(compat_tmp.name, 'w', zipfile.ZIP_DEFLATED) as zf:
-        for d in ("zombie_pkg", "renderer_pkg", "ui_pkg", "entities_pkg"):
+        for d in ("zombie_pkg", "renderer_pkg", "ui_pkg", "entities_pkg", "ai_pkg"):
             dpath = os.path.join(PROJECT_DIR, d)
             if not os.path.isdir(dpath):
                 continue
