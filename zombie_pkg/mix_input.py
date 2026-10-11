@@ -725,6 +725,7 @@ class InputMixin:
             Button(0, 0, 150, 36, "+5000金币", color=(200, 170, 60)),
             Button(0, 0, 150, 36, "+5000经验", color=(90, 160, 200)),
             Button(0, 0, 150, 36, "满血满弹", color=(60, 200, 120)),
+            Button(0, 0, 150, 36, "直接下一章", color=(200, 120, 60)),
             Button(0, 0, 150, 36, "关闭面板", color=(130, 60, 60)),
         ]
 
@@ -792,6 +793,16 @@ class InputMixin:
                     w.current_ammo = w.max_ammo
             self.floating_texts.append(FloatingText(self.player.x, self.player.y - 40, "已回复满", color=(60, 220, 120), lifetime=1.5))
         elif idx == 9:
+            # v2.1.6：开发者"直接下一章"——仅故事模式生效，其余模式提示
+            if self.config.game_mode == GameMode.STORY:
+                try:
+                    self._advance_to_next_map()
+                except Exception as _e:
+                    logger.warning(f"下一章失败: {_e}")
+            else:
+                self.floating_texts.append(FloatingText(
+                    self.player.x, self.player.y - 40, "仅故事模式可用", color=(200, 200, 210), lifetime=1.5))
+        elif idx == 10:
             self.dev_panel_open = False
 
     def _handle_keydown(self, key):

@@ -654,25 +654,32 @@ class StoryMixin:
                     if self.session:
                         self.session.set_ending(self.ending_type)
                     logger.info(f"对话结局: {self.ending_type}")
-                elif et == "heal" and self.player:
+                elif et == "heal":
                     amt = int(val)
-                    self.player.heal(amt)
-                    self.floating_texts.append(FloatingText(
-                        self.player.x, self.player.y - 50, f"+{amt} 生命", color=(80, 255, 120), lifetime=2.0))
+                    # v2.1.6：对话奖励全体生效（同屏双人两名玩家同时受益，浮字各自显示）
+                    for _pl in self._alive_players():
+                        _pl.heal(amt)
+                        self.floating_texts.append(FloatingText(
+                            _pl.x, _pl.y - 50, f"+{amt} 生命", color=(80, 255, 120), lifetime=2.0))
                     self.assets.play_sound("pickup")
                 elif et == "coin" and self.records:
                     amt = int(val)
                     self.records.add_coins(amt)
-                    self.floating_texts.append(FloatingText(
-                        self.player.x, self.player.y - 50,
-                        f"+{amt} 金币" if amt >= 0 else f"{amt} 金币", color=GOLD, lifetime=2.0))
+                    # 金币进共享账户，浮字让每名存活玩家都看到
+                    for _pl in self._alive_players():
+                        self.floating_texts.append(FloatingText(
+                            _pl.x, _pl.y - 50,
+                            f"+{amt} 金币" if amt >= 0 else f"{amt} 金币", color=GOLD, lifetime=2.0))
                     self.assets.play_sound("coin")
                 elif et == "info":
                     msg = str(val)
-                    self.floating_texts.append(FloatingText(
-                        self.player.x, self.player.y - 60, msg, color=CYAN, lifetime=3.5))
-                elif et == "buff" and self.player:
-                    self.player.apply_buff(str(val), effect.get("duration", 10.0))
+                    for _pl in self._alive_players():
+                        self.floating_texts.append(FloatingText(
+                            _pl.x, _pl.y - 60, msg, color=CYAN, lifetime=3.5))
+                elif et == "buff":
+                    # v2.1.6：对话 buff 全体生效
+                    for _pl in self._alive_players():
+                        _pl.apply_buff(str(val), effect.get("duration", 10.0))
             except Exception as e:
                 logger.warning(f"对话效果应用失败: {e}")
 

@@ -102,6 +102,8 @@ class LightingSystem:
         self._render_scale = 1  # 降采样系数（性能优化：小表面渲染后放大）
         self._init_surfaces()
         self._flashlight_angle = 0.0
+        # v2.1.6：可选 OpenGL/OpenGL ES 光照合成后端（探测失败自动回退 CPU）
+        self._gl = _GLightBackend()
         self.set_quality(quality)
 
     def _init_surfaces(self):
@@ -206,18 +208,20 @@ class LightingSystem:
         """设置手电筒朝向（弧度）"""
         self._flashlight_angle = angle
 
-    def render(self, screen, camera_x, camera_y, scale, player=None, enemies=None, projectiles=None, particles=None, viewport_x=0):
+    def render(self, screen, camera_x, camera_y, scale, player=None, enemies=None, projectiles=None, particles=None, viewport_x=0, players=None):
         """渲染光照层到屏幕
 
         Args:
             screen: 目标屏幕
             camera_x, camera_y: 摄像机世界坐标
             scale: 缩放比例
-            player: 玩家对象（提供恒定光源）
+            player: 玩家对象（提供恒定光源，单人或兼容旧调用）
             enemies: 敌人列表（燃烧的敌人提供光源）
             projectiles: 投射物列表（提供尾迹光）
             particles: 粒子系统（爆炸提供光源）
             viewport_x: 视口屏幕偏移（分屏：P2 传 half，画进右半屏 subsurface）
+            players: 玩家对象列表（v2.1.6 多人模式：全部玩家光源同时生效；
+                     传此参数时忽略 player，每个存活玩家的恒定光源+手电筒都渲染）
         """
         if not self.enabled:
             return
@@ -238,10 +242,13 @@ class LightingSystem:
             """屏幕外光源裁剪：降采样坐标系下是否与视口相交"""
             return -r - 4 <= sx <= lw + r + 4 and -r - 4 <= sy <= lh + r + 4
 
-        # 1. 玩家恒定光源
-        if player:
-            px = int((player.x - camera_x) * scale / rs) - (viewport_x // rs)
-            py = int((player.y - camera_y) * scale / rs)
+        # 1. 玩家恒定光源（v2.1.6 支持多人：players 列表全部生效；兼容旧 player 单参数）
+        _pls = players if players else ([player] if player else [])
+        for _pl in _pls:
+            if not getattr(_pl, 'alive', True) or getattr(_pl, 'downed', False):
+                continue
+            px = int((_pl.x - camera_x) * scale / rs) - (viewport_x // rs)
+            py = int((_pl.y - camera_y) * scale / rs)
             player_radius = max(8, int(getattr(self, 'player_light_radius', 280) * scale / rs))
             player_intensity = getattr(self, 'player_light_intensity', 1.3)
             if _in_view(px, py, player_radius):
@@ -256,9 +263,9 @@ class LightingSystem:
                     gradient.blit(boost, (0, 0), special_flags=pygame.BLEND_RGBA_ADD)
                 self._light_surface.blit(gradient, (px - player_radius, py - player_radius),
                                           special_flags=pygame.BLEND_RGBA_ADD)
-            # 手电筒：玩家朝向的锥形光源
-            if getattr(self, 'flashlight_enabled', False) and hasattr(self, '_flashlight_angle'):
-                flash_angle = self._flashlight_angle
+            # 手电筒：玩家朝向的锥形光源（v2.1.6 取玩家自身朝向；旧版用全局角度兜底）
+            if getattr(self, 'flashlight_enabled', False):
+                flash_angle = getattr(_pl, 'aim_angle', getattr(self, '_flashlight_angle', 0.0))
                 flash_length = max(8, int(350 * scale / rs))
                 flash_width = 0.6  # 弧度，约35度
                 # 绘制锥形光（用多个扇形叠加模拟渐变）
@@ -344,6 +351,20 @@ class LightingSystem:
                                       special_flags=pygame.BLEND_RGBA_ADD)
 
         # 5. 构建黑暗层：全屏黑暗 - 光源区域 = 最终黑暗（降采样表面）
+        # v2.1.6：优先 GPU（OpenGL / OpenGL ES）合成——暗层挖洞 + 暗角 + 放大一步完成；
+        # 任何失败立即永久回退 CPU 路径，保证功能不受影响
+        if self._gl is not None and self._gl.available:
+            try:
+                _out = self._gl.composite(
+                    self._light_surface, self.ambient_darkness,
+                    getattr(self, 'vignette_enabled', False), vw, vh)
+                if _out is not None:
+                    screen.blit(_out, (0, 0))
+                    return
+            except Exception:
+                self._gl = None  # 永久回退，避免每帧重试的开销
+
+        # —— CPU 合成路径（GPU 不可用时的回退）——
         self._dark_surface.fill((0, 0, 0, self.ambient_darkness))
         # 用光源表面"挖洞"（从黑暗中减去光）
         self._dark_surface.blit(self._light_surface, (0, 0), special_flags=pygame.BLEND_RGBA_SUB)
@@ -372,3 +393,115 @@ class LightingSystem:
                 pygame.transform.smoothscale(self._dark_surface, (vw, vh), screen)
             except Exception:
                 screen.blit(self._dark_surface, (0, 0))
+
+
+class _GLightBackend:
+    """可选 GPU 光照合成后端（OpenGL 3.3+ / OpenGL ES 2.0+ via moderngl）。
+
+    将「暗层填充 → 光源挖洞(BLEND_RGBA_SUB) → 暗角 → 放大」整条 CPU 合成链
+    一步搬到 GPU shader，降低动态光照的 CPU 开销。
+
+    - PC 端：moderngl 可用时创建 OpenGL 桌面 standalone context；
+    - Android：moderngl 可用时经 EGL 创建 OpenGL ES context（SDL 环境自动选 ES）；
+    - 探测/初始化/运行任意失败：available=False，调用方回退 CPU 路径，游戏不受影响。
+    moderngl 是可选依赖，未安装时本后端自动禁用。
+    """
+
+    _VERT = """
+#version 100
+attribute vec2 in_pos;
+attribute vec2 in_uv;
+varying vec2 v_uv;
+void main() {
+    v_uv = in_uv;
+    gl_Position = vec4(in_pos, 0.0, 1.0);
+}
+"""
+
+    _FRAG = """
+#version 100
+precision mediump float;
+uniform sampler2D u_light;
+uniform float u_ambient;      // 环境暗度 0~255
+uniform float u_vignette;     // 0 或 1
+varying vec2 v_uv;
+void main() {
+    vec4 l = texture2D(u_light, v_uv);
+    // 光源 alpha 挖洞：最终暗度 = ambient - 光 alpha（与 CPU BLEND_RGBA_SUB 等价）
+    float dark = clamp(u_ambient / 255.0 - l.a, 0.0, 1.0);
+    // 暗角：四角渐暗（与 CPU 四角矩形叠加近似）
+    if (u_vignette > 0.5) {
+        float d = length(v_uv - vec2(0.5, 0.5)) * 1.15;
+        dark *= clamp(1.0 - smoothstep(0.45, 1.0, d), 0.0, 1.0);
+    }
+    gl_FragColor = vec4(0.0, 0.0, 0.0, dark);
+}
+"""
+
+    def __init__(self):
+        self.available = False
+        self._ctx = None
+        self._prog = None
+        self._vao = None
+        self._vbo = None
+        self._fbo = None
+        self._out_tex = None
+        self._light_tex = None
+        self._out_size = (0, 0)
+        self._try_init()
+
+    def _try_init(self):
+        try:
+            import moderngl
+        except Exception:
+            return
+        try:
+            ctx = moderngl.create_standalone_context()
+            prog = ctx.program(vertex_shader=self._VERT, fragment_shader=self._FRAG)
+            # 全屏三角形（覆盖 NDC 的 2 个三角形拼成 quad，uv 对应纹理坐标）
+            vertices = (
+                -1.0, -1.0, 0.0, 0.0,
+                1.0, -1.0, 1.0, 0.0,
+                -1.0, 1.0, 0.0, 1.0,
+                1.0, 1.0, 1.0, 1.0,
+            )
+            vbo = ctx.buffer(bytes(vertices))
+            vao = ctx.vertex_array(prog, [(vbo, '2f2f', 'in_pos', 'in_uv')])
+            self._ctx, self._prog, self._vbo, self._vao = ctx, prog, vbo, vao
+            self.available = True
+        except Exception:
+            self.available = False
+
+    def _ensure_target(self, w, h):
+        """按输出尺寸重建 FBO/输出纹理/光源纹理（尺寸变化时）"""
+        if self._out_size == (w, h) and self._fbo is not None:
+            return
+        self._out_size = (w, h)
+        if self._fbo is not None:
+            self._fbo.release()
+            self._out_tex.release()
+        self._out_tex = self._ctx.texture((w, h), 4)
+        self._fbo = self._ctx.framebuffer(color_attachments=[self._out_tex])
+
+    def composite(self, light_surf, ambient, vignette, out_w, out_h):
+        """GPU 合成：光源表面 → 全屏暗层（含暗角与放大）。返回 pygame Surface；失败抛异常。"""
+        lw, lh = light_surf.get_size()
+        raw = pygame.image.tostring(light_surf, "RGBA", True)
+        if self._light_tex is None or self._light_tex.size != (lw, lh):
+            if self._light_tex is not None:
+                self._light_tex.release()
+            self._light_tex = self._ctx.texture((lw, lh), 4)
+        self._light_tex.write(raw)
+        # 放大插值（替代 CPU smoothscale）
+        self._light_tex.filter = (0x2601, 0x2601)  # GL_LINEAR, GL_LINEAR
+
+        self._ensure_target(out_w, out_h)
+        self._fbo.use()
+        self._ctx.screen = None
+        self._prog["u_light"].value = 0
+        self._prog["u_ambient"].value = float(ambient)
+        self._prog["u_vignette"].value = 1.0 if vignette else 0.0
+        self._light_tex.use(0)
+        self._vao.render(moderngl.TRIANGLE_STRIP)
+        data = self._fbo.read(components=4)
+        return pygame.image.frombuffer(data, (out_w, out_h), "RGBA").convert_alpha()

@@ -428,6 +428,10 @@ class Player:
         # v2.1.3：同屏双人升级选卡期间该玩家免伤（临时脱锁，选卡完成后恢复）
         if getattr(self, 'upgrade_paused', False):
             return 0
+        # v2.1.6：倒地（等待救援）期间无敌——脱锁无敌机制完整闭环：
+        # 怪物目标选择已排除倒地者，此处兜底所有遗漏路径（锁定技能/AOE/DOT/盾冲/钩爪/残留投射物）
+        if getattr(self, 'downed', False):
+            return 0
         # 角色受伤减免（如铁壁）
         dmg_reduce = getattr(self, 'dmg_reduce', 0.0)
         if dmg_reduce > 0:

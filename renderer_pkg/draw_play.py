@@ -487,10 +487,16 @@ class PlayMixin:
         self._draw_muzzle_flash()
 
         # 动态光照层（在世界/实体之后，HUD之前）
+        # v2.1.6：多人模式全部玩家光源生效——传 players 列表，各自视口都能看到双方光照
         if hasattr(self.game, 'lighting') and self.game.state == GameState.PLAYING and self.game.lighting is not None:
+            _light_players = None
+            if self.game.is_multiplayer_active():
+                _light_players = [p for p in (self.game.player, getattr(self.game, 'player2', None))
+                                  if p is not None]
             self.game.lighting.render(
                 self.screen, camera.x, camera.y, self.game.scale,
-                player=player,
+                player=player if not _light_players else None,
+                players=_light_players,
                 enemies=self.game.enemies,
                 projectiles=getattr(self.game, 'projectiles', []),
                 viewport_x=viewport_x,
