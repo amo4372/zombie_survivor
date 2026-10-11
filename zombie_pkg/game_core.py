@@ -1020,6 +1020,7 @@ class GameCore:
         self.error_silencer = error_silencer.ErrorSilencer()
         self.error_ask_visible = False
         self.error_ask_choice = None  # 'ignore' / 'raise'
+        self.error_ask_lock = 0.0  # 询问框防误触锁定剩余秒数
         while self.running:
             dt = self.clock.tick(60) / 1000.0
             dt = min(dt, 0.05)
@@ -1049,6 +1050,8 @@ class GameCore:
                     self.error_ask_visible = True
                     self.error_ask_choice = None
                     self.error_ask_pending = self.error_silencer.pending_info
+                    # 防误触：弹出后 1 秒内屏蔽按钮点击（玩家可能正在操作中）
+                    self.error_ask_lock = 1.0
                     # 显示询问框
                     self._draw_error_ask(self.error_ask_pending)
                     pygame.display.flip()
@@ -1092,7 +1095,10 @@ class GameCore:
 
     def _update_error_ask(self, dt):
         """处理错误询问框输入：Y/回车=忽略，N/ESC=不忽略；
-        触控/鼠标支持抬手确认（FINGERUP/MOUSEBUTTONUP），热区已加大"""
+        触控/鼠标支持抬手确认（FINGERUP/MOUSEBUTTONUP），热区已加大；
+        弹出后 error_ask_lock 秒内屏蔽按钮点击（防误触），键盘仍即时生效"""
+        if getattr(self, "error_ask_lock", 0) > 0:
+            self.error_ask_lock -= dt
         for ev in pygame.event.get():
             if ev.type == pygame.KEYDOWN:
                 if ev.key == pygame.K_y or ev.key == pygame.K_RETURN:
@@ -1102,6 +1108,8 @@ class GameCore:
                     self.error_silencer.decide(False)
                     self.error_ask_visible = False
             elif ev.type == pygame.FINGERUP or ev.type == pygame.FINGERDOWN:
+                if getattr(self, "error_ask_lock", 0) > 0:
+                    continue  # 防误触锁定期间忽略按钮点击
                 # 触控：归一化坐标(0~1) → 物理像素；UP 抬手确认，DOWN 兜底（无UP设备）
                 mx = ev.x * self.scaled_width
                 my = ev.y * self.scaled_height
@@ -1110,6 +1118,8 @@ class GameCore:
                     self.error_silencer.decide(act == "ignore")
                     self.error_ask_visible = False
             elif ev.type == pygame.MOUSEBUTTONUP or ev.type == pygame.MOUSEBUTTONDOWN:
+                if getattr(self, "error_ask_lock", 0) > 0:
+                    continue  # 防误触锁定期间忽略按钮点击
                 act = self._error_ask_hit(*ev.pos)
                 if act is not None:
                     self.error_silencer.decide(act == "ignore")
@@ -1142,11 +1152,24 @@ class GameCore:
             by = int(sh * 0.5 + 60 * sc)
             bw = int(200 * sc)
             bh = int(60 * sc)
-            pygame.draw.rect(self.screen, (40, 160, 90), (bx, by, bw, bh), border_radius=12)
-            lb = self.font.render("忽略并静默", True, (255, 255, 255))
-            self.screen.blit(lb, lb.get_rect(center=(bx + bw // 2, by + bh // 2)))
-            pygame.draw.rect(self.screen, (200, 70, 60), (bx + int(220 * sc), by, bw, bh), border_radius=12)
-            rb = self.font.render("不忽略", True, (255, 255, 255))
-            self.screen.blit(rb, rb.get_rect(center=(bx + int(220 * sc) + bw // 2, by + bh // 2)))
+            lock = getattr(self, "error_ask_lock", 0)
+            if lock > 0:
+                # 防误触锁定：按钮置灰 + 倒计时提示
+                lock_txt = f"请稍候 {max(1, int(lock) + 1)} 秒…（防误触）"
+                lt = self.font.render(lock_txt, True, (255, 220, 80))
+                self.screen.blit(lt, lt.get_rect(center=(sw // 2, int(sh * 0.5 + 34 * sc))))
+                pygame.draw.rect(self.screen, (70, 90, 80), (bx, by, bw, bh), border_radius=12)
+                pygame.draw.rect(self.screen, (90, 60, 55), (bx + int(220 * sc), by, bw, bh), border_radius=12)
+                lb = self.font.render("忽略并静默", True, (150, 150, 150))
+                self.screen.blit(lb, lb.get_rect(center=(bx + bw // 2, by + bh // 2)))
+                rb = self.font.render("不忽略", True, (150, 150, 150))
+                self.screen.blit(rb, rb.get_rect(center=(bx + int(220 * sc) + bw // 2, by + bh // 2)))
+            else:
+                pygame.draw.rect(self.screen, (40, 160, 90), (bx, by, bw, bh), border_radius=12)
+                lb = self.font.render("忽略并静默", True, (255, 255, 255))
+                self.screen.blit(lb, lb.get_rect(center=(bx + bw // 2, by + bh // 2)))
+                pygame.draw.rect(self.screen, (200, 70, 60), (bx + int(220 * sc), by, bw, bh), border_radius=12)
+                rb = self.font.render("不忽略", True, (255, 255, 255))
+                self.screen.blit(rb, rb.get_rect(center=(bx + int(220 * sc) + bw // 2, by + bh // 2)))
         except Exception:
             pass

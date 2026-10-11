@@ -742,6 +742,7 @@ class PlayingMixin:
         if auto_shoot and self.player.can_act() and not self.player.riot_gear.equipped and self.riot_anim_state != "equipping":
             # v2.2.0 载具开火：坦克主炮/武直机炮火箭；重卡禁射击（重卡不进入武器开火分支）
             _veh = getattr(self.player, 'vehicle', None)
+            weapon = None  # 防御：载具存活分支不开武器，先置空避免 UnboundLocalError
             if _veh is not None and _veh.alive and _veh.can_shoot:
                 rune_dmg_mult = 1.0 + getattr(self, 'rune_buffs', {}).get("damage", 0)
                 _projs = _veh.fire(

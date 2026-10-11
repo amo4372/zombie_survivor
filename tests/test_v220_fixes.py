@@ -89,6 +89,17 @@ fx, fy = 0.41, 0.62
 check("触控 FINGER 归一化换算命中", _hit(fx * 1280, fy * 720) == "ignore")
 
 
+# ==================== 1c. 载具开火 weapon 未绑定回归（v2.2.1） ====================
+_src = open("zombie_pkg/mix_playing.py", encoding="utf-8").read()
+check("载具分支前 weapon=None 初始化", "_veh = getattr(self.player, 'vehicle', None)\n            weapon = None" in _src)
+check("P2 载具开火 elif 内 weapon 赋值", "elif _veh2 is None or not _veh2.alive:" in open("zombie_pkg/mix_multi.py", encoding="utf-8").read())
+# 询问框防误触锁定字段初始化
+_gcsrc = open("zombie_pkg/game_core.py", encoding="utf-8").read()
+check("error_ask_lock 初始化", "self.error_ask_lock = 0.0" in _gcsrc)
+check("error_ask_lock 触发时置1.0", "self.error_ask_lock = 1.0" in _gcsrc)
+check("触控锁定期间屏蔽点击", "error_ask_lock\", 0) > 0:\n                    continue" in _gcsrc)
+
+
 # ==================== 2. 争分夺秒模式 ====================
 from config import GameMode
 from world import HordeManager
