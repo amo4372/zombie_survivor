@@ -335,21 +335,46 @@ class MultiplayerMixin:
         else:
             angle = self._p2_auto_aim_angle(p2)
         # ===== 移动 =====
-        if mx != 0 or my != 0:
+        _veh2 = getattr(p2, 'vehicle', None)
+        if _veh2 is not None and _veh2.alive:
+            # v2.2.0 P2 载具并行：载具移动/撞击接管玩家移动
+            _veh2.update(dt)
+            _veh2.move(mx, my, dt, self.world.clamp_position)
+            p2.x, p2.y = _veh2.x, _veh2.y
+            try:
+                _hits = _veh2.ram_enemies(self.enemies, self.damage_numbers, self.particles)
+                for _e in _hits:
+                    if not getattr(_e, 'alive', False):
+                        self._on_enemy_death(_e)
+            except Exception:
+                pass
+            if not _veh2.alive:
+                self._vehicle_destroyed_for(p2)
+            p2.update(dt, 0, 0, angle, self.world, sprinting=False)
+        elif mx != 0 or my != 0:
             p2.update(dt, mx, my, angle, self.world, sprinting=sprint)
         else:
             p2.update(dt, 0, 0, angle, self.world, sprinting=sprint)
         p2.facing_angle = angle
         # ===== 射击 =====
         if shoot and p2.can_act():
-            weapon = p2.get_current_weapon()
-            if weapon.can_fire():
-                projs = weapon.fire(
+            if _veh2 is not None and _veh2.alive and _veh2.can_shoot:
+                # v2.2.0 P2 载具开火
+                _projs = _veh2.fire(
                     p2.x, p2.y, math.radians(angle),
-                    p2.damage_mult * p2.buff_manager.get_damage_mult() * p2.damage_multiplier,
-                    p2.speed_mult, player=p2)
-                self.projectiles.extend(projs)
-                self.assets.play_sound_random(["shoot_pistol", "melee_swing"])
+                    p2.damage_mult * p2.buff_manager.get_damage_mult() * p2.damage_multiplier)
+                self.projectiles.extend(_projs)
+                if _projs:
+                    self.assets.play_sound_random(["shoot_pistol", "shoot_smg"])
+            elif _veh2 is None or not _veh2.alive:
+                weapon = p2.get_current_weapon()
+                if weapon.can_fire():
+                    projs = weapon.fire(
+                        p2.x, p2.y, math.radians(angle),
+                        p2.damage_mult * p2.buff_manager.get_damage_mult() * p2.damage_multiplier,
+                        p2.speed_mult, player=p2)
+                    self.projectiles.extend(projs)
+                    self.assets.play_sound_random(["shoot_pistol", "melee_swing"])
         # ===== 技能 =====
         if skill:
             st = self.p2_selected_skill
@@ -422,6 +447,10 @@ class MultiplayerMixin:
                     e.knockdown_timer = 0.8
             self.slash_arcs.append(SlashArc(p2.x, p2.y, 0, 200, (255, 220, 100), lifetime=0.4, kind="scythe",
                                             start_radius=150, end_angle_offset=3.0))
+        elif skill_type == SkillType.VEHICLE_SUMMON:
+            # v2.2.0 P2 载具召唤（与 P1 并行）
+            ok = self._p2_skill_vehicle_summon()
+            cd = 60.0 * p2.cooldown_mult
             cd = 12.0
         elif skill_type == SkillType.ICE_NOVA:
             ok = True
@@ -586,3 +615,47 @@ class MultiplayerMixin:
             d = math.hypot(drop.x - player.x, drop.y - player.y)
             if d <= getattr(player, 'pickup_range', 50):
                 self._collect_drop(drop, player)
+
+    # ==================== P2 载具（v2.2.0） ====================
+    def _p2_skill_vehicle_summon(self):
+        """P2 载具召唤（与 P1 并行，独立血条/冷却）"""
+        try:
+            p2 = self.player2
+            if not p2:
+                return False
+            skill = p2.skill_tree.get_skill(SkillType.VEHICLE_SUMMON)
+            if not skill or skill.current_level == 0:
+                return False
+            cur = getattr(p2, 'vehicle', None)
+            if cur is not None and getattr(cur, 'alive', False):
+                self.floating_texts.append(FloatingText(
+                    p2.x, p2.y - 40, "P2载具仍在作战中!", color=GRAY, lifetime=1.5))
+                return False
+            vid = {1: "truck", 2: "tank", 3: "heli"}.get(skill.current_level, "truck")
+            vname = {"truck": "大运重卡", "tank": "99A坦克", "heli": "武装直升机"}[vid]
+            from entities_pkg.vehicles import Vehicle, load_vehicle_images, _VEHICLE_IMAGES
+            if not _VEHICLE_IMAGES:
+                load_vehicle_images()
+            dmg_mult = p2.damage_mult * p2.buff_manager.get_damage_mult() * p2.damage_multiplier
+            p2.vehicle = Vehicle(vid, p2.x, p2.y, damage_mult=dmg_mult)
+            p2.vehicle.on_enemy_death_cb = self._on_enemy_death
+            self.floating_texts.append(FloatingText(
+                p2.x, p2.y - 60, f"P2召唤 {vname}!", color=(0, 190, 255), lifetime=2.0))
+            self.particles.spawn_explosion(p2.x, p2.y, (0, 190, 255), 30)
+            return True
+        except Exception:
+            return False
+
+    def _vehicle_destroyed_for(self, player):
+        """指定玩家载具被摧毁（P1/P2 通用）"""
+        try:
+            if getattr(player, 'vehicle', None) is not None:
+                player.vehicle = None
+                cd = 60.0 * getattr(player, 'cooldown_mult', 1.0)
+                player.active_skills[SkillType.VEHICLE_SUMMON] = cd
+                self.particles.spawn_explosion(player.x, player.y, (255, 120, 40), 40)
+                self.camera.shake(10, 0.4)
+                self.floating_texts.append(FloatingText(
+                    player.x, player.y - 50, "载具被摧毁!", color=RED, lifetime=1.8))
+        except Exception:
+            pass

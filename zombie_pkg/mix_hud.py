@@ -197,6 +197,8 @@ class HudMixin:
             "shoot": TouchButton(BASE_WIDTH - 500, BASE_HEIGHT - 145, 62, "射击", RED),
             "pause": TouchButton(60, 55, 38, "II", GRAY),
             "sprint": TouchButton(210, BASE_HEIGHT - 130, 40, "疾跑", AMBER),
+            # v2.2.0 争分夺秒：主动结算按钮（仅 TIMED 模式显示）
+            "settle": TouchButton(BASE_WIDTH - 640, BASE_HEIGHT - 145, 52, "结算", GOLD),
         }
         # 技能切换按钮（右上列）
         self.skill_selector = SkillSelector(BASE_WIDTH - 220, BASE_HEIGHT - 320, 42)
@@ -219,6 +221,10 @@ class HudMixin:
         self.q_aim_started = False
         self.key_q_long_threshold = 0.3  # 长按阈值，与G键一致
         self.throwable_max_dist = 450  # 投掷物最大距离
+        # v2.2.0 争分夺秒结算按钮仅 TIMED 模式显示
+        _settle_btn = self.touch_buttons.get("settle")
+        if _settle_btn is not None:
+            _settle_btn.visible = (getattr(self.config.game_mode, 'name', '') == "TIMED")
         self._apply_hud_layout()
         logger.info("触控控件初始化完成")
 

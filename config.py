@@ -726,6 +726,7 @@ class SkillType(Enum):
     MINIGUN_OVERDRIVE = auto() # 加特林·过热倾泻 - 射速暴增+弹药无限
     RAILGUN_ANNIHILATION = auto() # 轨道炮·湮灭射线 - 超粗贯穿射线+爆炸
     KILL_CD_SLASH = auto()     # 死亡咏唱 - 每击杀一个敌人，所有冷却中技能冷却缩短（高级技能）
+    VEHICLE_SUMMON = auto()    # 载具召唤（v2.2.0）- 生命强化满级解锁：重卡/99A坦克/武装直升机
 
 
 # ==================== 局外商店：武器价格（金币） ====================

@@ -111,6 +111,9 @@ class Player:
         self.sprinting = False
         self.stamina_exhausted = False
 
+        # v2.2.0 载具召唤物（玩家骑乘时非 None）
+        self.vehicle = None
+
     def can_act(self):
         """检查玩家是否可以执行主动操作（射击/技能/切换武器等）
         死亡、眩晕、冻结、恐惧状态下不可操作"""
@@ -201,6 +204,23 @@ class Player:
             self.hp = 0
             self.alive = False
             return
+
+        # v2.2.0：肾上腺素体力加成动态应用（上限+25/级、回复+4/s，装备防爆套装时生效）
+        try:
+            _rg = getattr(self, 'riot_gear', None)
+            if _rg is not None:
+                _adl = getattr(_rg, 'adrenaline_level', 0)
+                _new_max = 100.0 + (_adl * 25 if getattr(_rg, 'equipped', False) else 0)
+                _new_regen = 18.0 + (_adl * 4 if getattr(_rg, 'equipped', False) else 0)
+                if abs(_new_max - self.max_stamina) > 0.01:
+                    _old_max = self.max_stamina
+                    self.max_stamina = _new_max
+                    if _old_max > 0 and self.stamina > 0:
+                        self.stamina = min(_new_max, self.stamina * _new_max / _old_max)
+                    self.stamina = min(self.max_stamina, self.stamina)
+                self.stamina_regen_rate = _new_regen
+        except Exception:
+            pass
 
         self._update_stats()
         # Buff系统对攻速/换弹/暴击的加成
@@ -392,6 +412,11 @@ class Player:
         if dodge_skill:
             self.dodge_chance = dodge_skill.current_level * 0.05
 
+        # v2.2.0：肾上腺素等级同步（体力加成在 update 动态应用）
+        ad_skill = skill.get_skill(SkillType.ADRENALINE)
+        if ad_skill and getattr(self, 'riot_gear', None) is not None:
+            self.riot_gear.adrenaline_level = ad_skill.current_level
+
         regen_skill = skill.get_skill(SkillType.REGENERATION)
         if regen_skill:
             self.regen_rate = regen_skill.current_level * 0.01 * self.max_hp
@@ -461,6 +486,12 @@ class Player:
         if self.invincible_timer > 0:
             return
 
+        # v2.2.0 载具期间：玩家无敌，伤害转移给载具专属血条（不应用回血）
+        _veh = getattr(self, 'vehicle', None)
+        if _veh is not None and getattr(_veh, 'alive', False):
+            _veh.take_damage(damage, damage_type)
+            return
+
         # 闪避检测
         if random.random() < self.dodge_chance:
             return  # 完全闪避
@@ -483,7 +514,14 @@ class Player:
         # Buff系统受伤倍率（包含狂暴、护盾、燃烧等）
         damage *= self.buff_manager.get_damage_taken_mult()
 
-        actual_damage = self.riot_gear.take_damage(damage, damage_type, from_front, attack_x, attack_y)
+        # v2.2.0 优化格挡判定：盾牌几何命中优先（矩形碰撞或60°方向），再交给防爆套装结算
+        blocked = False
+        if self.riot_gear.equipped and not self.riot_gear.shield_broken and attack_x is not None and attack_y is not None:
+            try:
+                blocked = self.riot_gear.check_shield_block(self.x, self.y, attack_x, attack_y)
+            except Exception:
+                blocked = from_front
+        actual_damage = self.riot_gear.take_damage(damage, damage_type, from_front, attack_x, attack_y, blocked=blocked)
         self.hp -= actual_damage
         self.invincible_timer = 0.3
 

@@ -306,10 +306,14 @@ class RiotGear:
         angle_diff = abs((attack_angle - self.facing_angle + 180) % 360 - 180)
         return angle_diff < 60
 
-    def take_damage(self, damage, damage_type="melee", from_front=True, attack_x=None, attack_y=None):
+    def take_damage(self, damage, damage_type="melee", from_front=True, attack_x=None, attack_y=None, blocked=None):
+        """v2.2.0 优化格挡判定：blocked（盾牌几何命中）优先，其次 from_front 方向判定；
+        抗性在盾碎后按伤害类型精确应用"""
         if not self.equipped:
             return damage
-        if from_front and not self.shield_broken:
+        if blocked is None:
+            blocked = from_front
+        if blocked and not self.shield_broken:
             if damage_type == "magic" or damage_type == "aoe":
                 return 0
             self.viewing_window_hp -= damage
@@ -336,7 +340,7 @@ class RiotGear:
         return self.equipped and self.bash_cooldown <= 0 and self.stamina >= self.bash_stamina_cost and not self.charge_active
 
     def bash(self, direction_angle=None, is_sprint=False):
-        """盾牌冲撞：启动冲撞状态，由game.py处理移动和伤害"""
+        """盾牌肘击（v2.2.0 改为原地肘击：不再启动冲撞位移，范围伤害由 mix_skills 一次性结算）"""
         if not self.can_bash():
             return False
         self.stamina -= self.bash_stamina_cost
@@ -345,8 +349,7 @@ class RiotGear:
             self.charge_direction = direction_angle
         else:
             self.charge_direction = self.facing_angle
-        self.charge_active = True
-        self.charge_timer = self.charge_duration
+        self.charge_active = False
         self.charge_hit_ids = set()
         self.bash_anim_timer = self.bash_anim_duration
         return True

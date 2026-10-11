@@ -539,6 +539,11 @@ class PlayingMixin:
                         self._perform_bash(self.player.facing_angle)
                 elif name == "pause" and btn.just_released:
                     self.state = GameState.PAUSED
+                elif name == "settle" and btn.just_released:
+                    # v2.2.0 争分夺秒：主动结算关卡
+                    _ss = getattr(self, '_settle_race_manual', None)
+                    if _ss is not None:
+                        _ss()
 
         move_len = math.hypot(move_x, move_y)
         if move_len > 1:
@@ -593,13 +598,32 @@ class PlayingMixin:
         # v2.1.3：同屏双人 P1 升级选卡时暂停 P1 移动/受击（怪物脱锁由目标选择处处理）
         _p1_paused = self.is_multiplayer_active() and getattr(self, '_upgrade_pause_player', None) == "P1"
         if not _p1_paused:
-            self.player.update(dt, move_x * _zone_mult, move_y * _zone_mult,
-                               mouse_angle, self.world, sprinting=sprinting)
-            # 符文：再生效果
-            if hasattr(self, 'rune_manager'):
-                regen = self.rune_manager.get_bonus("regen")
-                if regen > 0 and self.player.hp < self.player.max_hp:
-                    self.player.hp = min(self.player.max_hp, self.player.hp + regen * dt)
+            # v2.2.0 载具期间：载具移动/撞击/开火逻辑接管玩家移动
+            _veh = getattr(self.player, 'vehicle', None)
+            if _veh is not None and _veh.alive:
+                _veh.update(dt)
+                _veh.move(move_x * _zone_mult, move_y * _zone_mult, dt, self.world.clamp_position)
+                self.player.x, self.player.y = _veh.x, _veh.y
+                # 载具撞击伤害
+                try:
+                    _hits = _veh.ram_enemies(self.enemies, self.damage_numbers, self.particles)
+                    for _e in _hits:
+                        if not getattr(_e, 'alive', False):
+                            self._on_enemy_death(_e)
+                except Exception:
+                    pass
+                if not _veh.alive:
+                    self._vehicle_destroyed()
+                # 玩家 update 只处理状态/冷却（移动已由载具接管）
+                self.player.update(dt, 0.0, 0.0, mouse_angle, self.world, sprinting=False)
+            else:
+                self.player.update(dt, move_x * _zone_mult, move_y * _zone_mult,
+                                   mouse_angle, self.world, sprinting=sprinting)
+                # 符文：再生效果
+                if hasattr(self, 'rune_manager'):
+                    regen = self.rune_manager.get_bonus("regen")
+                    if regen > 0 and self.player.hp < self.player.max_hp:
+                        self.player.hp = min(self.player.max_hp, self.player.hp + regen * dt)
         # speed_mult 已乘符文加成，无论暂停与否都必须恢复
         self.player.speed_mult = orig_speed_mult
         # 盾牌冲撞更新（移动+碰撞伤害；P1 升级暂停时不更新）
@@ -716,7 +740,18 @@ class PlayingMixin:
                 auto_shoot = self.aim_button.is_shooting
 
         if auto_shoot and self.player.can_act() and not self.player.riot_gear.equipped and self.riot_anim_state != "equipping":
-            weapon = self.player.get_current_weapon()
+            # v2.2.0 载具开火：坦克主炮/武直机炮火箭；重卡禁射击（重卡不进入武器开火分支）
+            _veh = getattr(self.player, 'vehicle', None)
+            if _veh is not None and _veh.alive and _veh.can_shoot:
+                rune_dmg_mult = 1.0 + getattr(self, 'rune_buffs', {}).get("damage", 0)
+                _projs = _veh.fire(
+                    self.player.x, self.player.y, self.player.facing_angle,
+                    self.player.damage_mult * self.player.damage_boost_mult * self.player.buff_manager.get_damage_mult() * rune_dmg_mult)
+                self.projectiles.extend(_projs)
+                if _projs:
+                    self.assets.play_sound_random(["shoot_pistol", "shoot_smg"])
+            elif _veh is None or not _veh.alive:
+                weapon = self.player.get_current_weapon()
             # v2.1.3：防御 weapon/weapon_type 为 None（异常存档/联机同步兜底，不再崩溃）
             if weapon is not None and getattr(weapon, "weapon_type", None) is not None and weapon.can_fire():
                 # 过热倾泻buff：无限弹药
@@ -1902,6 +1937,59 @@ class PlayingMixin:
                 self._trigger_multiplayer_game_over()
         elif self.player.hp <= 0:
             self._trigger_multiplayer_game_over()
+        # v2.2.0 争分夺秒：倒计时耗尽 → 挑战结算（非死亡）
+        if self.config.game_mode == GameMode.TIMED and self.state == GameState.PLAYING:
+            try:
+                if self.horde_manager.is_timed_over():
+                    self._settle_race_auto()
+            except Exception:
+                pass
+
+    # ==================== 争分夺秒结算（v2.2.0） ====================
+    def _record_race_result(self, victory=True):
+        """争分夺秒：写入排行榜 + 达标金币奖励 + 成就（含多人模式全体生效）"""
+        try:
+            if self.config.game_mode != GameMode.TIMED:
+                return
+            if getattr(self, '_race_recorded', False):
+                return
+            self._race_recorded = True
+            score = getattr(self.player, 'score', 0)
+            if self.player2 is not None:
+                score = max(score, getattr(self.player2, 'score', 0))
+            time_left = getattr(self.horde_manager, 'race_time_left', 0.0)
+            kills = 0
+            if self.session:
+                kills = sum(self.session.data.get("kills_by_type", {}).values())
+            coins = self.records.record_race_result(score, time_left, kills, victory)
+            if coins > 0:
+                # 金币奖励到账提示（双人全体）
+                txt = f"争分夺秒达标奖励 +{coins} 金币!"
+                self.floating_texts.append(FloatingText(
+                    self.player.x, self.player.y - 60, txt, color=GOLD, lifetime=2.5))
+                if self.player2 is not None:
+                    self.floating_texts.append(FloatingText(
+                        self.player2.x, self.player2.y - 60, txt, color=GOLD, lifetime=2.5))
+        except Exception:
+            pass
+
+    def _settle_race_auto(self):
+        """倒计时耗尽/主动结算：挑战结算（victory，非死亡）"""
+        if self.state != GameState.PLAYING:
+            return
+        self._record_race_result(victory=True)
+        if self.session:
+            try:
+                self.session.end_session(victory=True)
+            except Exception:
+                pass
+        self._trigger_multiplayer_game_over()
+
+    def _settle_race_manual(self):
+        """玩家主动结算关卡（键盘 K / HUD 按钮）"""
+        if self.config.game_mode != GameMode.TIMED or self.state != GameState.PLAYING:
+            return
+        self._settle_race_auto()
 
     def _trigger_multiplayer_game_over(self):
         """触发游戏结束结算（单/双人共用）"""
@@ -1909,7 +1997,14 @@ class PlayingMixin:
             return
         # 单人模式：正常游戏结束
         if self.session:
-            self.session.set_died(True)
+            # v2.2.0 争分夺秒：倒计时耗尽/主动结算视为挑战完成（非死亡）
+            if self.config.game_mode == GameMode.TIMED and self.horde_manager.is_timed_over():
+                try:
+                    self.session.end_session(victory=True)
+                except Exception:
+                    pass
+            else:
+                self.session.set_died(True)
             new_unlock_keys = self.session.finalize() or []
             for k in new_unlock_keys:
                 ach_data = self.records.data["achievements"].get(k)

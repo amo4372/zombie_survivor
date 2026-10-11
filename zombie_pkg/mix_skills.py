@@ -291,6 +291,7 @@ class SkillsMixin:
             SkillType.SCYTHE_DANCE: 30.0,
             SkillType.MINIGUN_OVERDRIVE: 25.0,
             SkillType.RAILGUN_ANNIHILATION: 35.0,
+            SkillType.VEHICLE_SUMMON: 60.0,
         }
         cd = cooldowns.get(skill_type, 10.0) * self.player.cooldown_mult
 
@@ -1038,20 +1039,50 @@ class SkillsMixin:
                 return False
 
     def _perform_bash(self, direction_angle=None):
-        """盾牌冲撞：启动冲撞，移动和伤害由_update_charge处理"""
+        """盾牌肘击（v2.2.0 原地肘击：一次性范围伤害+击退+眩晕，不位移）"""
         if self.session:
             self.session.add_bash()
         self.assets.play_sound("bash")
-        success = self.player.riot_gear.bash(direction_angle)
+        rg = self.player.riot_gear
+        success = rg.bash(direction_angle)
         if success:
-            # 肘击消耗已扣 riot_gear.stamina，同步回玩家共享体力池。
-            # 若不回流，Player.update 每帧会把 self.stamina 单向覆盖回 riot_gear.stamina，
-            # 导致肘击体力消耗被抹掉 -> 体力与玩家不共享、恒接近满（接近无限）
-            self.player.stamina = self.player.riot_gear.stamina
+            # 体力回流共享池
+            self.player.stamina = rg.stamina
+            # 原地肘击：对周围敌人一次性范围结算
+            hit_any = False
+            bash_r = 62
+            for enemy in self.enemies:
+                dist = math.hypot(enemy.x - self.player.x, enemy.y - self.player.y)
+                if dist > bash_r + enemy.size:
+                    continue
+                is_crit = random.random() < self.player.crit_chance
+                actual_damage = rg.charge_damage * 1.6 * self.player.damage_mult * self.player.buff_manager.get_damage_mult() * (self.player.crit_damage if is_crit else 1)
+                enemy.take_damage(actual_damage)
+                self._vampire_heal(actual_damage)
+                _is_boss = getattr(enemy, "is_boss", False)
+                enemy.apply_buff(BuffType.STUN, duration=rg.charge_stun_duration * (0.5 if _is_boss else 1.0))
+                enemy.knockdown(1.0 if not _is_boss else 0.5)
+                if dist > 0:
+                    _kb = rg.charge_knockback * (0.4 if _is_boss else 1.2)
+                    enemy.x += (enemy.x - self.player.x) / dist * _kb
+                    enemy.y += (enemy.y - self.player.y) / dist * _kb
+                self.damage_numbers.append(DamageNumber(enemy.x, enemy.y, actual_damage, is_crit=is_crit, damage_type="melee"))
+                self.particles.spawn_blood(enemy.x, enemy.y, 12)
+                hit_any = True
+                if not enemy.alive:
+                    self._on_enemy_death(enemy)
             self.floating_texts.append(FloatingText(
-                self.player.x, self.player.y - 40, "盾牌冲撞!", color=CYAN, lifetime=1.0
+                self.player.x, self.player.y - 40, "原地肘击!", color=CYAN, lifetime=1.0
             ))
-            self.camera.shake(5, 0.2)
+            self.particles.spawn_explosion(self.player.x, self.player.y, CYAN, 22)
+            self.camera.shake(6 if hit_any else 3, 0.25)
+            # 环形冲击波
+            if hasattr(self, 'sweep_rings'):
+                self.sweep_rings.append({
+                    "x": self.player.x, "y": self.player.y,
+                    "r": 30, "max_r": bash_r + 30, "color": (80, 220, 255),
+                    "width": 6, "life": 0.35, "max_life": 0.35,
+                })
 
     def _update_charge(self, dt):
         """更新盾牌冲撞：移动玩家，检测沿途敌人碰撞"""

@@ -182,7 +182,7 @@ class GameRecords:
                 "horde_survivor_20": {"unlocked": False, "desc": "累计挺过20波尸潮", "date": None, "group":"生存", "hidden":False},
                 "untouchable": {"unlocked": False, "desc": "单局不受伤通关", "date": None, "group":"生存", "hidden":False, "coef_threshold": 0},
                 "iron_will": {"unlocked": False, "desc": "地狱难度存活8分钟以上", "date": None, "group":"生存", "hidden":False, "coef_threshold": 2.5},
-                "speedrunner": {"unlocked": False, "desc": "限时模式10分钟内通关", "date": None, "group":"生存", "hidden":False, "coef_threshold": 0},
+                "speedrunner": {"unlocked": False, "desc": "争分夺秒模式10分钟内完成挑战", "date": None, "group":"生存", "hidden":False, "coef_threshold": 0},
                 
                 # 技能武器
                 "skill_master": {"unlocked": False, "desc": "单局升级技能20次", "date": None, "group":"技能武器", "hidden":False, "coef_threshold": 0},
@@ -193,7 +193,7 @@ class GameRecords:
                 "full_armory": {"unlocked": False, "desc": "解锁全部武器", "date": None, "group":"技能武器", "hidden":False, "coef_threshold": 0},
                 "no_skill_challenge": {"unlocked": False, "desc": "单局不使用任何主动技能存活10分钟", "date": None, "group":"技能武器", "hidden":False, "coef_threshold": 0},
                 # 结局挑战
-                "millionaire": {"unlocked": False, "desc": "单局得分超过100万", "date": None, "group":"结局挑战", "hidden":False, "coef_threshold": 2.0},
+                "millionaire": {"unlocked": False, "desc": "单局得分超过100万", "date": None, "group":"结局挑战", "hidden":False, "coef_threshold": 0},
                 "perfect_ending": {"unlocked": False, "desc": "达成完美结局", "date": None, "group":"结局挑战", "hidden":False, "coef_threshold": 2.0},
                 "all_endings": {"unlocked": False, "desc": "达成所有结局", "date": None, "group":"结局挑战", "hidden":False, "coef_threshold": 2.5},
                 # === Buff/新机制相关成就 ===
@@ -212,6 +212,11 @@ class GameRecords:
                 "bleeding_warrior": {"unlocked": False, "desc": "浴血奋战：在流血状态下击杀20个敌人", "date": None, "group":"隐藏", "hidden":True, "coef_threshold": 0},
                 # 隐藏成就示例
                 "secret_zombie": {"unlocked": False, "desc": "发现秘密僵尸", "date": None, "group":"隐藏", "hidden":True, "coef_threshold": 0},
+                # === 争分夺秒成就（v2.2.0）===
+                "race_first_win": {"unlocked": False, "desc": "争分夺秒首次完成挑战", "date": None, "group":"争分夺秒", "hidden":False, "coef_threshold": 0},
+                "race_5_wins": {"unlocked": False, "desc": "争分夺秒累计完成5次挑战", "date": None, "group":"争分夺秒", "hidden":False, "coef_threshold": 0},
+                "race_100_kills": {"unlocked": False, "desc": "争分夺秒单局击杀100个敌人", "date": None, "group":"争分夺秒", "hidden":False, "coef_threshold": 0},
+                "race_30k_score": {"unlocked": False, "desc": "争分夺秒单局得分达到30000", "date": None, "group":"争分夺秒", "hidden":False, "coef_threshold": 0},
             },
             # === 杂项统计 ===
             "total_shield_blocks": 0,
@@ -223,6 +228,11 @@ class GameRecords:
             # === 金币（积分另一形式，用于购买武器/角色/升级）===
             "coins": 0,
             "total_coins_earned": 0,
+            # === 争分夺秒排行榜（v2.2.0）：历次挑战记录，取最高分 ===
+            "race_leaderboard": [],
+            "race_best_score": 0,
+            "race_wins": 0,
+            "race_total_runs": 0,
             # === 局外武器解锁/升级：{weapon_name: {"unlocked": bool, "level": int}} ===
             "owned_weapons": {},
             # === 角色解锁/升级：{char_name: {"unlocked": bool, "level": int}} ===
@@ -303,43 +313,52 @@ class GameRecords:
                 "untouchable": 1, "iron_will": 480, "speedrunner": 1,
                 "skill_master": 20, "weapon_collector": 13, "full_armory": 13,
                 "no_skill_challenge": 1, "secret_zombie": 1,
+                "race_first_win": 1, "race_5_wins": 5, "race_100_kills": 100, "race_30k_score": 30000,
             }
             t = targets.get(key, 1)
             return (t, t)
         d = self.data
+        _kbt = d.get("kills_by_type", {}) or {}
+        _su = d.get("skill_usage", {}) or {}
+        _end = d.get("endings", {}) or {}
         progress_map = {
             # 战斗 - 累计类
-            "first_blood": (d["total_kills"], 1),
-            "zombie_slayer": (d["total_kills"], 100),
-            "zombie_hunter": (d["total_kills"], 1000),
-            "zombie_destroyer": (d["total_kills"], 10000),
-            "boss_slayer": (d["kills_by_type"].get("boss_long", 0) + d["kills_by_type"].get("boss_xiang", 0), 10),
-            "dragon_hunter": (d["kills_by_type"].get("boss_long", 0), 5),
-            "xiang_hunter": (d["kills_by_type"].get("boss_xiang", 0), 5),
-            "crit_master": (d["total_critical_hits"], 500),
-            "damage_deal_500k": (d["total_damage_dealt"], 500000),
-            "gunner": (d["total_shots_fired"], 10000),
-            "tough_guy": (d["total_damage_taken"], 200000),
+            "first_blood": (d.get("total_kills", 0), 1),
+            "zombie_slayer": (d.get("total_kills", 0), 100),
+            "zombie_hunter": (d.get("total_kills", 0), 1000),
+            "zombie_destroyer": (d.get("total_kills", 0), 10000),
+            "boss_slayer": (_kbt.get("boss_long", 0) + _kbt.get("boss_xiang", 0), 10),
+            "dragon_hunter": (_kbt.get("boss_long", 0), 5),
+            "xiang_hunter": (_kbt.get("boss_xiang", 0), 5),
+            "crit_master": (d.get("total_critical_hits", 0), 500),
+            "damage_deal_500k": (d.get("total_damage_dealt", 0), 500000),
+            "gunner": (d.get("total_shots_fired", 0), 10000),
+            "tough_guy": (d.get("total_damage_taken", 0), 200000),
             # 生存 - 用历史最佳
-            "survivor": (d["best_time_survived"], 300),
-            "veteran": (d["best_time_survived"], 900),
-            "legend": (d["best_time_survived"], 1800),
+            "survivor": (d.get("best_time_survived", 0), 300),
+            "veteran": (d.get("best_time_survived", 0), 900),
+            "legend": (d.get("best_time_survived", 0), 1800),
             # 新增死亡进度
-            "die_1": (self.data["total_deaths"], 1),
-            "die_10": (self.data["total_deaths"], 10),
-            "die_100": (self.data["total_deaths"], 100),
-            "die_1000": (self.data["total_deaths"], 1000),
-            "die_10000": (self.data["total_deaths"], 10000),
-            "horde_survivor_5": (d["total_horde_survived"], 5),
-            "horde_survivor_20": (d["total_horde_survived"], 20),
+            "die_1": (self.data.get("total_deaths", 0), 1),
+            "die_10": (self.data.get("total_deaths", 0), 10),
+            "die_100": (self.data.get("total_deaths", 0), 100),
+            "die_1000": (self.data.get("total_deaths", 0), 1000),
+            "die_10000": (self.data.get("total_deaths", 0), 10000),
+            "horde_survivor_5": (d.get("total_horde_survived", 0), 5),
+            "horde_survivor_20": (d.get("total_horde_survived", 0), 20),
             # 技能武器
-            "shield_master": (d["total_shield_blocks"], 100),
-            "grapple_master": (d["total_grapples"], 50),
-            "berserker": (d["skill_usage"].get("berserk", 0), 10),
+            "shield_master": (d.get("total_shield_blocks", 0), 100),
+            "grapple_master": (d.get("total_grapples", 0), 50),
+            "berserker": (_su.get("berserk", 0), 10),
             # 结局挑战
-            "millionaire": (d["best_score"], 1000000),
-            "perfect_ending": (d["endings"].get("perfect", 0), 1),
-            "all_endings": (sum(1 for v in d["endings"].values() if v > 0), 6),
+            "millionaire": (d.get("best_score", 0), 1000000),
+            "perfect_ending": (_end.get("perfect", 0), 1),
+            "all_endings": (sum(1 for v in _end.values() if v > 0), 6),
+            # 争分夺秒（v2.2.0）
+            "race_first_win": (self.data.get("race_wins", 0), 1),
+            "race_5_wins": (self.data.get("race_wins", 0), 5),
+            "race_100_kills": (max((e.get("kills", 0) for e in self.data.get("race_leaderboard", [])), default=0), 100),
+            "race_30k_score": (max((e.get("score", 0) for e in self.data.get("race_leaderboard", [])), default=0), 30000),
         }
         return progress_map.get(key, None)
 
@@ -497,13 +516,13 @@ class GameRecords:
                 item["date"] = now
                 new_unlocks.append(key)
         # 首次击杀
-        if self.data["total_kills"] >= 1:
+        if self.data.get("total_kills", 0) >= 1:
             unlock("first_blood")
-        if self.data["total_kills"] >= 100:
+        if self.data.get("total_kills", 0) >= 100:
             unlock("zombie_slayer")
-        if self.data["total_kills"] >= 1000:
+        if self.data.get("total_kills", 0) >= 1000:
             unlock("zombie_hunter")
-        if self.data["total_kills"] >= 10000:
+        if self.data.get("total_kills", 0) >= 10000:
             unlock("zombie_destroyer")
         # 存活时间
         if d.get("time_survived", 0) >= 300:
@@ -513,15 +532,15 @@ class GameRecords:
         if d.get("time_survived", 0) >= 1800:
             unlock("legend")
                 # 死亡成就解锁
-        if self.data["total_deaths"] >= 1:
+        if self.data.get("total_deaths", 0) >= 1:
             unlock("die_1")
-        if self.data["total_deaths"] >= 10:
+        if self.data.get("total_deaths", 0) >= 10:
             unlock("die_10")
-        if self.data["total_deaths"] >= 100:
+        if self.data.get("total_deaths", 0) >= 100:
             unlock("die_100")
-        if self.data["total_deaths"] >= 1000:
+        if self.data.get("total_deaths", 0) >= 1000:
             unlock("die_1000")
-        if self.data["total_deaths"] >= 10000:
+        if self.data.get("total_deaths", 0) >= 10000:
             unlock("die_10000")
         # 技能/武器
         if d.get("skills_upgraded", 0) >= 20:
@@ -529,27 +548,30 @@ class GameRecords:
         if d.get("weapons_collected", 0) >= 13:
             unlock("weapon_collector")
         # Boss击杀
-        boss_total = self.data["kills_by_type"].get("boss_long", 0) + self.data["kills_by_type"].get("boss_xiang", 0)
+        _kbt = self.data.get("kills_by_type", {}) or {}
+        boss_total = _kbt.get("boss_long", 0) + _kbt.get("boss_xiang", 0)
         if boss_total >= 10:
             unlock("boss_slayer")
-        if self.data["kills_by_type"].get("boss_long", 0) >= 5:
+        if _kbt.get("boss_long", 0) >= 5:
             unlock("dragon_hunter")
-        if self.data["kills_by_type"].get("boss_xiang", 0) >= 5:
+        if _kbt.get("boss_xiang", 0) >= 5:
             unlock("xiang_hunter")
         # 结局
         ending = d.get("ending")
         if ending == "perfect":
             unlock("perfect_ending")
-        if all(self.data["endings"].get(e, 0) > 0 for e in self.data["endings"]):
+        _end = self.data.get("endings", {}) or {}
+        if all(_end.get(e, 0) > 0 for e in _end):
             unlock("all_endings")
         # 其他旧成就
-        if self.data["total_shield_blocks"] >= 100:
+        if self.data.get("total_shield_blocks", 0) >= 100:
             unlock("shield_master")
-        if self.data["total_grapples"] >= 50:
+        if self.data.get("total_grapples", 0) >= 50:
             unlock("grapple_master")
-        if self.data["skill_usage"].get("berserk", 0) >= 10:
+        if (self.data.get("skill_usage", {}) or {}).get("berserk", 0) >= 10:
             unlock("berserker")
-        if d.get("score", 0) >= 1000000:
+        # v2.2.0 口径统一：本局得分或历史最佳任一达标即解锁（与进度展示一致）
+        if max(d.get("score", 0), self.data.get("best_score", 0)) >= 1000000:
             unlock("millionaire")
         if total_kills >= 100:
             unlock("centurion")
@@ -566,17 +588,18 @@ class GameRecords:
         if len(self.data.get("combo_unlocked", [])) >= 3:
             unlock("combo_master")
         # 新增成就检测
-        if self.data["total_horde_survived"] >=5:
+        _horde_surv = self.data.get("total_horde_survived", 0)
+        if _horde_surv >= 5:
             unlock("horde_survivor_5")
-        if self.data["total_horde_survived"] >=20:
+        if _horde_surv >= 20:
             unlock("horde_survivor_20")
-        if self.data["total_critical_hits"] >=500:
+        if self.data.get("total_critical_hits", 0) >= 500:
             unlock("crit_master")
-        if self.data["total_damage_dealt"] >=500000:
+        if self.data.get("total_damage_dealt", 0) >= 500000:
             unlock("damage_deal_500k")
-        if self.data["total_shots_fired"] >=10000:
+        if self.data.get("total_shots_fired", 0) >= 10000:
             unlock("gunner")
-        if self.data["total_damage_taken"] >=200000:
+        if self.data.get("total_damage_taken", 0) >= 200000:
             unlock("tough_guy")
         if d.get("mode") == "timed" and d.get("time_survived",0) <=600 and not d.get("died",True):
             unlock("speedrunner")
@@ -591,7 +614,7 @@ class GameRecords:
             unlock("ice_sculptor")
         if d.get("poison_kills", 0) >= 30:
             unlock("poison_master")
-        if self.data["skill_usage"].get("purify", 0) >= 10:
+        if (self.data.get("skill_usage", {}) or {}).get("purify", 0) >= 10:
             unlock("purifier")
         if d.get("war_cry_kills", 0) >= 50:
             unlock("war_crier")
@@ -671,6 +694,68 @@ class GameRecords:
         self.data["total_coins_earned"] = self.data.get("total_coins_earned", 0) + amount
         self._save()
         return self.data["coins"]
+
+    # ==================== 争分夺秒（v2.2.0） ====================
+    def record_race_result(self, score, time_left, kills, victory=True):
+        """记录争分夺秒挑战成绩；达标给予金币奖励；返回本局奖励金币数。
+        排行榜保留历次记录（取最高分展示），达标标准：击杀>=100 或 得分>=30000 且 victory。"""
+        try:
+            score = max(0, int(score))
+            kills = max(0, int(kills))
+            entry = {
+                "date": datetime.datetime.now().isoformat(),
+                "score": score,
+                "time_left": round(float(time_left), 1),
+                "kills": kills,
+                "victory": bool(victory),
+            }
+            lb = self.data.setdefault("race_leaderboard", [])
+            lb.append(entry)
+            # 保留最近 20 条，按得分降序
+            lb.sort(key=lambda e: e.get("score", 0), reverse=True)
+            del lb[20:]
+            if score > self.data.get("race_best_score", 0):
+                self.data["race_best_score"] = score
+            self.data["race_total_runs"] = self.data.get("race_total_runs", 0) + 1
+            if victory:
+                self.data["race_wins"] = self.data.get("race_wins", 0) + 1
+            # 达标全局奖励（金币）
+            coins = 0
+            if victory and (kills >= 100 or score >= 30000):
+                coins = 50
+                self.add_coins(coins)
+            # 即时成就解锁（争分夺秒）
+            self._check_race_achievements(score, kills, victory)
+            self._save()
+            return coins
+        except Exception:
+            import traceback as _tb
+            _tb.print_exc()
+            return 0
+
+    def _check_race_achievements(self, score, kills, victory):
+        """争分夺秒专属成就"""
+        try:
+            ach = self.data["achievements"]
+            def _unlock(k):
+                item = ach.get(k)
+                if item and not item.get("unlocked", False):
+                    item["unlocked"] = True
+                    item["date"] = datetime.datetime.now().isoformat()
+            if victory and self.data.get("race_wins", 0) >= 1:
+                _unlock("race_first_win")
+            if self.data.get("race_wins", 0) >= 5:
+                _unlock("race_5_wins")
+            if kills >= 100:
+                _unlock("race_100_kills")
+            if score >= 30000:
+                _unlock("race_30k_score")
+        except Exception:
+            pass
+
+    def get_race_leaderboard(self):
+        """返回排行榜列表（最高分在前）"""
+        return list(self.data.get("race_leaderboard", []))
 
     def spend_coins(self, amount):
         if self.get_coins() >= amount:

@@ -1164,6 +1164,13 @@ class EffectsMixin:
         if getattr(enemy, '_death_processed', False):
             return
         enemy._death_processed = True
+        # v2.2.0 争分夺秒：击杀加时（按敌人类型）
+        try:
+            _hm = getattr(self, 'horde_manager', None)
+            if _hm is not None and hasattr(_hm, 'race_kill_bonus_for'):
+                _hm.add_race_time(_hm.race_kill_bonus_for(enemy))
+        except Exception:
+            pass
         # v2.1.8：击杀冷却削减
         self._apply_kill_cd_slash()
         # 记录击杀

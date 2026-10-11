@@ -13,6 +13,8 @@ import datetime
 import time
 import socket
 
+import error_silencer
+
 from config import *
 from assets import AssetManager, SOUND_MAP, MUSIC_MAP, MAP_MUSIC_MAP
 from records import GameRecords, GameSession
@@ -614,6 +616,13 @@ class GameCore:
             else:
                 self.current_map = MapType.SCHOOL
                 self.map_config = MAP_CONFIGS[MapType.SCHOOL]
+            # v2.2.0 争分夺秒：随机地图（替代原固定校园）
+            if self.config.game_mode == GameMode.TIMED:
+                self.current_map = random.choice([
+                    MapType.SCHOOL, MapType.STREET, MapType.DOWNTOWN,
+                    MapType.SUBURB, MapType.NUCLEAR_PLANT])
+                self.map_config = MAP_CONFIGS[self.current_map]
+                logger.info(f"争分夺秒模式随机地图: {self.map_config['name']}")
 
             self.world = GameWorld(map_type=self.current_map)
             # v2.0.13/14：可选加载 .zmap 二进制大地图（默认空=原随机地图；缺失/损坏自动回退并提示）
@@ -797,7 +806,53 @@ class GameCore:
             return self._skill_minigun_overdrive()
         elif skill_type == SkillType.RAILGUN_ANNIHILATION:
             return self._skill_railgun_annihilation()
+        elif skill_type == SkillType.VEHICLE_SUMMON:
+            return self._skill_vehicle_summon()
         return False
+
+    # ==================== 载具召唤（v2.2.0） ====================
+    def _skill_vehicle_summon(self):
+        """载具召唤：1级大运重卡 / 2级99A坦克 / 3级武装直升机"""
+        try:
+            skill = self.player.skill_tree.get_skill(SkillType.VEHICLE_SUMMON)
+            if not skill or skill.current_level == 0:
+                return False
+            cur = getattr(self.player, 'vehicle', None)
+            if cur is not None and getattr(cur, 'alive', False):
+                self.floating_texts.append(FloatingText(
+                    self.player.x, self.player.y - 40, "载具仍在作战中!", color=GRAY, lifetime=1.5))
+                return False
+            vid = {1: "truck", 2: "tank", 3: "heli"}.get(skill.current_level, "truck")
+            vname = {"truck": "大运重卡", "tank": "99A坦克", "heli": "武装直升机"}[vid]
+            from entities_pkg.vehicles import Vehicle, load_vehicle_images, _VEHICLE_IMAGES
+            if not _VEHICLE_IMAGES:
+                load_vehicle_images()
+            dmg_mult = self.player.damage_mult * self.player.damage_boost_mult * self.player.buff_manager.get_damage_mult()
+            self.player.vehicle = Vehicle(vid, self.player.x, self.player.y, damage_mult=dmg_mult)
+            self.player.vehicle.on_enemy_death_cb = self._on_enemy_death
+            self.floating_texts.append(FloatingText(
+                self.player.x, self.player.y - 60, f"召唤 {vname}!", color=(0, 190, 255), lifetime=2.0))
+            self.particles.spawn_explosion(self.player.x, self.player.y, (0, 190, 255), 30)
+            self.camera.shake(6, 0.3)
+            self.assets.play_sound_random(["ui_click", "bash"])
+            return True
+        except Exception:
+            return False
+
+    def _vehicle_destroyed(self):
+        """载具被摧毁：玩家脱离，技能进入冷却"""
+        try:
+            if getattr(self.player, 'vehicle', None) is not None:
+                self.player.vehicle = None
+                # 技能进入冷却（60s * 冷却缩减）
+                cd = 60.0 * getattr(self.player, 'cooldown_mult', 1.0)
+                self.player.active_skills[SkillType.VEHICLE_SUMMON] = cd
+                self.particles.spawn_explosion(self.player.x, self.player.y, (255, 120, 40), 40)
+                self.camera.shake(10, 0.4)
+                self.floating_texts.append(FloatingText(
+                    self.player.x, self.player.y - 50, "载具被摧毁!", color=RED, lifetime=1.8))
+        except Exception:
+            pass
 
     def _throw_skill_grenade(self, target_x, target_y):
         """技能手雷：抛物线投射物，根据技能等级解锁附魔"""
@@ -961,6 +1016,10 @@ class GameCore:
 
     def run(self):
         logger.info("游戏主循环开始")
+        # v2.2.0 错误可忽略静默机制：首次错误询问，忽略后同类错误静默
+        self.error_silencer = error_silencer.ErrorSilencer()
+        self.error_ask_visible = False
+        self.error_ask_choice = None  # 'ignore' / 'raise'
         while self.running:
             dt = self.clock.tick(60) / 1000.0
             dt = min(dt, 0.05)
@@ -968,18 +1027,41 @@ class GameCore:
             if hasattr(self, 'dev_time_scale') and self.dev_time_scale and self.dev_time_scale != 1.0:
                 dt *= self.dev_time_scale
 
+            # v2.2.0 错误询问框（暂停游戏等待用户决策）
+            if self.error_ask_visible:
+                self._update_error_ask(dt)
+                self.draw()
+                continue
+
             try:
                 self.handle_events()
                 self.update(dt)
                 self.draw()
             except Exception as e:
-                logger.log_exception(e)
-                self.screen.fill(BLACK)
-                error_text = self.font.render(f"错误: {str(e)}", True, RED)
-                self.screen.blit(error_text, (50, self.scaled_height // 2))
-                pygame.display.flip()
-                pygame.time.wait(3000)
-                self.running = False
+                action = self.error_silencer.handle(e)
+                if action == "ignore":
+                    # 用户已选择忽略：静默跳过，继续正常运行
+                    logger.warning(f"[静默] 已忽略错误: {type(e).__name__}: {e}")
+                    continue
+                elif action == "ask":
+                    # 首次出现：记录日志并弹出询问框
+                    logger.log_exception(e)
+                    self.error_ask_visible = True
+                    self.error_ask_choice = None
+                    self.error_ask_pending = self.error_silencer.pending_info
+                    # 显示询问框
+                    self._draw_error_ask(self.error_ask_pending)
+                    pygame.display.flip()
+                    continue
+                else:
+                    # 用户选择不忽略：按原逻辑报错退出
+                    logger.log_exception(e)
+                    self.screen.fill(BLACK)
+                    error_text = self.font.render(f"错误: {str(e)}", True, RED)
+                    self.screen.blit(error_text, (50, self.scaled_height // 2))
+                    pygame.display.flip()
+                    pygame.time.wait(3000)
+                    self.running = False
 
         logger.info("游戏退出")
         # 退出时自动保存对局
@@ -989,4 +1071,68 @@ class GameCore:
         try:
             sys.exit(0)
         except:
+            pass
+
+    # ==================== 错误可忽略询问框（v2.2.0） ====================
+    def _update_error_ask(self, dt):
+        """处理错误询问框输入：Y=忽略并静默，N=不忽略按原逻辑"""
+        for ev in pygame.event.get():
+            if ev.type == pygame.KEYDOWN:
+                if ev.key == pygame.K_y or ev.key == pygame.K_RETURN:
+                    self.error_silencer.decide(True)
+                    self.error_ask_visible = False
+                elif ev.key == pygame.K_n or ev.key == pygame.K_ESCAPE:
+                    self.error_silencer.decide(False)
+                    self.error_ask_visible = False
+            elif ev.type == pygame.MOUSEBUTTONDOWN:
+                mx, my = ev.pos
+                sc = getattr(self, "scale", 1.0)
+                sw = getattr(self, "scaled_width", 1280)
+                sh = getattr(self, "scaled_height", 720)
+                # 按钮区域（与绘制保持一致）
+                bx = int(sw * 0.5 - 200 * sc)
+                by = int(sh * 0.5 + 60 * sc)
+                bw = int(190 * sc)
+                bh = int(46 * sc)
+                if bx <= mx <= bx + bw and by <= my <= by + bh:
+                    self.error_silencer.decide(True)
+                    self.error_ask_visible = False
+                elif bx + int(210 * sc) <= mx <= bx + int(210 * sc) + bw and by <= my <= by + bh:
+                    self.error_silencer.decide(False)
+                    self.error_ask_visible = False
+
+    def _draw_error_ask(self, info):
+        """绘制错误询问框（黑底半透明遮罩+错误摘要+两个按钮）"""
+        try:
+            sc = getattr(self, "scale", 1.0)
+            sw = getattr(self, "scaled_width", 1280)
+            sh = getattr(self, "scaled_height", 720)
+            ov = pygame.Surface((sw, sh), pygame.SRCALPHA)
+            ov.fill((0, 0, 0, 170))
+            self.screen.blit(ov, (0, 0))
+            msg = (info or {}).get("message", "未知错误")
+            trace_txt = (info or {}).get("trace", "")
+            title = self.font_title.render("检测到错误，是否忽略并继续游戏？", True, (255, 200, 60))
+            self.screen.blit(title, title.get_rect(center=(sw // 2, int(sh * 0.35))))
+            lines = [msg[:90]]
+            for tline in trace_txt.split("\n")[-2:]:
+                lines.append(tline[:90])
+            yy = int(sh * 0.42)
+            for ln in lines:
+                ts = self.font.render(ln, True, (255, 120, 120))
+                self.screen.blit(ts, ts.get_rect(center=(sw // 2, yy)))
+                yy += int(26 * sc)
+            hint = self.font.render("Y/回车=忽略并静默（之后同类错误不再提示）  N/ESC=不忽略", True, (180, 180, 180))
+            self.screen.blit(hint, hint.get_rect(center=(sw // 2, int(sh * 0.52))))
+            bx = int(sw * 0.5 - 200 * sc)
+            by = int(sh * 0.5 + 60 * sc)
+            bw = int(190 * sc)
+            bh = int(46 * sc)
+            pygame.draw.rect(self.screen, (40, 160, 90), (bx, by, bw, bh), border_radius=10)
+            lb = self.font.render("忽略并静默", True, (255, 255, 255))
+            self.screen.blit(lb, lb.get_rect(center=(bx + bw // 2, by + bh // 2)))
+            pygame.draw.rect(self.screen, (200, 70, 60), (bx + int(210 * sc), by, bw, bh), border_radius=10)
+            rb = self.font.render("不忽略", True, (255, 255, 255))
+            self.screen.blit(rb, rb.get_rect(center=(bx + int(210 * sc) + bw // 2, by + bh // 2)))
+        except Exception:
             pass

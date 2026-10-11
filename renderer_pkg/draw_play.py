@@ -331,14 +331,23 @@ class PlayMixin:
             for p in (self.game.player, self.game.player2):
                 if p is None:
                     continue
-                p.draw(self.screen, cam_x, cam_y, self.game.font, scale)
+                # v2.2.0 载具：优先绘制载具（玩家在载具内）
+                _veh = getattr(p, 'vehicle', None)
+                if _veh is not None and getattr(_veh, 'alive', False):
+                    _veh.draw(self.screen, cam_x, cam_y, scale)
+                else:
+                    p.draw(self.screen, cam_x, cam_y, self.game.font, scale)
                 if getattr(p, 'downed', False):
                     dtag = self.game.font_small.render("倒地", True, (240, 230, 120))
                     dx = int((p.x - cam_x) * scale)
                     dy = int((p.y - cam_y) * scale)
                     self.screen.blit(dtag, (dx - dtag.get_width() // 2, dy - int(24 * scale)))
         else:
-            player.draw(self.screen, cam_x, cam_y, self.game.font, scale)
+            _veh = getattr(player, 'vehicle', None)
+            if _veh is not None and getattr(_veh, 'alive', False):
+                _veh.draw(self.screen, cam_x, cam_y, scale)
+            else:
+                player.draw(self.screen, cam_x, cam_y, self.game.font, scale)
 
         # 近战挥砍动画
         if hasattr(self.game, 'melee_attack_active') and self.game.melee_attack_active:

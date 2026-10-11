@@ -679,6 +679,11 @@ class InputMixin:
                 if self.state == GameState.PLAYING and self.dev_mode:
                     self.dev_panel_open = not self.dev_panel_open
                     self._rebuild_dev_buttons()
+            # v2.2.0 争分夺秒：K 键主动结算关卡
+            if ev.type == pygame.KEYDOWN and ev.key == pygame.K_k:
+                _ms = getattr(self, '_settle_race_manual', None)
+                if _ms is not None:
+                    _ms()
 
     def start_text_input(self):
         """唤起系统输入法（SDL_IME），供网络IP输入框/开发者密码框使用"""

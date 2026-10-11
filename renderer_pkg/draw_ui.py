@@ -235,7 +235,7 @@ class UiMixin:
         mode_descs = [
             "5张地图，20分钟/张，剧情收集，特殊事件",
             "无限生存，倒计时出错后变为正向计时",
-            "限时20分钟，尽可能存活并击败Boss",
+            "争分夺秒：随机地图，杀怪加时，无限挑战",
         ]
 
         for i, btn in enumerate(self.game.mode_select_buttons):
@@ -269,7 +269,7 @@ class UiMixin:
         title_rect = title.get_rect(center=(sw // 2, int(100 * scale)))
         self.screen.blit(title, title_rect)
 
-        mode_name = {"STORY": "故事模式", "ENDLESS": "无尽模式", "TIMED": "限时模式"}
+        mode_name = {"STORY": "故事模式", "ENDLESS": "无尽模式", "TIMED": "争分夺秒"}
         mode_text = self.game.font.render(f"当前模式: {mode_name.get(self.game.config.game_mode.name, '未知')}", True, GOLD)
         mode_rect = mode_text.get_rect(center=(sw // 2, int(150 * scale)))
         self.screen.blit(mode_text, mode_rect)
@@ -2548,6 +2548,24 @@ class UiMixin:
         wave_rect = wave_text.get_rect(center=(sw // 2, y))
         self.screen.blit(wave_text, wave_rect)
         y += line_spacing
+
+        # v2.2.0 争分夺秒：排行榜展示（历次最高分+剩余倒计时+击杀）
+        if self.game.config.game_mode.name == "TIMED":
+            lb = self.game.records.get_race_leaderboard()
+            race_best = self.game.records.data.get("race_best_score", 0)
+            race_text = self.game.font.render(f"争分夺秒最高分: {race_best}   参与次数: {self.game.records.data.get('race_total_runs', 0)}", True, GOLD)
+            race_rect = race_text.get_rect(center=(sw // 2, y))
+            self.screen.blit(race_text, race_rect)
+            y += line_spacing
+            # 前5名
+            top5 = lb[:5]
+            for i, e in enumerate(top5):
+                _t = e.get("time_left", 0)
+                _line = f"#{i+1} 得分{e.get('score',0)}  剩余{_t}s  击杀{e.get('kills',0)}"
+                _surf = self.game.font.render(_line, True, GRAY if not e.get("victory") else (120, 230, 120))
+                _rect = _surf.get_rect(center=(sw // 2, y))
+                self.screen.blit(_surf, _rect)
+                y += int(30 * scale)
 
         # 成就统计
         unlocked = len(self.game.records.get_unlocked_achievements())

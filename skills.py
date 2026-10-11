@@ -11,7 +11,7 @@ class Skill:
                  level_descriptions=None, effect_key=None, effect_per_level=None,
                  weight=1.0, base_damage=0, damage_per_level=0,
                  base_radius=0, radius_per_level=0, max_level_bonus=None,
-                 is_legendary=False):
+                 is_legendary=False, preserve_requires=False):
         self.skill_type = skill_type
         self.name = name
         self.description = description
@@ -21,6 +21,8 @@ class Skill:
         self.requires = requires or []
         self.is_active = is_active
         self.is_legendary = is_legendary
+        # v2.2.0：保留原始前置（不被依赖减弱 clamp）
+        self.preserve_requires = preserve_requires
         # 等级词条：{等级: 描述}，高等级技能显示不同词条
         self.level_descriptions = level_descriptions or {}
         # 效果属性键（用于属性详情显示）
@@ -158,8 +160,9 @@ class SkillTree:
                     s.level_descriptions = {k: v for k, v in s.level_descriptions.items() if k <= 3}
                 s.max_level_bonus = None
         # 减弱依赖：所有前置需求等级 clamp 到 1（只需拥有前置技能即可解锁后续）
+        # v2.2.0 例外：VEHICLE_SUMMON 保留"生命强化满级"前置（preserve_requires）
         for s in self.skills:
-            if s.requires:
+            if s.requires and not getattr(s, "preserve_requires", False):
                 s.requires = [(rt, 1) for rt, _ in s.requires]
 
     def _create_skills(self):
@@ -376,6 +379,14 @@ class SkillTree:
                   requires=[(SkillType.BERSERK, 1), (SkillType.COOLDOWN_REDUCTION, 1)],
                   level_descriptions={1: "收割咏唱：击杀减全部技能冷却1%", 2: "死亡颂歌：击杀减全部技能冷却2%",
                                       3: "轮回终曲：击杀减全部技能冷却3%，击杀额外回1%生命"}),
+            # v2.2.0 载具召唤：生命强化满级（3级）解锁；保留满级前置（preserve_requires）
+            Skill(SkillType.VEHICLE_SUMMON, "载具召唤", "生命强化满级解锁：召唤载具作战（3级）", 3,
+                  icon_color=(0, 190, 255), is_active=True,
+                  requires=[(SkillType.HEALTH_UP, 3)], preserve_requires=True,
+                  level_descriptions={1: "大运重卡：撞击伤害、可被破坏、禁射击、可用其他技能",
+                                      2: "99A坦克：厚重装甲+主炮（3发高爆+1发穿甲，可穿透尸群）",
+                                      3: "武装直升机：无视近战、机炮+火箭弹、速度较快"},
+                  max_level_bonus="王牌载具：召唤物属性全面提升"),
             Skill(SkillType.MEDIC_POD, "医疗舱", "部署持续回血区域", 5, icon_color=GREEN,
                   requires=[(SkillType.REGENERATION, 1)], is_active=True, weight=1.5,
                   base_damage=0, damage_per_level=0, base_radius=80, radius_per_level=20,

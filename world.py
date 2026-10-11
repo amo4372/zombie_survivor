@@ -861,6 +861,11 @@ class HordeManager:
         self.spawn_timer = 0.0
         self.total_time = 0.0
 
+        # === 争分夺秒模式（v2.2.0，替代原限时模式）===
+        self.race_time_left = 60.0          # 初始倒计时
+        self.race_max_time = 300.0          # 倒计时上限（防无限溢出）
+        self.race_kill_bonus = {"normal": 1.0, "elite": 3.0, "boss": 10.0}
+
         # === 尸潮规模系统 ===
         self.horde_count = 0           # 已发生的尸潮次数
         self.current_scale = self.SCALE_SMALL
@@ -891,6 +896,9 @@ class HordeManager:
                 self.endless_countdown_left -= dt
                 if self.endless_countdown_left <= 0:
                     self.endless_glitch_shown = True
+        # 争分夺秒：倒计时递减
+        if self.game_mode == GameMode.TIMED:
+            self.race_time_left = max(0.0, self.race_time_left - dt)
         self.timer -= dt
         if self.horde_active:
             if self.timer <= 0:
@@ -959,8 +967,8 @@ class HordeManager:
     def get_time_display(self):
         """返回(显示文本, 是否倒计时模式)"""
         if self.game_mode == GameMode.TIMED:
-            # 限时模式原有逻辑不变
-            remain = max(0, 900 - self.total_time)
+            # 争分夺秒：剩余倒计时
+            remain = max(0, self.race_time_left)
             m = int(remain // 60)
             s = int(remain % 60)
             return f"{m:02d}:{s:02d}", True
@@ -978,6 +986,24 @@ class HordeManager:
                 m = int(secs // 60)
                 s = int(secs % 60)
                 return f"{m}:{s:02d}", False
+
+    def add_race_time(self, amount):
+        """争分夺秒：击杀加时（上限 race_max_time）"""
+        if self.game_mode == GameMode.TIMED:
+            self.race_time_left = min(self.race_max_time, self.race_time_left + max(0, amount))
+
+    def race_kill_bonus_for(self, enemy):
+        """按敌人类型返回加时秒数"""
+        if self.game_mode != GameMode.TIMED:
+            return 0.0
+        if getattr(enemy, "is_boss", False):
+            return self.race_kill_bonus.get("boss", 10.0)
+        et = getattr(enemy, "enemy_type", None)
+        name = getattr(et, "name", "") if et is not None else ""
+        if "elite" in str(name).lower() or "brute" in str(name).lower() or "assassin" in str(name).lower() \
+                or "sorcerer" in str(name).lower() or "guardian" in str(name).lower():
+            return self.race_kill_bonus.get("elite", 3.0)
+        return self.race_kill_bonus.get("normal", 1.0)
 
     def is_horde_active(self):
         return self.horde_active
@@ -1107,5 +1133,5 @@ class HordeManager:
 
     def is_timed_over(self):
         if self.game_mode == GameMode.TIMED:
-            return self.total_time >= 1200.0
+            return self.race_time_left <= 0.0
         return False
