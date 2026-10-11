@@ -70,6 +70,25 @@ except Exception as e:
     check("不忽略同类错误 -> raise", act == "raise")
 
 
+# ==================== 1b. 错误询问框触控命中（v2.2.0 触控端） ====================
+from zombie_pkg.game_core import GameCore
+
+# 用桩对象绑定类方法验证命中逻辑（触控热区）
+_stub = type("Stub", (), {
+    "scale": 1.0, "scaled_width": 1280, "scaled_height": 720,
+})()
+_hit = GameCore._error_ask_hit.__get__(_stub)
+check("触控 忽略按钮中心命中", _hit(430, 420) == "ignore")
+check("触控 不忽略按钮中心命中", _hit(650, 420) == "raise")
+check("触控 按钮外不命中", _hit(50, 50) is None)
+check("触控 热区高度60*scale", _hit(430, 465) == "ignore")  # 420+45 仍在高度内
+check("触控 热区外下边界不命中", _hit(430, 486) is None)
+
+# 归一化坐标换算：FINGER 事件 (x=0.41,y=0.62) → 物理 (524, 446) → 忽略按钮内
+fx, fy = 0.41, 0.62
+check("触控 FINGER 归一化换算命中", _hit(fx * 1280, fy * 720) == "ignore")
+
+
 # ==================== 2. 争分夺秒模式 ====================
 from config import GameMode
 from world import HordeManager

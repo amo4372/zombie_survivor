@@ -1074,8 +1074,25 @@ class GameCore:
             pass
 
     # ==================== 错误可忽略询问框（v2.2.0） ====================
+    def _error_ask_hit(self, mx, my):
+        """错误询问框按钮命中：返回 'ignore'/'raise'/None（物理像素坐标）"""
+        sc = getattr(self, "scale", 1.0)
+        sw = getattr(self, "scaled_width", 1280)
+        sh = getattr(self, "scaled_height", 720)
+        # 触控友好热区：宽 200*sc 高 60*sc，两按钮间距 220*sc
+        bw = int(200 * sc)
+        bh = int(60 * sc)
+        bx = int(sw * 0.5 - 210 * sc)
+        by = int(sh * 0.5 + 60 * sc)
+        if bx <= mx <= bx + bw and by <= my <= by + bh:
+            return "ignore"
+        if bx + int(220 * sc) <= mx <= bx + int(220 * sc) + bw and by <= my <= by + bh:
+            return "raise"
+        return None
+
     def _update_error_ask(self, dt):
-        """处理错误询问框输入：Y=忽略并静默，N=不忽略按原逻辑"""
+        """处理错误询问框输入：Y/回车=忽略，N/ESC=不忽略；
+        触控/鼠标支持抬手确认（FINGERUP/MOUSEBUTTONUP），热区已加大"""
         for ev in pygame.event.get():
             if ev.type == pygame.KEYDOWN:
                 if ev.key == pygame.K_y or ev.key == pygame.K_RETURN:
@@ -1084,21 +1101,18 @@ class GameCore:
                 elif ev.key == pygame.K_n or ev.key == pygame.K_ESCAPE:
                     self.error_silencer.decide(False)
                     self.error_ask_visible = False
-            elif ev.type == pygame.MOUSEBUTTONDOWN:
-                mx, my = ev.pos
-                sc = getattr(self, "scale", 1.0)
-                sw = getattr(self, "scaled_width", 1280)
-                sh = getattr(self, "scaled_height", 720)
-                # 按钮区域（与绘制保持一致）
-                bx = int(sw * 0.5 - 200 * sc)
-                by = int(sh * 0.5 + 60 * sc)
-                bw = int(190 * sc)
-                bh = int(46 * sc)
-                if bx <= mx <= bx + bw and by <= my <= by + bh:
-                    self.error_silencer.decide(True)
+            elif ev.type == pygame.FINGERUP or ev.type == pygame.FINGERDOWN:
+                # 触控：归一化坐标(0~1) → 物理像素；UP 抬手确认，DOWN 兜底（无UP设备）
+                mx = ev.x * self.scaled_width
+                my = ev.y * self.scaled_height
+                act = self._error_ask_hit(mx, my)
+                if act is not None:
+                    self.error_silencer.decide(act == "ignore")
                     self.error_ask_visible = False
-                elif bx + int(210 * sc) <= mx <= bx + int(210 * sc) + bw and by <= my <= by + bh:
-                    self.error_silencer.decide(False)
+            elif ev.type == pygame.MOUSEBUTTONUP or ev.type == pygame.MOUSEBUTTONDOWN:
+                act = self._error_ask_hit(*ev.pos)
+                if act is not None:
+                    self.error_silencer.decide(act == "ignore")
                     self.error_ask_visible = False
 
     def _draw_error_ask(self, info):
@@ -1124,15 +1138,15 @@ class GameCore:
                 yy += int(26 * sc)
             hint = self.font.render("Y/回车=忽略并静默（之后同类错误不再提示）  N/ESC=不忽略", True, (180, 180, 180))
             self.screen.blit(hint, hint.get_rect(center=(sw // 2, int(sh * 0.52))))
-            bx = int(sw * 0.5 - 200 * sc)
+            bx = int(sw * 0.5 - 210 * sc)
             by = int(sh * 0.5 + 60 * sc)
-            bw = int(190 * sc)
-            bh = int(46 * sc)
-            pygame.draw.rect(self.screen, (40, 160, 90), (bx, by, bw, bh), border_radius=10)
+            bw = int(200 * sc)
+            bh = int(60 * sc)
+            pygame.draw.rect(self.screen, (40, 160, 90), (bx, by, bw, bh), border_radius=12)
             lb = self.font.render("忽略并静默", True, (255, 255, 255))
             self.screen.blit(lb, lb.get_rect(center=(bx + bw // 2, by + bh // 2)))
-            pygame.draw.rect(self.screen, (200, 70, 60), (bx + int(210 * sc), by, bw, bh), border_radius=10)
+            pygame.draw.rect(self.screen, (200, 70, 60), (bx + int(220 * sc), by, bw, bh), border_radius=12)
             rb = self.font.render("不忽略", True, (255, 255, 255))
-            self.screen.blit(rb, rb.get_rect(center=(bx + int(210 * sc) + bw // 2, by + bh // 2)))
+            self.screen.blit(rb, rb.get_rect(center=(bx + int(220 * sc) + bw // 2, by + bh // 2)))
         except Exception:
             pass
