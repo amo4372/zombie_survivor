@@ -297,6 +297,11 @@ class PlayingMixin:
                     camera.shake(6, 0.4)
 
     def _update_playing(self, dt):
+        # v2.2.3 争分夺秒加时反馈计时（HUD "+N 秒"淡出）
+        if getattr(self, 'race_gain_timer', 0) > 0:
+            self.race_gain_timer = max(0.0, self.race_gain_timer - dt)
+            if self.race_gain_timer <= 0:
+                self.race_last_gain = 0
         # v2.0.19 BOSS 锁定必中标记推进（蓄力结束 → 必中伤害）
         locks = getattr(self, "boss_lock_marks", [])
         if locks:
@@ -509,7 +514,15 @@ class PlayingMixin:
             # 保存释放前的瞄准状态（handle_touch会在up时重置is_aiming）
             cast_result = self.skill_caster.handle_touch(_tev, self.scale)
             if cast_result:
-                if self.skill_caster.was_aiming_on_release:
+                # v2.2.3 载具存活时长按技能按钮 → 退出载具（不执行预瞄/施放）
+                _veh_t = getattr(self.player, 'vehicle', None)
+                if _veh_t is not None and _veh_t.alive:
+                    if self.skill_caster.was_aiming_on_release:
+                        self._exit_vehicle(self.player)
+                    else:
+                        self.floating_texts.append(FloatingText(
+                            self.player.x, self.player.y - 50, "长按技能按钮退出载具", (160, 160, 160), 1.2))
+                elif self.skill_caster.was_aiming_on_release:
                     self._use_skill_aimed(self.selected_skill, self.skill_caster.angle, self.skill_caster.distance_ratio)
                 else:
                     self._use_skill(self.selected_skill)
@@ -739,11 +752,10 @@ class PlayingMixin:
             else:
                 auto_shoot = self.aim_button.is_shooting
 
-        if auto_shoot and self.player.can_act() and not self.player.riot_gear.equipped and self.riot_anim_state != "equipping":
-            # v2.2.0 载具开火：坦克主炮/武直机炮火箭；重卡禁射击（重卡不进入武器开火分支）
-            _veh = getattr(self.player, 'vehicle', None)
-            weapon = None  # 防御：载具存活分支不开武器，先置空避免 UnboundLocalError
-            if _veh is not None and _veh.alive and _veh.can_shoot:
+        # v2.2.3 载具开火独立于防爆套装/装备动画条件（装备防爆套装也能发射载具武器）
+        _veh = getattr(self.player, 'vehicle', None)
+        if _veh is not None and _veh.alive and _veh.can_shoot:
+            if auto_shoot and self.player.can_act():
                 rune_dmg_mult = 1.0 + getattr(self, 'rune_buffs', {}).get("damage", 0)
                 _projs = _veh.fire(
                     self.player.x, self.player.y, self.player.facing_angle,
@@ -751,7 +763,9 @@ class PlayingMixin:
                 self.projectiles.extend(_projs)
                 if _projs:
                     self.assets.play_sound_random(["shoot_pistol", "shoot_smg"])
-            elif _veh is None or not _veh.alive:
+        elif auto_shoot and self.player.can_act() and not self.player.riot_gear.equipped and self.riot_anim_state != "equipping":
+            weapon = None  # 防御：weapon_type 为 None（异常存档/联机同步兜底）
+            if _veh is None or not _veh.alive:
                 weapon = self.player.get_current_weapon()
             # v2.1.3：防御 weapon/weapon_type 为 None（异常存档/联机同步兜底，不再崩溃）
             if weapon is not None and getattr(weapon, "weapon_type", None) is not None and weapon.can_fire():
@@ -839,10 +853,10 @@ class PlayingMixin:
             drops_vaccine = False
             if isinstance(spawn_type, tuple):
                 spawn_type, drops_vaccine = spawn_type
-            # 故事模式：使用地图配置的怪物权重（Boss除外）
+            # 故事/争分夺秒模式：使用地图配置的怪物权重（Boss除外）——v2.2.3 两模式僵尸池同步合并
             boss_types = (EnemyType.BOSS_LONG, EnemyType.BOSS_XIANG, EnemyType.BOSS_MUTANT,
                          EnemyType.BOSS_QUEEN, EnemyType.BOSS_TITAN, EnemyType.BOSS_WANG)
-            if self.config.game_mode == GameMode.STORY and spawn_type not in boss_types:
+            if self.config.game_mode in (GameMode.STORY, GameMode.TIMED) and spawn_type not in boss_types:
                 enemy_weights = self.map_config.get("enemy_weights", {})
                 if enemy_weights:
                     total_weight = sum(enemy_weights.values())

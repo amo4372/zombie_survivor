@@ -383,7 +383,15 @@ class MultiplayerMixin:
                 if sts:
                     st = sts[0]
             if st:
-                if getattr(self, '_p2_cast_aimed', False):
+                # v2.2.3 P2 载具存活时长按技能 → 退出载具
+                _veh2x = getattr(p2, 'vehicle', None)
+                if _veh2x is not None and _veh2x.alive:
+                    if getattr(self, '_p2_cast_aimed', False):
+                        self._vehicle_destroyed_for(p2, friendly=True)
+                    else:
+                        self.floating_texts.append(FloatingText(
+                            p2.x, p2.y - 50, "长按技能按钮退出载具", (160, 160, 160), 1.2))
+                elif getattr(self, '_p2_cast_aimed', False):
                     # 触控长按/拖拽预瞄释放（方向+距离）
                     self._use_skill_p2_aimed(st, getattr(self, '_p2_cast_angle', p2.facing_angle),
                                              getattr(self, '_p2_cast_ratio', 1.0))
@@ -646,16 +654,21 @@ class MultiplayerMixin:
         except Exception:
             return False
 
-    def _vehicle_destroyed_for(self, player):
-        """指定玩家载具被摧毁（P1/P2 通用）"""
+    def _vehicle_destroyed_for(self, player, friendly=False):
+        """指定玩家载具被摧毁（P1/P2 通用）；friendly=True 为主动退出（v2.2.3）"""
         try:
             if getattr(player, 'vehicle', None) is not None:
                 player.vehicle = None
                 cd = 60.0 * getattr(player, 'cooldown_mult', 1.0)
                 player.active_skills[SkillType.VEHICLE_SUMMON] = cd
-                self.particles.spawn_explosion(player.x, player.y, (255, 120, 40), 40)
-                self.camera.shake(10, 0.4)
-                self.floating_texts.append(FloatingText(
-                    player.x, player.y - 50, "载具被摧毁!", color=RED, lifetime=1.8))
+                if friendly:
+                    self.particles.spawn_explosion(player.x, player.y, (120, 200, 255), 20)
+                    self.floating_texts.append(FloatingText(
+                        player.x, player.y - 50, "已退出载具", color=(120, 200, 255), lifetime=1.5))
+                else:
+                    self.particles.spawn_explosion(player.x, player.y, (255, 120, 40), 40)
+                    self.camera.shake(10, 0.4)
+                    self.floating_texts.append(FloatingText(
+                        player.x, player.y - 50, "载具被摧毁!", color=RED, lifetime=1.8))
         except Exception:
             pass

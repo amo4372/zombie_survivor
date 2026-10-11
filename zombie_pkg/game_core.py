@@ -854,6 +854,24 @@ class GameCore:
         except Exception:
             pass
 
+    def _exit_vehicle(self, player):
+        """v2.2.3 主动退出载具（长按技能键/按钮触发）：
+        玩家脱离载具，载具进入 60s 冷却（与摧毁同规则，从退出后才开始计时）"""
+        try:
+            veh = getattr(player, 'vehicle', None)
+            if veh is None:
+                return False
+            player.vehicle = None
+            cd = 60.0 * getattr(player, 'cooldown_mult', 1.0)
+            player.active_skills[SkillType.VEHICLE_SUMMON] = cd
+            self.particles.spawn_explosion(player.x, player.y, (120, 200, 255), 24)
+            self.camera.shake(5, 0.25)
+            self.floating_texts.append(FloatingText(
+                player.x, player.y - 50, "已退出载具", color=(120, 200, 255), lifetime=1.5))
+            return True
+        except Exception:
+            return False
+
     def _throw_skill_grenade(self, target_x, target_y):
         """技能手雷：抛物线投射物，根据技能等级解锁附魔"""
         if not hasattr(self, 'grenades_in_flight'):

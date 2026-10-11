@@ -37,6 +37,7 @@ class SpecialItem:
             ItemType.RUNE: ((120, 60, 200), (180, 120, 255)),
             ItemType.MYSTERY_BOX: ((90, 90, 140), (160, 160, 220)),
             ItemType.GOLDEN_CHEST: ((218, 165, 32), (255, 230, 120)),
+            ItemType.RACE_TIME: ((255, 215, 60), (255, 240, 160)),  # 加时道具：金色沙漏
         }
         # 武器箱和宝箱更大、存在更久
         if item_type in (ItemType.WEAPON_BOX, ItemType.TREASURE_CHEST, ItemType.GOLDEN_CHEST,
@@ -538,13 +539,14 @@ class GameWorld:
         y = player_y + math.sin(angle) * dist
 
         weights = [0.04, 0.18, 0.18, 0.12, 0.10, 0.07, 0.06, 0.04, 0.04, 0.03,
-                   0.05, 0.04, 0.03, 0.02]
+                   0.05, 0.04, 0.03, 0.02, 0.06]
         types = [ItemType.VACCINE, ItemType.HEALTH_PACK, ItemType.AMMO_BOX, 
                 ItemType.SPEED_BOOST, ItemType.DAMAGE_BOOST, ItemType.SHIELD_REPAIR,
                 ItemType.WEAPON_BOX, ItemType.TREASURE_CHEST,
                 ItemType.SKILL_SLOT, ItemType.BUFF_CHARM,
                 ItemType.INCENDIARY, ItemType.SMOKE_GRENADE,
-                ItemType.CLUSTER_BOMB, ItemType.EMP_GRENADE]
+                ItemType.CLUSTER_BOMB, ItemType.EMP_GRENADE,
+                ItemType.RACE_TIME]
         item_type = random.choices(types, weights=weights)[0]
 
         self.items.append(SpecialItem(x, y, item_type))

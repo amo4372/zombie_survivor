@@ -56,6 +56,18 @@ class PlayMixin:
                 t_color = RED if (is_cd and int(t_text.split(":")[0]) * 60 + int(t_text.split(":")[1]) < 30) else WHITE
                 t_txt = g.font.render(t_text, True, t_color)
                 self.screen.blit(t_txt, t_txt.get_rect(midtop=(rect.x + half_w // 2, rect.y + int(4 * scale))))
+                # v2.2.3 争分夺秒加时反馈：计时器下方显示 "+N 秒"（随时间淡出）
+                try:
+                    _gain = getattr(g, 'race_last_gain', 0)
+                    _gt = getattr(g, 'race_gain_timer', 0.0)
+                    if _gain > 0 and _gt > 0:
+                        _alpha = min(1.0, _gt / 1.4)
+                        _gp = int(255 * _alpha)
+                        _gtxt = g.font_small.render(f"+{int(_gain)} 秒", True, (255, int(200 * _alpha), 40))
+                        _gtxt.set_alpha(_gp)
+                        self.screen.blit(_gtxt, _gtxt.get_rect(midtop=(rect.x + half_w // 2, rect.y + int(26 * scale))))
+                except Exception:
+                    pass
             except Exception:
                 tl = max(0, int(getattr(g, 'time_left', 0)))
                 t_txt = g.font.render(f"{tl // 60:02d}:{tl % 60:02d}", True, WHITE)
@@ -335,6 +347,11 @@ class PlayMixin:
                 _veh = getattr(p, 'vehicle', None)
                 if _veh is not None and getattr(_veh, 'alive', False):
                     _veh.draw(self.screen, cam_x, cam_y, scale)
+                    # v2.2.3 载具期间仍渲染钩爪线（riot_gear.draw 独立于玩家绘制）
+                    try:
+                        p.riot_gear.draw(self.screen, p.x, p.y, cam_x, cam_y, scale)
+                    except Exception:
+                        pass
                 else:
                     p.draw(self.screen, cam_x, cam_y, self.game.font, scale)
                 if getattr(p, 'downed', False):
@@ -346,6 +363,11 @@ class PlayMixin:
             _veh = getattr(player, 'vehicle', None)
             if _veh is not None and getattr(_veh, 'alive', False):
                 _veh.draw(self.screen, cam_x, cam_y, scale)
+                # v2.2.3 载具期间仍渲染钩爪线
+                try:
+                    player.riot_gear.draw(self.screen, player.x, player.y, cam_x, cam_y, scale)
+                except Exception:
+                    pass
             else:
                 player.draw(self.screen, cam_x, cam_y, self.game.font, scale)
 

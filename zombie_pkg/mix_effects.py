@@ -1164,11 +1164,21 @@ class EffectsMixin:
         if getattr(enemy, '_death_processed', False):
             return
         enemy._death_processed = True
-        # v2.2.0 争分夺秒：击杀加时（按敌人类型）
+        # v2.2.0 争分夺秒：击杀加时（按敌人类型）；v2.2.3 加时直观反馈
         try:
             _hm = getattr(self, 'horde_manager', None)
             if _hm is not None and hasattr(_hm, 'race_kill_bonus_for'):
-                _hm.add_race_time(_hm.race_kill_bonus_for(enemy))
+                _gain = _hm.race_kill_bonus_for(enemy)
+                if _gain > 0:
+                    _hm.add_race_time(_gain)
+                    self.race_last_gain = getattr(self, 'race_last_gain', 0) + _gain
+                    self.race_gain_timer = 1.4
+                    # 击杀位置也飘字反馈（双人各自可见）
+                    try:
+                        self.floating_texts.append(FloatingText(
+                            enemy.x, enemy.y - 60, f"+{_gain:.0f}秒", color=GOLD, lifetime=1.4))
+                    except Exception:
+                        pass
         except Exception:
             pass
         # v2.1.8：击杀冷却削减

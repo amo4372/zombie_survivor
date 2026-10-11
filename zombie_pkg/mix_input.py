@@ -942,6 +942,18 @@ class InputMixin:
                 self.player.riot_gear.end_aim()
                 return
 
+            # v2.2.3 载具存活时长按 G 退出载具；短按提示（不误触）
+            _veh = getattr(self.player, 'vehicle', None)
+            if _veh is not None and _veh.alive:
+                if hold_time >= self.key_g_long_threshold:
+                    self._exit_vehicle(self.player)
+                else:
+                    self.floating_texts.append(FloatingText(
+                        self.player.x, self.player.y - 50, "长按技能键退出载具", (160, 160, 160), 1.2))
+                self.g_aim_started = False
+                self.player.riot_gear.end_aim()
+                return
+
             selected_skill = self.selected_skill
             if hold_time < self.key_g_long_threshold:
                 # --------短按快放--------
@@ -949,7 +961,12 @@ class InputMixin:
                     riot_skill = self.player.skill_tree.get_skill(SkillType.RIOT_GEAR)
                     if riot_skill is not None and riot_skill.current_level > 0:
                         cd_mult = self.player.cooldown_mult
-                        if self.player.riot_gear.equipped:
+                        # v2.2.3 载具期间禁止装备防爆套装（勾爪等技能仍可用）
+                        if not self.player.riot_gear.equipped and getattr(self.player, 'vehicle', None) is not None \
+                                and getattr(self.player.vehicle, 'alive', False):
+                            self.floating_texts.append(FloatingText(
+                                self.player.x, self.player.y - 50, "载具内无法装备防爆套装!", (255, 160, 60), 1.2))
+                        elif self.player.riot_gear.equipped:
                             self.player.riot_gear.unequip(cd_reduction_mult=cd_mult)
                             self.floating_texts.append(FloatingText(self.player.x,self.player.y-50,"卸下防爆套装",ORANGE,1.2))
                         else:

@@ -208,6 +208,21 @@ class CombatMixin:
             elif drop.item_type == ItemType.SPEED_BOOST:
                 player.speed = player.base_speed * 1.5
                 self.floating_texts.append(FloatingText(drop.x, drop.y - 20, "加速!", color=AMBER, lifetime=1.2))
+            elif drop.item_type == ItemType.RACE_TIME:
+                # v2.2.3 P2 争分夺秒加时道具（+5s）
+                try:
+                    if getattr(self.config, 'game_mode', None) == GameMode.TIMED:
+                        _hm = getattr(self, 'horde_manager', None)
+                        if _hm is not None and hasattr(_hm, 'add_race_time'):
+                            _hm.add_race_time(5.0)
+                            self.race_last_gain = getattr(self, 'race_last_gain', 0) + 5
+                            self.race_gain_timer = 1.4
+                            self.floating_texts.append(FloatingText(drop.x, drop.y - 20, "+5 秒!", color=GOLD, lifetime=1.5))
+                    else:
+                        player.gain_exp(40)
+                        self.floating_texts.append(FloatingText(drop.x, drop.y - 20, "+40 经验", color=GOLD, lifetime=1.2))
+                except Exception:
+                    player.gain_exp(40)
             elif drop.item_type == ItemType.EXP_BOOST:
                 pass
             if drop.alive:

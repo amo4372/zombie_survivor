@@ -147,10 +147,12 @@ class Vehicle:
 
     # ==================== 撞击 ====================
     def ram_enemies(self, enemies, damage_numbers=None, particles=None):
-        """载具撞击伤害：对碰到的敌人造成 ram_damage 并击退；返回撞到的敌人列表"""
-        if self.dead:
+        """载具撞击伤害（v2.2.3）：仅车头前方 ±80° 扇形内的敌人受伤；
+        武装直升机不参与撞击（低空飞行，不碾压地面单位）"""
+        if self.dead or self.type_id == "heli":
             return []
         hit_list = []
+        facing = self.facing_angle
         for enemy in enemies:
             if not getattr(enemy, "alive", False):
                 continue
@@ -158,13 +160,19 @@ class Vehicle:
             hit_radius = self.size + getattr(enemy, "size", 20) + 6
             if dist >= hit_radius:
                 continue
+            # 方向性：只撞车头前方（侧面/后方擦过不造成撞击伤害）
+            if dist > 1:
+                ang_to = math.degrees(math.atan2(enemy.y - self.y, enemy.x - self.x))
+                diff = abs((ang_to - facing + 180) % 360 - 180)
+                if diff > 80.0:
+                    continue
             actual = self.ram_damage * self.damage_mult
             enemy.take_damage(actual)
-            # 击退
-            if dist > 0:
-                kb = 140
-                enemy.x += (enemy.x - self.x) / dist * kb
-                enemy.y += (enemy.y - self.y) / dist * kb
+            # 击退（沿车头方向推出）
+            kb = 140
+            push_ang = math.radians(facing)
+            enemy.x += math.cos(push_ang) * kb
+            enemy.y += math.sin(push_ang) * kb
             if damage_numbers is not None:
                 damage_numbers.append(
                     __import__("ui", fromlist=["DamageNumber"]).DamageNumber(

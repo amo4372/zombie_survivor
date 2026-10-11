@@ -142,6 +142,7 @@ class ItemType(Enum):
     RUNE = auto()         # 符文：局内永久buff，从宝箱开出
     GOLDEN_CHEST = auto() # 黄金宝箱：必出符文+大量资源
     MYSTERY_BOX = auto()  # 神秘盒：随机效果（可能好可能坏）
+    RACE_TIME = auto()    # 争分夺秒加时道具（拾取 +5s 倒计时）
 
 class RuneType(Enum):
     FLAME = "flame"           # 火焰符文：攻击附带燃烧

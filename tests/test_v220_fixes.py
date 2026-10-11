@@ -89,9 +89,10 @@ fx, fy = 0.41, 0.62
 check("触控 FINGER 归一化换算命中", _hit(fx * 1280, fy * 720) == "ignore")
 
 
-# ==================== 1c. 载具开火 weapon 未绑定回归（v2.2.1） ====================
+# ==================== 1c. 载具开火 weapon 未绑定回归（v2.2.1/2.2.3） ====================
 _src = open("zombie_pkg/mix_playing.py", encoding="utf-8").read()
-check("载具分支前 weapon=None 初始化", "_veh = getattr(self.player, 'vehicle', None)\n            weapon = None" in _src)
+check("载具分支前 weapon=None 初始化", "weapon = None  # 防御：weapon_type 为 None" in _src)
+check("载具开火独立于防爆套装(v2.2.3)", "if _veh is not None and _veh.alive and _veh.can_shoot:" in _src)
 check("P2 载具开火 elif 内 weapon 赋值", "elif _veh2 is None or not _veh2.alive:" in open("zombie_pkg/mix_multi.py", encoding="utf-8").read())
 # 询问框防误触锁定字段初始化
 _gcsrc = open("zombie_pkg/game_core.py", encoding="utf-8").read()
@@ -278,3 +279,44 @@ check("肘击不启动冲撞位移", rg2.charge_active is False)
 
 print(f"\n===== 结果: {PASS} 通过, {FAIL} 失败 =====")
 sys.exit(0 if FAIL == 0 else 1)
+
+# ==================== 3. v2.2.3 载具批次回归 ====================
+_veh_src = open("entities_pkg/vehicles.py", encoding="utf-8").read()
+check("v223 撞击仅车头前方±80°扇形", "diff > 80.0" in _veh_src)
+check("v223 武直不参与撞击", 'self.type_id == "heli"' in _veh_src and "return []" in _veh_src)
+_mp_src = open("zombie_pkg/mix_playing.py", encoding="utf-8").read()
+check("v223 P1 长按G退出载具", "长按技能键退出载具" in _mp_src)
+check("v223 载具期间禁装备防爆套装(P1)", "载具内无法装备防爆套装" in _mp_src)
+_mi_src = open("zombie_pkg/mix_input.py", encoding="utf-8").read()
+check("v223 键控G载具拦截分支", "载具内无法装备防爆套装" in _mi_src)
+_mm_src = open("zombie_pkg/mix_multi.py", encoding="utf-8").read()
+check("v223 P2 长按退出载具(friendly)", "_vehicle_destroyed_for(p2, friendly=True)" in _mm_src)
+check("v223 P2 载具禁防爆提示", "长按技能按钮退出载具" in _mm_src)
+_sk_src = open("zombie_pkg/mix_skills.py", encoding="utf-8").read()
+check("v223 召唤不在释放时置CD", "skill_type != SkillType.VEHICLE_SUMMON" in _sk_src)
+check("v223 肘击改为前方扇形", "half_arc = 75.0" in _sk_src and "盾牌肘击" in _sk_src)
+_gc_src = open("zombie_pkg/game_core.py", encoding="utf-8").read()
+check("v223 主动退出载具方法", "def _exit_vehicle" in _gc_src)
+_dp_src = open("renderer_pkg/draw_play.py", encoding="utf-8").read()
+check("v223 载具时渲染钩爪线", "riot_gear.draw(self.screen, p.x, p.y, cam_x, cam_y, scale)" in _dp_src)
+check("v223 加时反馈HUD", '"+%d 秒"' in _dp_src or '"+{int(_gain)} 秒"' in _dp_src)
+_cfg = open("config.py", encoding="utf-8").read()
+check("v223 加时道具类型", "RACE_TIME = auto()" in _cfg)
+_wl = open("world.py", encoding="utf-8").read()
+check("v223 加时道具掉落", "ItemType.RACE_TIME]" in _wl)
+_rc = open("zombie_pkg/mix_records.py", encoding="utf-8").read()
+check("v223 P1拾取加时道具", "item_type == ItemType.RACE_TIME" in _rc)
+_cb = open("zombie_pkg/mix_combat.py", encoding="utf-8").read()
+check("v223 P2拾取加时道具", "drop.item_type == ItemType.RACE_TIME" in _cb)
+check("v223 僵尸池同步(STORY+TIMED)", "self.config.game_mode in (GameMode.STORY, GameMode.TIMED)" in _mp_src)
+_ef = open("zombie_pkg/mix_effects.py", encoding="utf-8").read()
+check("v223 击杀加时反馈", "race_last_gain" in _ef and "race_gain_timer" in _ef)
+_vh = open("tools/gen_vehicle_assets.py", encoding="utf-8").read()
+check("v223 载具图片生成器(红色大运/99A/武直)", "make_truck" in _vh and "make_tank" in _vh and "make_heli" in _vh)
+import os
+for _v in ("truck", "tank", "heli"):
+    _p = f"assets/vehicles/{_v}.png"
+    check(f"v223 载具图存在 {_v}.png", os.path.exists(_p) and os.path.getsize(_p) > 800)
+
+print()
+print(f"===== 结果: {PASS} 通过, {FAIL} 失败 =====")

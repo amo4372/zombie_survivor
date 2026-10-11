@@ -712,6 +712,26 @@ class RecordsMixin:
                 if hasattr(weapon, 'current_ammo') and weapon.current_ammo != "Inf":
                     weapon.current_ammo = weapon.max_ammo
             self.floating_texts.append(FloatingText(self.player.x, self.player.y - 40, "弹药补给", color=YELLOW, lifetime=1.5))
+        elif item_type == ItemType.RACE_TIME:
+            # v2.2.3 争分夺秒加时道具：拾取 +5s（非 TIMED 模式转为小量经验，避免浪费）
+            try:
+                if self.config.game_mode == GameMode.TIMED:
+                    _hm = getattr(self, 'horde_manager', None)
+                    if _hm is not None and hasattr(_hm, 'add_race_time'):
+                        _hm.add_race_time(5.0)
+                        self.race_last_gain = getattr(self, 'race_last_gain', 0) + 5
+                        self.race_gain_timer = 1.4
+                        self.floating_texts.append(FloatingText(self.player.x, self.player.y - 40, "+5 秒!", color=GOLD, lifetime=1.5))
+                    else:
+                        self.player.gain_exp(40)
+                        self.floating_texts.append(FloatingText(self.player.x, self.player.y - 40, "+40 经验", color=GOLD, lifetime=1.5))
+                else:
+                    self.player.gain_exp(40)
+                    self.floating_texts.append(FloatingText(self.player.x, self.player.y - 40, "+40 经验", color=GOLD, lifetime=1.5))
+                self.assets.play_sound("pickup_coin")
+                self.particles.spawn_explosion(self.player.x, self.player.y, (255, 215, 60), 14)
+            except Exception:
+                self.player.gain_exp(40)
         elif item_type == ItemType.SPEED_BOOST:
             self.player.buff_manager.add_buff(BuffType.SPEED_BOOST, duration=10.0)
             self.floating_texts.append(FloatingText(self.player.x, self.player.y - 40, "速度提升！", color=BLUE, lifetime=2.0))

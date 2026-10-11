@@ -299,7 +299,8 @@ class SkillsMixin:
         success = self._execute_skill(skill_type)
 
         if success:
-            if skill_type != SkillType.RIOT_GEAR:
+            # v2.2.3 载具召唤不在释放时进入冷却：CD 从载具报废或主动退出后才开始
+            if skill_type != SkillType.RIOT_GEAR and skill_type != SkillType.VEHICLE_SUMMON:
                 self.player.active_skills[skill_type] = cd
             skill_name = skill.name if skill else "未知技能"
             # 记录技能使用
@@ -400,7 +401,8 @@ class SkillsMixin:
             success = self._execute_skill(skill_type)
 
         if success:
-            if skill_type != SkillType.RIOT_GEAR:
+            # v2.2.3 载具召唤不在释放时进入冷却：CD 从载具报废或主动退出后才开始
+            if skill_type != SkillType.RIOT_GEAR and skill_type != SkillType.VEHICLE_SUMMON:
                 self.player.active_skills[skill_type] = cd
             skill_name = skill.name if skill else "未知技能"
             self.floating_texts.append(FloatingText(
@@ -1023,6 +1025,12 @@ class SkillsMixin:
             ))
             return True
         else:
+            # v2.2.3 载具期间禁止装备防爆套装（触控入口同样拦截）
+            if getattr(self.player, 'vehicle', None) is not None and getattr(self.player.vehicle, 'alive', False):
+                self.floating_texts.append(FloatingText(
+                    self.player.x, self.player.y - 40,
+                    "载具内无法装备防爆套装!", color=(255, 160, 60), lifetime=1.2))
+                return False
             if self.player.riot_gear_cooldown <= 0:
                 self.riot_anim_state = "equipping"
                 self.riot_anim_timer = self.riot_anim_duration
@@ -1048,13 +1056,21 @@ class SkillsMixin:
         if success:
             # 体力回流共享池
             self.player.stamina = rg.stamina
-            # 原地肘击：对周围敌人一次性范围结算
+            # v2.2.3 肘击：盾牌前方扇形区域（±75°，半径约70）一次性结算
             hit_any = False
-            bash_r = 62
+            bash_r = 70
+            bash_angle = direction_angle if direction_angle is not None else self.player.facing_angle
+            half_arc = 75.0
             for enemy in self.enemies:
                 dist = math.hypot(enemy.x - self.player.x, enemy.y - self.player.y)
                 if dist > bash_r + enemy.size:
                     continue
+                # 前方扇形判定
+                if dist > 1:
+                    ang_to = math.degrees(math.atan2(enemy.y - self.player.y, enemy.x - self.player.x))
+                    diff = abs((ang_to - bash_angle + 180) % 360 - 180)
+                    if diff > half_arc:
+                        continue
                 is_crit = random.random() < self.player.crit_chance
                 actual_damage = rg.charge_damage * 1.6 * self.player.damage_mult * self.player.buff_manager.get_damage_mult() * (self.player.crit_damage if is_crit else 1)
                 enemy.take_damage(actual_damage)
@@ -1072,15 +1088,16 @@ class SkillsMixin:
                 if not enemy.alive:
                     self._on_enemy_death(enemy)
             self.floating_texts.append(FloatingText(
-                self.player.x, self.player.y - 40, "原地肘击!", color=CYAN, lifetime=1.0
+                self.player.x, self.player.y - 40, "盾牌肘击!", color=CYAN, lifetime=1.0
             ))
             self.particles.spawn_explosion(self.player.x, self.player.y, CYAN, 22)
             self.camera.shake(6 if hit_any else 3, 0.25)
-            # 环形冲击波
+            # 前方扇形冲击波
             if hasattr(self, 'sweep_rings'):
                 self.sweep_rings.append({
-                    "x": self.player.x, "y": self.player.y,
-                    "r": 30, "max_r": bash_r + 30, "color": (80, 220, 255),
+                    "x": self.player.x + math.cos(math.radians(bash_angle)) * 30,
+                    "y": self.player.y + math.sin(math.radians(bash_angle)) * 30,
+                    "r": 20, "max_r": bash_r + 30, "color": (80, 220, 255),
                     "width": 6, "life": 0.35, "max_life": 0.35,
                 })
 
