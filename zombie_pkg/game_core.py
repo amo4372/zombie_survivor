@@ -978,7 +978,12 @@ class GameCore:
         elif self.state == GameState.NET_CLIENT_PLAY:
             self._update_net_client(dt)
         elif self.state == GameState.DIALOGUE:
-            self.dialogue.update(dt)
+            # v2.2.6 兜底：对话对象缺失或已非活跃但状态仍卡在 DIALOGUE → 自动恢复 PLAYING，
+            # 防止"整个游戏卡住、点关闭无反应"（异常残留导致输入分支被跳过）
+            if self.dialogue is None or not getattr(self.dialogue, "active", False):
+                self.state = GameState.PLAYING
+            else:
+                self.dialogue.update(dt)
         elif self.state == GameState.SKILL_SELECT:
             if self.particles:
                 self.particles.update(dt)

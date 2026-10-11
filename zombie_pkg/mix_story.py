@@ -468,6 +468,9 @@ class StoryMixin:
         self.state = GameState.DIALOGUE
 
     def _boss_dialogue(self, boss_type):
+        # v2.2.6 防御：已在对话状态时避免重复触发覆盖（防索引错乱卡死）
+        if getattr(self.dialogue, "active", False):
+            self.dialogue.active = False
         # v2.0.19 六位 BOSS 专属台词（含交互式选项问答）
         _d = {
             EnemyType.BOSS_LONG: [

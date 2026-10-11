@@ -281,6 +281,8 @@ class MultiplayerMixin:
                 if not self.u_aim_started and hold_t >= self.key_u_long_threshold:
                     self.u_aim_started = True
                     c2["skill_caster"].is_aiming = True
+                # v2.2.6：P2 钩爪瞄准锁定圈更新（键控 U 长按）
+                self._update_p2_grapple_lock(p2, bool(self.u_aim_started))
                 if self.u_aim_started:
                     aim_ang = math.radians(self._p2_auto_aim_angle(p2))
                     c2["skill_caster"].set_aim_angle(aim_ang)
@@ -303,6 +305,8 @@ class MultiplayerMixin:
                 c2sc = self.p2_controls["skill_caster"]
                 c2sc.set_player_pos(p2.x, p2.y, self.camera2.x, self.camera2.y)
                 c2sc.set_max_distance(self._get_skill_max_distance(self.p2_selected_skill or SkillType.GRENADE))
+                # v2.2.6：P2 钩爪瞄准锁定圈更新（触控长按）
+                self._update_p2_grapple_lock(p2, bool(c2sc.is_aiming))
                 if self.p2_controls["skill_caster"].just_released:
                     skill = True
                     # 触控长按/拖拽预瞄状态（handle_touch 会在 up 时重置 is_aiming）
@@ -348,8 +352,10 @@ class MultiplayerMixin:
                         self._on_enemy_death(_e)
             except Exception:
                 pass
-            if not _veh2.alive:
-                self._vehicle_destroyed_for(p2)
+            p2.update(dt, 0, 0, angle, self.world, sprinting=False)
+        # v2.2.6：P2 载具打爆检测独立分支（原嵌套在 alive 块内，dead 后永远进不去 → CD 不触发）
+        elif _veh2 is not None and not _veh2.alive:
+            self._vehicle_destroyed_for(p2)
             p2.update(dt, 0, 0, angle, self.world, sprinting=False)
         elif mx != 0 or my != 0:
             p2.update(dt, mx, my, angle, self.world, sprinting=sprint)
@@ -542,12 +548,79 @@ class MultiplayerMixin:
             self.slash_arcs.append(SlashArc(p2.x, p2.y, 0, 200, (255, 220, 100), lifetime=0.4, kind="scythe",
                                             start_radius=150, end_angle_offset=3.0))
             cd = 12.0
+        elif skill_type == SkillType.GRAPPLE_PULL:
+            # v2.2.6：P2 钩爪施放（支持锁定直飞/路径勾取/自我拉拽，与 P1 一致）
+            rg = p2.riot_gear
+            if rg.grapple_cooldown > 0 or rg.grapple_active:
+                self.floating_texts.append(FloatingText(p2.x, p2.y - 40, "冷却中...", color=GRAY, lifetime=1.0))
+                return False
+            scythe = self._is_wielding_scythe_for(p2)
+            locked = getattr(rg, "grapple_locked_target", None)
+            actual_dist = rg.grapple_max_range * max(0.1, distance_ratio)
+            tx = p2.x + math.cos(angle) * actual_dist
+            ty = p2.y + math.sin(angle) * actual_dist
+            target = None
+            if locked is not None and getattr(locked, "alive", False) and not getattr(locked, "is_boss", False):
+                # 锁定目标直飞（无视沿途）
+                target = locked
+                tx, ty = locked.x, locked.y
+            else:
+                # 路径搜索（方向上的最近非 Boss 敌人）
+                _dx = math.cos(angle)
+                _dy = math.sin(angle)
+                best = None
+                best_proj = actual_dist
+                for e in self.enemies:
+                    if not getattr(e, "alive", False):
+                        continue
+                    if getattr(e, "is_boss", False):
+                        continue
+                    ex = e.x - p2.x
+                    ey = e.y - p2.y
+                    proj = ex * _dx + ey * _dy
+                    if proj < 0 or proj > actual_dist:
+                        continue
+                    perp = math.hypot(ex - proj * _dx, ey - proj * _dy)
+                    if perp < 30 + getattr(e, "size", 20) and proj < best_proj:
+                        best = e
+                        best_proj = proj
+                if best is not None:
+                    target = best
+                    tx, ty = best.x, best.y
+            if rg.use_grapple(tx, ty, p2.x, p2.y, target, scythe=scythe):
+                ok = True
+                cd = rg.grapple_scythe_max_cooldown if scythe else rg.grapple_max_cooldown
+                self.floating_texts.append(FloatingText(p2.x, p2.y - 45, "钩爪发射!", color=GOLD, lifetime=1.2))
+            else:
+                return False
         else:
             return self._use_skill_p2(skill_type)
         if ok:
             p2.active_skills[skill_type] = cd
             self.floating_texts.append(FloatingText(p2.x, p2.y - 45, "技能释放!", color=GOLD, lifetime=1.5))
         return ok
+
+    def _is_wielding_scythe_for(self, pl):
+        """判断 P2 当前武器是否为死神镰刀（切换钩爪索引为死神钩爪）"""
+        try:
+            _w = pl.get_current_weapon()
+            if _w is None:
+                return False
+            _wt = getattr(_w, "weapon_type", None)
+            return _wt is not None and getattr(_wt, "name", "") == "SCYTHE"
+        except Exception:
+            return False
+
+    def _update_p2_grapple_lock(self, p2, aiming):
+        """v2.2.6：P2 钩爪瞄准锁定圈更新（瞄准中圈内锁定最近非 Boss 敌人）"""
+        rg = p2.riot_gear
+        if aiming:
+            rg.grapple_aiming = True
+            rg.update_grapple_lock(p2.x, p2.y, self.enemies)
+        else:
+            rg.grapple_aiming = False
+            if not rg.grapple_active:
+                rg.grapple_locked_target = None
 
     def _skill_p2_scythe_dance(self, p2):
         """P2 死神镰刀专属技能（等级随 P2 武器等级成长）"""

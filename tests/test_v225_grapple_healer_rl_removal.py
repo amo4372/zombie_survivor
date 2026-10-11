@@ -148,7 +148,7 @@ from entities_pkg.gear import RiotGear
 g = RiotGear()
 check(g.grapple_scythe_max_cooldown == 3.0, "死神钩爪 CD 3s 常量")
 check(g.grapple_max_cooldown == 0.8, "普通钩爪 CD 0.8s 常量")
-check(g.grapple_lock_radius == 110, "锁定圈半径 110")
+check(g.grapple_lock_radius == 200, "锁定圈半径 200（v2.2.6 拉远，原 110）")
 
 # scythe 发射 → CD 3.0
 g2 = RiotGear()

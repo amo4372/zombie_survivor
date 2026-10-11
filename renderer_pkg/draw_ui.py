@@ -2059,7 +2059,9 @@ class UiMixin:
             if btn.update(mouse_pos, mouse_pressed, self.game.touch_events, scale):
                 if i == 0:
                     self.game.multiplayer_mode = "same_screen"
-                    self.game.state = GameState.DIFFICULTY_SELECT
+                    # v2.2.6：同屏双人支持故事/无尽/争分夺秒三种模式，
+                    # 进模式选择（默认争分夺秒 TIMED，未改则保持 config 默认）
+                    self.game.state = GameState.MODE_SELECT
                 elif i == 1:
                     self.game.multiplayer_mode = "network"
                     self.game.net_ip_input = "127.0.0.1"

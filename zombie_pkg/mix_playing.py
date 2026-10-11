@@ -185,11 +185,17 @@ class Config:
 logger = GameLogger()
 
 class PlayingMixin:
+    # v2.2.6：救援平衡参数（防"挨得近无限互救根本死不掉"）
+    RESCUE_COOLDOWN = 15.0      # 被救活后再次可被救援的冷却（秒）
+    DOWNED_DEATH_TIME = 20.0    # 同屏倒地超过该时间未获救 → 彻底死亡
+
     def _update_rescue(self, dt):
-        """双人救援系统：倒地→队友救援复活（同屏靠近自动救援 / 网络 8 秒自动复活）；全倒地则结束"""
+        """双人救援系统：倒地→队友救援复活（同屏靠近自动救援 / 网络 8 秒自动复活）；全倒地则结束
+        v2.2.6：加救援冷却（防无限互救）+ 倒地超时死亡 + 受击清空救援进度"""
         p1, p2 = self.player, self.player2
         if not p1 or not p2:
             return False
+        _now = time.monotonic()
         # 1) 触发倒地：hp<=0 且未倒地 → 倒地（不立即死亡；alive 可能已被 take_damage 置 False，必须照常倒地）
         for p in (p1, p2):
             if p.hp <= 0 and not p.downed:
@@ -197,6 +203,8 @@ class PlayingMixin:
                 p.alive = False
                 p.downed_timer = 0.0
                 p.rescue_progress = 0.0
+                p.last_rescue_time = getattr(p, 'last_rescue_time', -999.0)
+                p._rescue_last_hp = p.hp
                 self.floating_texts.append(FloatingText(
                     p.x, p.y - 40, "倒地！等待救援...", color=(240, 230, 120), lifetime=2.0))
                 self.assets.play_sound_random(["player_hurt", "hurt"])
@@ -207,14 +215,26 @@ class PlayingMixin:
             p.downed_timer += dt
             mate = p2 if p is p1 else p1
             rescued = False
+            # 受击清空救援进度（怪物在旁边干扰时救援会被打断）
+            if getattr(p, '_rescue_last_hp', p.hp) > p.hp:
+                p.rescue_progress = 0.0
+            p._rescue_last_hp = p.hp
             if self.multiplayer_mode == "same_screen":
+                _cd_ok = (_now - getattr(p, 'last_rescue_time', -999.0)) >= self.RESCUE_COOLDOWN
                 near = mate is not None and not mate.downed and math.hypot(mate.x - p.x, mate.y - p.y) < 120
-                if near:
+                if near and _cd_ok:
                     p.rescue_progress += dt
                     if p.rescue_progress >= 2.5:
                         rescued = True
                 else:
                     p.rescue_progress = 0.0
+                # 倒地超时 → 彻底死亡（防无限拖延；全倒地由调用方判定结束）
+                if p.downed_timer >= self.DOWNED_DEATH_TIME:
+                    p.downed = False
+                    p.alive = False
+                    self.floating_texts.append(FloatingText(
+                        p.x, p.y - 40, "救援超时，未能生还...", color=(200, 60, 60), lifetime=2.5))
+                    continue
             else:
                 # 网络联机：8 秒自动复活（跨设备救援不便，给保底）
                 if p.downed_timer >= 8.0:
@@ -224,6 +244,7 @@ class PlayingMixin:
                 p.alive = True
                 p.hp = int(p.max_hp * 0.5)
                 p.rescue_progress = 0.0
+                p.last_rescue_time = _now  # 进入救援冷却
                 p.invincible_timer = 1.5
                 self.floating_texts.append(FloatingText(p.x, p.y - 40, "已复活!", color=GREEN, lifetime=1.5))
                 try:
@@ -635,11 +656,12 @@ class PlayingMixin:
                             self._on_enemy_death(_e)
                 except Exception:
                     pass
-                if not _veh.alive:
-                    self._vehicle_destroyed()
                 # 玩家 update 只处理状态/冷却（移动已由载具接管）
                 self.player.update(dt, 0.0, 0.0, mouse_angle, self.world, sprinting=False)
-            else:
+            # v2.2.6：载具被打爆检测移到独立分支（原嵌套在 alive 块内，dead 后永远进不去 → CD 不触发）
+            if _veh is not None and not _veh.alive:
+                self._vehicle_destroyed()
+            elif _veh is None:
                 self.player.update(dt, move_x * _zone_mult, move_y * _zone_mult,
                                    mouse_angle, self.world, sprinting=sprinting)
                 # 符文：再生效果
@@ -727,6 +749,12 @@ class PlayingMixin:
                         self.pending_upgrade_for = _tag
                         self._upgrade_pause_player = _tag
                         _pl.upgrade_paused = True
+                        # v2.2.6：暂停瞬间重置该玩家触控控件（per-player 不切状态，
+                        # 状态切换重置不会触发，防止升级玩家射击/摇杆残留卡死）
+                        try:
+                            self._reset_touch_state_for(_tag)
+                        except Exception:
+                            pass
                         _half = max(320, self.scaled_width // 2)
                         _region = pygame.Rect(0 if _tag == "P1" else self.scaled_width - _half, 0, _half, self.scaled_height)
                         self.skill_card_selector.show(_pl.skill_cards, region=_region,

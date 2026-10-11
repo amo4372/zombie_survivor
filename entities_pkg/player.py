@@ -292,6 +292,8 @@ class Player:
         new_x = self.x + move_x * self.speed * self.speed_mult * speed_mult * dt * 60
         new_y = self.y + move_y * self.speed * self.speed_mult * speed_mult * dt * 60
 
+        # v2.2.6：记录本帧实际输入位移（供钩爪自我拉拽叠加，移动中也能被快速拉过去）
+        _ox, _oy = self.x, self.y
         if world:
             new_rect_x = pygame.Rect(new_x - self.size, self.y - self.size, self.size * 2, self.size * 2)
             new_rect_y = pygame.Rect(self.x - self.size, new_y - self.size, self.size * 2, self.size * 2)
@@ -302,6 +304,8 @@ class Player:
         else:
             self.x = new_x
             self.y = new_y
+        self._inp_dx = self.x - _ox
+        self._inp_dy = self.y - _oy
 
         self.facing_angle = math.degrees(mouse_angle)
 

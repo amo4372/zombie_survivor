@@ -52,9 +52,9 @@ class RiotGear:
         self.grapple_scythe_max_cooldown = 3.0  # 死神钩爪 CD（普通 0.8）
         self.grapple_aiming = False           # 长按瞄准中（显示预瞄线+锁定圈）
         self.grapple_locked_target = None     # 瞄准圈锁定的僵尸（松开后直飞目标）
-        self.grapple_lock_radius = 110        # 锁定圈半径（世界单位）
+        self.grapple_lock_radius = 200        # 锁定圈半径（世界单位，v2.2.6 拉远便于锁定远处目标）
         self.self_pull_active = False         # 自我拉拽中（未命中目标 → 把自己拉向目标点）
-        self.self_pull_speed = 260            # 自我拉拽速度（世界单位/秒）
+        self.self_pull_speed = 420            # 自我拉拽速度（世界单位/秒，v2.2.6 提速+叠加玩家移动）
         self.self_pull_immune = False         # 自我拉拽期间免伤标记
         self.self_pull_start = (0, 0)         # 自我拉拽起点（世界坐标）
         self.self_pull_end = (0, 0)           # 自我拉拽终点（世界坐标）
@@ -298,7 +298,7 @@ class RiotGear:
 
         elif self.grapple_state == "self_pull":
             # ===== v2.2.5：自我拉拽——把自己拉向目标点 =====
-            # 玩家位置移动由 gear 驱动（传入 player 对象）
+            # v2.2.6：叠加玩家本帧输入位移（玩家移动中也能快速拉过去）
             if player is None:
                 self._reset_grapple()
                 return
@@ -307,13 +307,15 @@ class RiotGear:
             dy = ty - player.y
             dist = math.hypot(dx, dy)
             move_dist = self.self_pull_speed * dt
+            _inp_dx = getattr(player, '_inp_dx', 0.0)
+            _inp_dy = getattr(player, '_inp_dy', 0.0)
             if dist <= move_dist + 2:
                 # 到达目标点：结束自我拉拽
                 player.x, player.y = tx, ty
                 self._reset_grapple()
             else:
-                player.x += (dx / dist) * move_dist
-                player.y += (dy / dist) * move_dist
+                player.x += (dx / dist) * move_dist + _inp_dx
+                player.y += (dy / dist) * move_dist + _inp_dy
             # 自我拉拽期间全程免伤（刷新无敌计时；恢复后由 mix_playing 关闭）
             if self.self_pull_immune and player is not None:
                 player.invincible_timer = max(getattr(player, "invincible_timer", 0), 0.1)
@@ -567,8 +569,9 @@ class RiotGear:
             if self.grapple_locked_target is not None and getattr(self.grapple_locked_target, "alive", False):
                 lx = int((self.grapple_locked_target.x - camera_x) * scale)
                 ly = int((self.grapple_locked_target.y - camera_y) * scale)
+                # v2.2.6：锁定显示为圈（不再画红色连线），锁定目标用高亮红圈标注
                 pygame.draw.circle(screen, (255, 80, 80), (lx, ly), max(4, int(10 * scale)), max(1, int(2 * scale)))
-                pygame.draw.line(screen, (255, 80, 80), (px, py), (lx, ly), max(1, int(1 * scale)))
+                pygame.draw.circle(screen, (255, 140, 120), (lx, ly), max(7, int(14 * scale)), max(1, int(1 * scale)))
 
         if not self.equipped:
             return

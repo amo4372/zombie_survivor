@@ -411,5 +411,88 @@ class HudMixin:
         for _w in (getattr(self, 'skill_wheel', None), getattr(self, 'weapon_wheel', None)):
             if _w and hasattr(_w, 'active'):
                 _w.active = False
+        # v2.2.6：同屏双人 P2 控件同样全量重置（P2 升级选卡/暂停/任何页面转换
+        # 都要重置按钮，防止 P2 射击/摇杆残留按下态导致按钮卡死——此前只重置了 P1 控件）
+        if hasattr(self, 'p2_controls') and self.p2_controls:
+            for _name, _obj in self.p2_controls.items():
+                for _a in ('active', 'pressed', 'is_shooting', 'is_aiming', 'was_pressed',
+                           'just_released', 'just_pressed', 'wheel_active', 'is_long_press',
+                           'should_open_wheel', 'was_aiming_on_release'):
+                    if hasattr(_obj, _a):
+                        setattr(_obj, _a, False)
+                if hasattr(_obj, 'touch_id'):
+                    _obj.touch_id = None
+                if hasattr(_obj, 'knob_offset_x'):
+                    _obj.knob_offset_x = 0
+                if hasattr(_obj, 'knob_offset_y'):
+                    _obj.knob_offset_y = 0
+            if hasattr(self, '_p2_finger_ids'):
+                self._p2_finger_ids.clear()
         # 注意：这里不清空 touch_events，状态切换时合成的 up 交由各控件消费；
         # 由于上面已把 touch_id 全部置空，残留的合成 up 会被控件安全忽略。
+
+    def _reset_touch_state_for(self, tag):
+        """v2.2.6：同屏双人 per-player 升级暂停不切全局状态（state 保持 PLAYING），
+        状态切换重置不会触发——这里在暂停瞬间重置对应玩家的触控控件，
+        防止升级玩家（P1/P2）射击/摇杆残留按下态导致按钮卡死。"""
+        if tag == "P2":
+            if hasattr(self, 'p2_controls') and self.p2_controls:
+                for _obj in self.p2_controls.values():
+                    for _a in ('active', 'pressed', 'is_shooting', 'is_aiming', 'was_pressed',
+                               'just_released', 'just_pressed', 'wheel_active', 'is_long_press',
+                               'should_open_wheel', 'was_aiming_on_release'):
+                        if hasattr(_obj, _a):
+                            setattr(_obj, _a, False)
+                    if hasattr(_obj, 'touch_id'):
+                        _obj.touch_id = None
+                    if hasattr(_obj, 'knob_offset_x'):
+                        _obj.knob_offset_x = 0
+                    if hasattr(_obj, 'knob_offset_y'):
+                        _obj.knob_offset_y = 0
+                if hasattr(self, '_p2_finger_ids'):
+                    self._p2_finger_ids.clear()
+            return
+        # P1：重置 P1 全部触控控件
+        if hasattr(self, 'joystick') and self.joystick:
+            if hasattr(self.joystick, 'reset'):
+                try:
+                    self.joystick.reset()
+                except Exception:
+                    pass
+            self.joystick.active = False
+            self.joystick.touch_id = None
+            if hasattr(self.joystick, 'knob_x'):
+                self.joystick.knob_x = self.joystick.base_x
+                self.joystick.knob_y = self.joystick.base_y
+            if hasattr(self.joystick, 'value_x'):
+                self.joystick.value_x = 0
+                self.joystick.value_y = 0
+        if hasattr(self, 'touch_buttons'):
+            for btn in self.touch_buttons.values():
+                for _a in ('pressed', 'was_pressed', 'just_released', 'just_pressed', 'is_long_press'):
+                    if hasattr(btn, _a):
+                        setattr(btn, _a, False)
+                if hasattr(btn, 'touch_id'):
+                    btn.touch_id = None
+        for attr in ('aim_button', 'skill_caster', 'throwable_caster', 'skill_selector'):
+            obj = getattr(self, attr, None)
+            if not obj:
+                continue
+            for _a in ('active', 'pressed', 'is_shooting', 'is_aiming', 'was_pressed',
+                       'just_released', 'just_pressed', 'wheel_active', 'is_long_press',
+                       'should_open_wheel'):
+                if hasattr(obj, _a):
+                    setattr(obj, _a, False)
+            if hasattr(obj, 'touch_id'):
+                obj.touch_id = None
+            if hasattr(obj, 'knob_offset_x'):
+                obj.knob_offset_x = 0
+            if hasattr(obj, 'knob_offset_y'):
+                obj.knob_offset_y = 0
+        for _w in (getattr(self, 'skill_wheel', None), getattr(self, 'weapon_wheel', None)):
+            if _w and hasattr(_w, 'active'):
+                _w.active = False
+        if hasattr(self, '_active_touch_ids'):
+            self._active_touch_ids.clear()
+            self._active_touch_pos.clear()
+            self._active_touch_last.clear()
