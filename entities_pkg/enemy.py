@@ -16,16 +16,8 @@ class Enemy:
         self.x = x
         self.y = y
         self.enemy_type = enemy_type
-        # v2.0.18 分层 AI：仅精英怪与 BOSS 走 RL（感知强、数量少、推理开销可控）；
-        # 普通僵尸（占尸潮 90%+）走原规则 AI——避免成百上千只僵尸 RL 推理拖垮性能
-        try:
-            from config import EnemyType as _ET
-            _RL_TYPES = {_ET.BOSS_LONG, _ET.BOSS_XIANG, _ET.BOSS_MUTANT, _ET.BOSS_QUEEN,
-                         _ET.BOSS_TITAN, _ET.BOSS_WANG, _ET.ELITE_BRUTE, _ET.ELITE_ASSASSIN,
-                         _ET.ELITE_SORCERER, _ET.ELITE_GUARDIAN, _ET.ZOMBIE_TANK}
-            self.rl_eligible = enemy_type in _RL_TYPES
-        except Exception:
-            self.rl_eligible = False
+        # v2.2.4 决策树 AI（无训练硬编程）接管全部僵尸；rl_eligible 恒 True（保留字段兼容自定义关闭）
+        self.rl_eligible = True
         self.wave = wave
         self.difficulty = difficulty
         self.alive = True
@@ -403,14 +395,34 @@ class Enemy:
             return None
 
         if dist > 0:
-            # v2.0.14：RL 强化学习 AI 接管全部僵尸（含 boss）移动与技能（未启用/不可用 → 回退原 AI）
+            # v2.2.4：无训练硬编程 AI 层（决策树抽象模块 ai_pkg）接管全部僵尸移动与通用技能
+            # - Boss：原生 Utility AI（_boss_behavior 硬编程：专属形态/技能/CD/移动）全权执行
+            # - 非 Boss：决策树统一决策移动/通用技能，特种特色能力（_special_ability）照常触发
+            # 未挂载/异常 → 回退下方原规则 AI
             if _rl_act:
+                if getattr(self, "is_boss", False):
+                    return self._boss_behavior(dt, player_x, player_y, dist, player)
                 _teammates = getattr(world, "enemies", None)
-                _vx, _vy, _skill = self.ai_rl.decide(self, player, world, _teammates)
+                try:
+                    _vx, _vy, _skill = self.ai_rl.decide(self, player, world, _teammates)
+                except Exception:
+                    _vx, _vy, _skill = None, None, False  # AI 异常 → 回退原生规则 AI
                 if _vx is not None:
                     mdx = _vx * self.speed * self._buff_speed_mult * dt * 60
                     mdy = _vy * self.speed * self._buff_speed_mult * dt * 60
                     self._move_with_obstacle_collision(mdx, mdy, world)
+                    # 特种僵尸特色能力（快速冲刺/坦克重击/远程散射/治疗波/幻影瞬移/盾兵冲锋/跳跃扑击等）
+                    special_result = self._special_ability(dt, player_x, player_y, dist)
+                    if special_result:
+                        windup_config = self._get_windup_config(special_result)
+                        if windup_config:
+                            self.special_windup_timer = windup_config["duration"]
+                            self.special_windup_type = special_result
+                            self.special_windup_radius = windup_config.get("radius", 0)
+                            self.special_windup_target_x = player_x
+                            self.special_windup_target_y = player_y
+                            return None
+                        return special_result
                     if _skill:
                         _r = self._rl_cast_skill(_skill, dt, player_x, player_y, dist, player)
                         if _r:

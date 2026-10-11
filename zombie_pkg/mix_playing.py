@@ -873,8 +873,10 @@ class PlayingMixin:
             spawn_y = self.player.y + math.sin(angle) * dist
             spawn_x, spawn_y = self.world.clamp_position(spawn_x, spawn_y, 20)
             enemy = Enemy(spawn_x, spawn_y, spawn_type, 1, self.config.difficulty)
-            # v2.0.13：RL 强化学习 AI 挂载（未启用时 rl_ai=None，回退原 AI）
-            if getattr(self, "rl_ai", None) is not None:
+            # v2.2.4：决策树 AI（无训练硬编程）挂载；未挂载/异常 → 回退原规则 AI
+            if getattr(self, "ai_controller", None) is not None:
+                enemy.ai_rl = self.ai_controller
+            elif getattr(self, "rl_ai", None) is not None:
                 enemy.ai_rl = self.rl_ai
             if drops_vaccine:
                 enemy.drops_vaccine = True  # 标记此Boss必爆疫苗
@@ -1089,7 +1091,9 @@ class PlayingMixin:
                     sx = enemy.x + math.cos(angle) * 80
                     sy = enemy.y + math.sin(angle) * 80
                     _e = Enemy(sx, sy, EnemyType.ZOMBIE_NORMAL, 1, self.config.difficulty)
-                    if getattr(self, "rl_ai", None) is not None:
+                    if getattr(self, "ai_controller", None) is not None:
+                        _e.ai_rl = self.ai_controller
+                    elif getattr(self, "rl_ai", None) is not None:
                         _e.ai_rl = self.rl_ai
                     self.enemies.append(_e)
                 self.particles.spawn_explosion(enemy.x, enemy.y, DARK_GREEN, 24)
@@ -1157,7 +1161,9 @@ class PlayingMixin:
                     sx = enemy.x + math.cos(angle) * 90
                     sy = enemy.y + math.sin(angle) * 90
                     _e = Enemy(sx, sy, random.choice(_elites), 1, self.config.difficulty)
-                    if getattr(self, "rl_ai", None) is not None:
+                    if getattr(self, "ai_controller", None) is not None:
+                        _e.ai_rl = self.ai_controller
+                    elif getattr(self, "rl_ai", None) is not None:
                         _e.ai_rl = self.rl_ai
                     self.enemies.append(_e)
                 self.particles.spawn_explosion(enemy.x, enemy.y, DARK_GREEN, 34)

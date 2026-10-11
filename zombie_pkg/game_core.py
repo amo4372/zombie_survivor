@@ -289,24 +289,17 @@ class GameCore:
 
         self.rune_manager = RuneManager()  # 符文系统（修复：此前从未初始化导致不生效）
         self.enemies = []
-        # v2.0.13：RL 强化学习 AI 控制器（AI_MODE=auto 自动检查：有模型→RL，无模型→原 AI）
-        self.rl_ai = None
+        # v2.2.4：完全更换 RL 强化学习为无训练硬编程决策树 AI（ai_pkg）
+        # 决策树 AI 恒可用（无需模型/无需训练），异常时 enemy 自动回退原生规则 AI
+        self.ai_controller = None
+        self.rl_ai = None  # 保留字段名兼容旧引用，但不再加载任何模型
         try:
-            _ai_mode = getattr(self.config, "AI_MODE", "auto")
-            if _ai_mode in ("auto", "rl"):
-                from zombie_pkg.ai_controller import RLEnemyAI
-                self.rl_ai = RLEnemyAI(getattr(self.config, "RL_MODEL_PATH", ""), enable=True)
-                if self.rl_ai and self.rl_ai.ready:
-                    logger.info(f"[AI] RL 强化学习 AI 已加载: {self.rl_ai.model_path}")
-                elif _ai_mode == "rl":
-                    logger.info("[AI] RL 模型缺失/不可用，已回退原 AI")
-                else:
-                    self.rl_ai = None  # auto 且模型缺失 → 正常使用原 AI
-            else:
-                self.rl_ai = None
-                logger.info("[AI] AI_MODE=off，使用原 AI")
-        except Exception:
-            self.rl_ai = None
+            from ai_pkg import ZombieTreeAI
+            self.ai_controller = ZombieTreeAI()
+            logger.info("[AI] 决策树 AI（无训练硬编程）已接管全部僵尸")
+        except Exception as e:
+            self.ai_controller = None
+            logger.warning(f"[AI] 决策树 AI 初始化失败，回退原生 AI: {e}")
 
         self.projectiles = []
         self.special_items = []  # 场景道具（武器箱/宝箱/生命/弹药等）
@@ -517,11 +510,16 @@ class GameCore:
     def save_ai_stats(self):
         """导出 RL 遥测数据到 data/ai_stats.json（开发者分析用）"""
         try:
-            if getattr(self, "rl_ai", None) is not None and self.rl_ai.ready:
+            # v2.2.4 决策树 AI 遥测（无训练硬编程，统计决策分布）
+            _ai = getattr(self, "ai_controller", None)
+            if _ai is not None and getattr(_ai, "ready", False):
                 import os as _os
                 _d = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), "data")
                 _os.makedirs(_d, exist_ok=True)
-                self.rl_ai.save_stats(_os.path.join(_d, "ai_stats.json"))
+                try:
+                    _ai.save_stats(_os.path.join(_d, "ai_stats.json"))
+                except Exception:
+                    pass
                 return True
         except Exception:
             pass
