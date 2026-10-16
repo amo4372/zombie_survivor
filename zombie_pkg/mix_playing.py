@@ -580,12 +580,16 @@ class PlayingMixin:
                     ))
             # === 单武器模式：无武器轮盘/切换（局内只有一种武器） ===
 
-            # ===== v2.2.5 钩爪瞄准锁定圈：长按瞄准期间每帧更新圈内锁定目标 =====
+            # ===== v2.2.5/11 钩爪瞄准锁定圈：长按瞄准期间每帧更新圈内锁定目标 =====
             _rg_aim = self.player.riot_gear
             if self.skill_caster.is_aiming and self.selected_skill == SkillType.GRAPPLE_PULL:
                 _rg_aim.grapple_aiming = True
+                # v2.2.11 触控：锚点跟随瞄准方向/距离实时移动（skill_caster.angle 弧度→度）
+                _aim_ang = math.degrees(self.skill_caster.angle)
+                _aim_dist = self._get_skill_max_distance(self.selected_skill) * self.skill_caster.distance_ratio
                 _rg_aim.update_grapple_lock(self.player.x, self.player.y, self.enemies,
-                                            items=getattr(self.world, 'items', None))
+                                            items=getattr(self.world, 'items', None),
+                                            aim_angle=_aim_ang, aim_dist=_aim_dist)
             else:
                 _rg_aim.grapple_aiming = False
                 if not _rg_aim.grapple_active:
@@ -601,8 +605,11 @@ class PlayingMixin:
                 _rg_t = self.player.riot_gear
                 if self.skill_caster.is_aiming and self.selected_skill == SkillType.GRAPPLE_PULL:
                     _rg_t.grapple_aiming = True
+                    _aim_t_ang = math.degrees(self.skill_caster.angle)
+                    _aim_t_dist = self._get_skill_max_distance(self.selected_skill) * self.skill_caster.distance_ratio
                     _rg_t.update_grapple_lock(self.player.x, self.player.y, self.enemies,
-                                              items=getattr(self.world, 'items', None))
+                                              items=getattr(self.world, 'items', None),
+                                              aim_angle=_aim_t_ang, aim_dist=_aim_t_dist)
                 else:
                     _rg_t.grapple_aiming = False
                     if not _rg_t.grapple_active:

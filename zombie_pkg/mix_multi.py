@@ -324,8 +324,8 @@ class MultiplayerMixin:
                     c2tc.set_max_distance(getattr(self, 'throwable_max_dist', 450))
                 except Exception:
                     pass
-                # v2.2.6：P2 钩爪瞄准锁定圈更新（触控长按）
-                self._update_p2_grapple_lock(p2, bool(c2sc.is_aiming))
+                # v2.2.6/11：P2 钩爪瞄准锁定圈更新（触控长按，锚点跟随瞄准移动）
+                self._update_p2_grapple_lock(p2, bool(c2sc.is_aiming), caster=c2sc)
                 if self.p2_controls["skill_caster"].just_released:
                     skill = True
                     # 触控长按/拖拽预瞄状态（handle_touch 会在 up 时重置 is_aiming）
@@ -759,13 +759,23 @@ class MultiplayerMixin:
         except Exception:
             return False
 
-    def _update_p2_grapple_lock(self, p2, aiming):
-        """v2.2.6：P2 钩爪瞄准锁定圈更新（瞄准中圈内锁定最近非 Boss 敌人）"""
+    def _update_p2_grapple_lock(self, p2, aiming, caster=None):
+        """v2.2.6/11：P2 钩爪瞄准锁定圈更新（瞄准中圈内锁定最近非 Boss 敌人）
+        caster=触控 SkillCaster，提供实时方向/距离使锚点跟随瞄准移动"""
         rg = p2.riot_gear
         if aiming:
             rg.grapple_aiming = True
+            _a_ang = _a_dist = None
+            if caster is not None:
+                try:
+                    import math as _m
+                    _a_ang = _m.degrees(caster.angle)
+                    _a_dist = getattr(caster, 'max_skill_distance', 500) * getattr(caster, 'distance_ratio', 1.0)
+                except Exception:
+                    pass
             rg.update_grapple_lock(p2.x, p2.y, self.enemies,
-                                   items=getattr(self.world, 'items', None))
+                                   items=getattr(self.world, 'items', None),
+                                   aim_angle=_a_ang, aim_dist=_a_dist)
         else:
             rg.grapple_aiming = False
             if not rg.grapple_active:

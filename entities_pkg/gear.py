@@ -336,11 +336,14 @@ class RiotGear:
         if player is not None:
             player.invincible_timer = max(getattr(player, "invincible_timer", 0), 0.1)
 
-    def update_grapple_lock(self, player_x, player_y, enemies, items=None):
-        """v2.2.7 瞄准期间更新锁定圈：蓄力圈由小到大 + 优先锁定特殊道具 + 圈内最近敌人
-        锚点=预瞄终点（aim_line_angle 方向 max_range 处）"""
+    def update_grapple_lock(self, player_x, player_y, enemies, items=None,
+                            aim_angle=None, aim_dist=None):
+        """v2.2.11 瞄准期间更新锁定圈：蓄力圈由小到大 + 优先锁定特殊道具 + 圈内最近敌人
+        锚点=预瞄终点（随瞄准方向/距离实时移动），aim_angle（度）/aim_dist 由触控瞄准传入，
+        未传时回退 aim_line_angle 方向 max_range 处。"""
         if not self.grapple_aiming:
             self.grapple_locked_target = None
+            self.grapple_aim_anchor = None
             return None
         # 蓄力计时：0.6s 内锁定圈从 35% 扩到 100%
         import time as _t
@@ -349,10 +352,12 @@ class RiotGear:
             self._grapple_aim_start = _t.time()
         self._grapple_aim_charge = min(1.0, (_t.time() - self._grapple_aim_start) / 0.6)
         cur_radius = self.grapple_lock_radius * max(0.35, self._grapple_aim_charge)
-        # 锁定圈中心 = 锚点（预瞄终点）
-        _a = math.radians(self.aim_line_angle)
-        _ax = player_x + math.cos(_a) * self.grapple_max_range
-        _ay = player_y + math.sin(_a) * self.grapple_max_range
+        # 锁定圈中心 = 锚点（预瞄终点，随瞄准移动）
+        _a = math.radians(aim_angle if aim_angle is not None else self.aim_line_angle)
+        _ad = aim_dist if aim_dist is not None else self.grapple_max_range
+        _ax = player_x + math.cos(_a) * _ad
+        _ay = player_y + math.sin(_a) * _ad
+        self.grapple_aim_anchor = (_ax, _ay)
         best = None
         best_d = cur_radius
         # 1) 优先锁定特殊道具（宝箱/武器箱/加时道具等）
@@ -606,18 +611,37 @@ class RiotGear:
                 pygame.draw.circle(screen, (120, 230, 140), (ex, ey), max(3, int(6 * scale)), max(1, int(2 * scale)))
                 pygame.draw.circle(screen, (*((120, 230, 140))[:3], 60), (ex, ey), max(5, int(10 * scale)))
 
-        # v2.2.7 瞄准锁定圈：中心=锚点（预瞄终点），半径随蓄力由小到大
+        # v2.2.7/11 瞄准锁定圈：中心=锚点（预瞄终点，随瞄准实时移动），半径随蓄力由小到大
         if self.grapple_aiming and not self.grapple_active:
-            _a = math.radians(self.aim_line_angle)
-            _ax = player_x + math.cos(_a) * self.grapple_max_range
-            _ay = player_y + math.sin(_a) * self.grapple_max_range
+            _anch = getattr(self, 'grapple_aim_anchor', None)
+            if _anch is not None:
+                _ax, _ay = _anch
+            else:
+                _a = math.radians(self.aim_line_angle)
+                _ax = player_x + math.cos(_a) * self.grapple_max_range
+                _ay = player_y + math.sin(_a) * self.grapple_max_range
             _charge = getattr(self, '_grapple_aim_charge', 1.0) or 1.0
             _r = self.grapple_lock_radius * max(0.35, _charge)
             axp = int((_ax - camera_x) * scale)
             ayp = int((_ay - camera_y) * scale)
             lr = int(_r * scale)
+            # v2.2.11 预瞄锚点（中心准星标记，随瞄准移动）
+            _as = max(4, int(7 * scale))
+            pygame.draw.line(screen, (120, 230, 140), (axp - _as, ayp), (axp + _as, ayp), max(1, int(2 * scale)))
+            pygame.draw.line(screen, (120, 230, 140), (axp, ayp - _as), (axp, ayp + _as), max(1, int(2 * scale)))
+            pygame.draw.circle(screen, (120, 230, 140), (axp, ayp), max(2, int(3 * scale)))
+            # 锁定圈：由小到大扩至极点
             pygame.draw.circle(screen, (60, 200, 90), (axp, ayp), lr, max(1, int(2 * scale)))
             pygame.draw.circle(screen, (60, 200, 90), (axp, ayp), lr + int(4 * scale), max(1, int(1 * scale)))
+            # 蓄力进度弧（35%→100%）
+            try:
+                _ch = max(0.0, min(1.0, _charge))
+                _sa = -math.pi / 2
+                _ea = _sa + (0.35 + 0.65 * _ch) * 2 * math.pi
+                pygame.draw.arc(screen, (120, 255, 150), (axp - lr - 4, ayp - lr - 4, (lr + 4) * 2, (lr + 4) * 2),
+                                _sa, _ea, max(1, int(2 * scale)))
+            except Exception:
+                pass
             if self.grapple_locked_target is not None and getattr(self.grapple_locked_target, "alive", False):
                 lx = int((self.grapple_locked_target.x - camera_x) * scale)
                 ly = int((self.grapple_locked_target.y - camera_y) * scale)

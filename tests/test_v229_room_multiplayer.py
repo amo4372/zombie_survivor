@@ -32,7 +32,10 @@ check("同屏入口跳 MULTI_ROOM_CONFIG", "GameState.MULTI_ROOM_CONFIG" in
       _src.split("def _draw_net_multiplayer")[0].split("def _draw_multiplayer_select")[1])
 check("_draw_multi_room_config 存在", "def _draw_multi_room_config" in _src)
 check("_start_multi_room_game 存在", "def _start_multi_room_game" in _src)
-check("统一武器应用到 P1~P4", "selected_weapon_p4 = _w" in _src)
+# v2.2.11：改为逐玩家配置（per-player weapon 写入选择槽 + 未配置玩家沿用 P1 武器兜底）
+_gc11 = open("zombie_pkg/game_core.py", encoding="utf-8").read()
+check("per-player 武器写入选择槽", 'f"selected_weapon_p{_i}"' in _gc11)
+check("未配置玩家兜底默认武器", "_default_w" in _src)
 _src2 = open("renderer_pkg/render_core.py", encoding="utf-8").read()
 check("render_core 分发 MULTI_ROOM_CONFIG", "MULTI_ROOM_CONFIG" in _src2)
 

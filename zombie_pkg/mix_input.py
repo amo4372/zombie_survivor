@@ -633,6 +633,24 @@ class InputMixin:
 
     def _handle_dev_keys(self, events):
         """处理开发者密码输入与局内调试面板开关（键盘）"""
+        # v2.2.11 同屏多人房间配置：逐玩家名字输入（SDL_IME 系统输入法）
+        if self.state == GameState.MULTI_ROOM_CONFIG and getattr(self, 'room_name_focus', False):
+            try:
+                _rpc = (getattr(self, 'room_player_cfgs', None) or {}).get(
+                    getattr(self, 'room_sel_player', 1) or 1, {})
+                for ev in events:
+                    if ev.type == pygame.TEXTINPUT:
+                        if len(_rpc.get("name", "")) < 12:
+                            _rpc["name"] = (_rpc.get("name", "") or "") + ev.text
+                    elif ev.type == pygame.KEYDOWN:
+                        if ev.key == pygame.K_BACKSPACE:
+                            _rpc["name"] = (_rpc.get("name", "") or "")[:-1]
+                        elif ev.key in (pygame.K_RETURN, pygame.K_ESCAPE, pygame.K_KP_ENTER):
+                            self.room_name_focus = False
+                            self.stop_text_input()
+            except Exception:
+                pass
+            return
         # 网络联机 IP 输入框：聚焦时优先接受系统输入法输入
         if self.state == GameState.NET_MULTIPLAYER and self.net_ip_focused:
             self._handle_net_ip_keyboard(events)

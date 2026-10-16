@@ -585,6 +585,20 @@ class GameCore:
 
     def start_game(self):
         logger.info("开始新游戏")
+        # v2.2.11 逐玩家房间配置：先把 per-player 武器/角色写入选择槽
+        # （必须在 selected_character/玩家创建之前生效）
+        try:
+            _rpcs0 = getattr(self, 'room_player_cfgs', None) or {}
+            for _i in range(1, 5):
+                _rcfg0 = _rpcs0.get(_i) or {}
+                _w0 = _rcfg0.get("weapon")
+                if _w0 is not None:
+                    setattr(self, f"selected_weapon_p{_i}", _w0)
+                _c0 = _rcfg0.get("char")
+                if _c0:
+                    setattr(self, f"selected_char_p{_i}", _c0)
+        except Exception:
+            pass
         # 初始化游戏会话记录
         self.session = self.records.on_game_start(self.config.difficulty, self.config.game_mode)
         self.session.set_difficulty(self.config.difficulty)
@@ -696,6 +710,19 @@ class GameCore:
             self.camera.shake_enabled = self.config.screen_shake
             # ===== 多人模式：创建第二位玩家 + 第二摄像机 =====
             if self.multiplayer_mode in ("same_screen", "network"):
+                # v2.2.11 逐玩家房间配置：先把 per-player 武器/角色写入选择槽（创建玩家前生效）
+                try:
+                    _rpcs = getattr(self, 'room_player_cfgs', None) or {}
+                    for _i in range(1, 5):
+                        _rcfg = _rpcs.get(_i) or {}
+                        _w2 = _rcfg.get("weapon")
+                        if _w2 is not None:
+                            setattr(self, f"selected_weapon_p{_i}", _w2)
+                        _c2 = _rcfg.get("char")
+                        if _c2:
+                            setattr(self, f"selected_char_p{_i}", _c2)
+                except Exception:
+                    pass
                 # 同屏双人：每半屏视口宽 = 半屏，摄像机中心偏移应为半宽（否则玩家会贴在全屏中心）
                 if self.multiplayer_mode == "same_screen":
                     self.camera = Camera(BASE_WIDTH // 2, BASE_HEIGHT)
@@ -753,16 +780,33 @@ class GameCore:
                                 logger.warning(f"创建同屏补位玩家失败: {_e}")
                 # v2.2.7/8 PvPvE 阵营分配：
                 # pvp_enabled=False → nPvE（全体同阵营 0，纯合作抗僵尸）
-                # pvp_enabled=True + pvp_teams=N → aPvbPv...vE（玩家序号轮转 N 阵营，同屏/网络一致）
+                # pvp_enabled=True + pvp_teams=N → aPvbPv...vE
+                # v2.2.11：优先使用房间配置的显式阵营（room_player_cfgs 每玩家 team），
+                # 未配置时回退序号轮转 N 阵营
                 try:
                     _pvpm = getattr(self.config, 'pvp_enabled', False)
                     _nteams = max(1, int(getattr(self.config, 'pvp_teams', 2) or 2)) if _pvpm else 1
+                    _rpcs = getattr(self, 'room_player_cfgs', None) or {}
                     for _idx, _pn in enumerate(("player", "player2", "player3", "player4")):
                         _pp = getattr(self, _pn, None)
-                        if _pp is not None:
+                        if _pp is None:
+                            continue
+                        _rcfg = _rpcs.get(_idx + 1) or {}
+                        if _pvpm and _rcfg.get("team") is not None:
+                            # 显式阵营（1..N，1-based 用户选项 → 0-based team_id）
+                            _pp.team_id = max(0, min(_nteams - 1, int(_rcfg["team"]) - 1))
+                            _pp.hp = _pp.max_hp
+                        else:
                             _pp.team_id = _idx % _nteams
                             if _pvpm:
                                 _pp.hp = _pp.max_hp
+                        # v2.2.11 逐玩家自定义名字（动态挂 nick 属性，HUD 标签显示）
+                        _nm = (_rcfg.get("name") or "").strip()
+                        if _nm:
+                            try:
+                                _pp.nick = _nm
+                            except Exception:
+                                pass
                 except Exception as _e:
                     logger.warning(f"阵营分配失败: {_e}")
                 self._setup_multiplayer_controls()

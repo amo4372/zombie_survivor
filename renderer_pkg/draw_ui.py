@@ -2081,20 +2081,21 @@ class UiMixin:
                 self.screen.blit(d, d.get_rect(center=(sw // 2, int((300 + i * 80) * scale))))
 
     def _draw_multi_room_config(self):
-        """v2.2.9 同屏多人房间配置：人数/玩法/阵营/难度/地图/模式/统一武器 → 开始
-        房主统一一键配置，各玩家同武器同角色（后续可单独微调）"""
+        """v2.2.11 同屏多人房间配置（下拉栏 + 逐玩家设置）：
+        左栏全局（人数/玩法/阵营数/难度/模式/地图），右栏逐玩家（名字/武器/角色/阵营），
+        支持一键统一应用到全部玩家，阵营按玩家显式分配。"""
         self.screen.fill(VOID_BLACK)
         scale = self.game.scale
         sw = self.game.scaled_width
         g = self.game
-        mouse_pos = pygame.mouse.get_pos()
-        mouse_pressed = pygame.mouse.get_pressed()
+        _ups = [te for te in getattr(g, 'touch_events', [])
+                if te.get("type") == "up" and te.get("pos") is not None]
         title = self.game.font_title.render("同屏多人 · 房间配置", True, WHITE)
-        self.screen.blit(title, title.get_rect(center=(sw // 2, int(55 * scale))))
-        g.coop_player_count = max(2, int(getattr(g, 'coop_player_count', 2) or 2))
+        self.screen.blit(title, title.get_rect(center=(sw // 2, int(46 * scale))))
+        g.coop_player_count = max(2, min(4, int(getattr(g, 'coop_player_count', 2) or 2)))
         _pvpm = bool(getattr(g.config, 'pvp_enabled', False))
-        _nteams = max(1, int(getattr(g.config, 'pvp_teams', 2) or 2))
-        # 地图/武器候选
+        _nteams = max(2, min(4, int(getattr(g.config, 'pvp_teams', 2) or 2)))
+        # 候选数据
         _maps = ["校园", "街道", "市中心", "郊区", "核电站", "随机"]
         try:
             from config import MapType
@@ -2102,7 +2103,6 @@ class UiMixin:
                          MapType.SUBURB, MapType.NUCLEAR_PLANT, None]
         except Exception:
             _map_vals = [None] * 6
-        # v2.2.9 武器候选：WeaponType 枚举（排除投掷物），与局外装备选择一致
         try:
             from config import WeaponType
             from weapons import Weapon
@@ -2111,62 +2111,246 @@ class UiMixin:
             _wnames = [Weapon(wt).name for wt in _wlist]
         except Exception:
             _wlist, _wnames = [], []
-        g.room_map_idx = int(getattr(g, 'room_map_idx', 0) or 0) % len(_maps)
-        g.room_weapon_idx = int(getattr(g, 'room_weapon_idx', 0) or 0) % max(1, len(_wlist))
-        _diff_names = {"easy": "简单", "normal": "普通", "hard": "困难", "hell": "地狱"}
-        _cur_diff = getattr(g.config, 'difficulty', 'normal')
-        _mode_names = {"endless": "无尽模式", "story": "故事模式", "timed": "争分夺秒"}
+        try:
+            from config import CHARACTERS
+            _clist = list(CHARACTERS.keys())
+        except Exception:
+            _clist = []
+        _diff_names = ["简单", "普通", "困难", "地狱"]
+        _diff_keys = ["easy", "normal", "hard", "hell"]
+        _mode_names = ["无尽模式", "故事模式", "争分夺秒"]
         _cur_mode = getattr(g.config, 'game_mode', None)
         _cur_mode_name = getattr(_cur_mode, 'name', 'endless').lower() if _cur_mode else 'endless'
-        rows = [
-            ("人数", f"{g.coop_player_count} 人", lambda: setattr(g, 'coop_player_count', (g.coop_player_count - 1) % 3 + 2)),
-            ("玩法", ("合作 nPvE" if not _pvpm else "对战 PvPvE"),
-             lambda: setattr(g.config, 'pvp_enabled', not _pvpm)),
-            ("阵营数", (f"{_nteams} 阵营" if _pvpm else "—（合作）"),
-             (lambda: setattr(g.config, 'pvp_teams', (_nteams - 1) % 3 + 2)) if _pvpm else (lambda: None)),
-            ("难度", _diff_names.get(_cur_diff, '普通'),
-             lambda: setattr(g.config, 'difficulty',
-                             ["easy", "normal", "hard", "hell"][(
-                                 ["easy", "normal", "hard", "hell"].index(_cur_diff)
-                                 if _cur_diff in ["easy", "normal", "hard", "hell"] else 1) % 4])),
-            ("地图", _maps[g.room_map_idx], lambda: setattr(g, 'room_map_idx', (g.room_map_idx + 1) % len(_maps))),
-            ("模式", _mode_names.get(_cur_mode_name, "无尽模式"), lambda: self._cycle_room_mode(g)),
-            ("统一武器", (_wnames[g.room_weapon_idx] if _wlist else "默认"),
-             lambda: setattr(g, 'room_weapon_idx', (g.room_weapon_idx + 1) % max(1, len(_wlist)))),
-        ]
-        y0 = int(120 * scale)
-        rh = int(52 * scale)
-        _ups = [te for te in getattr(g, 'touch_events', [])
-                if te.get("type") == "up" and te.get("pos") is not None]
-        for i, (label, val, _cb) in enumerate(rows):
-            y = y0 + i * (rh + int(10 * scale))
-            lx = int(sw * 0.18)
-            _r = pygame.Rect(lx, y, int(sw * 0.64), rh)
-            if any(_r.collidepoint(te["pos"]) for te in _ups):
-                try:
-                    _cb()
-                except Exception:
-                    pass
-            pygame.draw.rect(self.screen, (28, 32, 44), _r, border_radius=10)
-            lt = self.game.font.render(f"{label}: {val}", True, (235, 235, 235))
-            self.screen.blit(lt, lt.get_rect(midleft=(lx + int(18 * scale), y + rh // 2)))
-        # 开始 / 返回
-        sb = pygame.Rect(int(sw * 0.5 - 160 * scale), y0 + len(rows) * (rh + int(10 * scale)) + int(14 * scale),
-                         int(160 * scale), int(54 * scale))
+        _mode_idx = {"endless": 0, "story": 1, "timed": 2}.get(_cur_mode_name, 0)
+        _cur_diff = getattr(g.config, 'difficulty', 'normal')
+        _diff_idx = _diff_keys.index(_cur_diff) if _cur_diff in _diff_keys else 1
+        g.room_map_idx = int(getattr(g, 'room_map_idx', 0) or 0) % len(_maps)
+        # 逐玩家配置
+        if not hasattr(g, 'room_player_cfgs') or not isinstance(g.room_player_cfgs, dict):
+            g.room_player_cfgs = {1: {}, 2: {}, 3: {}, 4: {}}
+        if not hasattr(g, 'room_sel_player') or not g.room_sel_player:
+            g.room_sel_player = 1
+        g.room_sel_player = max(1, min(g.coop_player_count, int(g.room_sel_player) or 1))
+        _rpcs = g.room_player_cfgs
+        _cur = _rpcs.setdefault(g.room_sel_player, {})
+        # 点击非下拉区域关闭展开
+        _dd = getattr(g, 'room_dropdown', None)
+        if _dd and not any(True for _ in _ups if _ is not None):
+            g.room_dropdown = None
+        # ===== 下拉通用绘制/交互 =====
+        def _dd_box(rect, text, color=(28, 32, 44)):
+            pygame.draw.rect(self.screen, color, rect, border_radius=10)
+            _t = self.game.font.render(text, True, (235, 235, 235))
+            self.screen.blit(_t, _t.get_rect(midleft=(rect.x + int(14 * scale), rect.centery)))
+
+        def _dd_item(rect, text, sel=False):
+            _c = (60, 130, 90) if sel else (38, 44, 58)
+            pygame.draw.rect(self.screen, _c, rect, border_radius=8)
+            pygame.draw.rect(self.screen, (90, 120, 150) if sel else (55, 62, 80), rect, 2, border_radius=8)
+            _t = self.game.font.render(text, True, (245, 245, 245))
+            self.screen.blit(_t, _t.get_rect(midleft=(rect.x + int(12 * scale), rect.centery)))
+
+        def _apply_to_all(_g, _src_cfg):
+            """v2.2.11 一键统一：把当前选中玩家的武器/角色/阵营应用到全部玩家"""
+            for _i in range(1, 5):
+                _c = _rpcs.setdefault(_i, {})
+                if _src_cfg.get("weapon") is not None:
+                    _c["weapon"] = _src_cfg["weapon"]
+                if _src_cfg.get("char"):
+                    _c["char"] = _src_cfg["char"]
+                if _pvpm and _src_cfg.get("team") is not None:
+                    _c["team"] = _src_cfg["team"]
+
+        def _handle_dd(key, rect, options, setter, current):
+            """下拉：点击展开；选项展开时点击选项选中；返回 True 表示展开态已处理"""
+            if _dd == key:
+                for _oi, (_opt, _val) in enumerate(options):
+                    _or = pygame.Rect(rect.x, rect.bottom + _oi * int(44 * scale), rect.width, int(42 * scale))
+                    _dd_item(_or, _opt, _oi == current)
+                    if any(_or.collidepoint(te["pos"]) for te in _ups):
+                        setter(_val)
+                        g.room_dropdown = None
+                        return True
+                return True
+            if any(rect.collidepoint(te["pos"]) for te in _ups):
+                g.room_dropdown = key if _dd != key else None
+                return True
+            return False
+
+        lx = int(70 * scale)
+        lw = int(300 * scale)
+        rh = int(46 * scale)
+        y = int(95 * scale)
+        gap = int(12 * scale)
+        # ---- 左栏：全局配置 ----
+        pygame.draw.rect(self.screen, (20, 24, 34), (int(40 * scale), int(80 * scale),
+                         int(360 * scale), int(470 * scale)), border_radius=14)
+        lt = self.game.font.render("全局设置", True, (150, 200, 255))
+        self.screen.blit(lt, lt.get_rect(midleft=(int(60 * scale), int(95 * scale))))
+        y = int(130 * scale)
+        # 人数
+        _dd_box(pygame.Rect(lx, y, lw, rh), f"人数：{g.coop_player_count} 人")
+        if not _handle_dd("count", pygame.Rect(lx, y, lw, rh),
+                          [(f"{n} 人", n) for n in (2, 3, 4)],
+                          lambda v: setattr(g, 'coop_player_count', v), g.coop_player_count - 2):
+            y += rh + gap
+        else:
+            y += rh + gap
+        # 玩法
+        _pv = "对战 PvPvE（阵营对抗）" if _pvpm else "合作 nPvE（共同抗僵尸）"
+        _dd_box(pygame.Rect(lx, y, lw, rh), f"玩法：{_pv}")
+        if not _handle_dd("pvp", pygame.Rect(lx, y, lw, rh),
+                          [("合作 nPvE", False), ("对战 PvPvE", True)],
+                          lambda v: setattr(g.config, 'pvp_enabled', v), 1 if _pvpm else 0):
+            y += rh + gap
+        else:
+            y += rh + gap
+        # 阵营数（PvP 才可改）
+        _tv = f"{_nteams} 阵营" if _pvpm else "—（合作模式）"
+        _dd_box(pygame.Rect(lx, y, lw, rh), f"阵营数：{_tv}",
+                (38, 44, 58) if not _pvpm else (28, 32, 44))
+        if _pvpm:
+            if not _handle_dd("teams", pygame.Rect(lx, y, lw, rh),
+                              [(f"{n} 阵营", n) for n in (2, 3, 4)],
+                              lambda v: setattr(g.config, 'pvp_teams', v), _nteams - 2):
+                y += rh + gap
+            else:
+                y += rh + gap
+        else:
+            y += rh + gap
+        # 难度
+        _dd_box(pygame.Rect(lx, y, lw, rh), f"难度：{_diff_names[_diff_idx]}")
+        if not _handle_dd("diff", pygame.Rect(lx, y, lw, rh),
+                          [(n, k) for n, k in zip(_diff_names, _diff_keys)],
+                          lambda v: setattr(g.config, 'difficulty', v), _diff_idx):
+            y += rh + gap
+        else:
+            y += rh + gap
+        # 模式
+        _dd_box(pygame.Rect(lx, y, lw, rh), f"模式：{_mode_names[_mode_idx]}")
+        if not _handle_dd("mode", pygame.Rect(lx, y, lw, rh),
+                          [(n, i) for i, n in enumerate(_mode_names)],
+                          lambda v: self._set_room_mode(g, v), _mode_idx):
+            y += rh + gap
+        else:
+            y += rh + gap
+        # 地图
+        _dd_box(pygame.Rect(lx, y, lw, rh), f"地图：{_maps[g.room_map_idx]}")
+        if not _handle_dd("map", pygame.Rect(lx, y, lw, rh),
+                          [(m, i) for i, m in enumerate(_maps)],
+                          lambda v: setattr(g, 'room_map_idx', v), g.room_map_idx):
+            y += rh + gap
+        else:
+            y += rh + gap
+        # ---- 右栏：逐玩家配置 ----
+        rx = int(430 * scale)
+        rw = sw - rx - int(40 * scale)
+        pygame.draw.rect(self.screen, (20, 24, 34), (rx - int(10 * scale), int(80 * scale),
+                         rw + int(20 * scale), int(470 * scale)), border_radius=14)
+        lt = self.game.font.render("玩家设置（点击标签切换）", True, (150, 200, 255))
+        self.screen.blit(lt, lt.get_rect(midleft=(rx + int(10 * scale), int(95 * scale))))
+        # 玩家标签
+        _plabels = ["P1", "P2", "P3", "P4"]
+        _pw = (rw - int(24 * scale)) // 4
+        for _pi in range(1, 5):
+            _pr = pygame.Rect(rx + (_pi - 1) * (_pw + int(8 * scale)), int(118 * scale), _pw, int(40 * scale))
+            _sel = _pi == g.room_sel_player
+            _c = (60, 130, 90) if _sel else (40, 46, 60)
+            pygame.draw.rect(self.screen, _c, _pr, border_radius=8)
+            _nm = (_rpcs.get(_pi, {}).get("name") or "").strip()
+            _txt = f"{_plabels[_pi - 1]}·{_nm[:4]}" if _nm else _plabels[_pi - 1]
+            _t = self.game.font_small.render(_txt, True, (245, 245, 245))
+            self.screen.blit(_t, _t.get_rect(center=_pr.center))
+            if _pi <= g.coop_player_count and any(_pr.collidepoint(te["pos"]) for te in _ups):
+                g.room_sel_player = _pi
+                g.room_dropdown = None
+        # 选中玩家详细配置
+        _cy = int(172 * scale)
+        # 名字（可输入）
+        _nr = pygame.Rect(rx, _cy, rw, rh)
+        _focus = bool(getattr(g, 'room_name_focus', False))
+        pygame.draw.rect(self.screen, (30, 60, 50) if _focus else (28, 32, 44), _nr, border_radius=10)
+        pygame.draw.rect(self.screen, (120, 220, 120) if _focus else (70, 78, 96), _nr, 2, border_radius=10)
+        _nt = self.game.font.render(f"名字：{(_cur.get('name') or '') or ('点击输入…' if not _focus else '')}",
+                                    True, (235, 235, 235))
+        self.screen.blit(_nt, _nt.get_rect(midleft=(_nr.x + int(14 * scale), _nr.centery)))
+        if any(_nr.collidepoint(te["pos"]) for te in _ups):
+            g.room_name_focus = True
+            try:
+                pygame.key.start_text_input()
+            except Exception:
+                pass
+        _cy += rh + gap
+        # 武器
+        _wi = max(0, _wlist.index(_cur.get("weapon")) if _cur.get("weapon") in _wlist else 0)
+        _wn = _wnames[_wi] if _wlist else "默认"
+        _dd_box(pygame.Rect(rx, _cy, rw, rh), f"武器：{_wn}")
+        if not _handle_dd("pweapon", pygame.Rect(rx, _cy, rw, rh),
+                          [(n, w) for n, w in zip(_wnames, _wlist)],
+                          lambda v: _cur.update(weapon=v), _wi):
+            _cy += rh + gap
+        else:
+            _cy += rh + gap
+        # 角色
+        _ci = _clist.index(_cur.get("char")) if _cur.get("char") in _clist else 0
+        _cn = _clist[_ci] if _clist else "—"
+        _dd_box(pygame.Rect(rx, _cy, rw, rh), f"角色：{_cn}")
+        if not _handle_dd("pchar", pygame.Rect(rx, _cy, rw, rh),
+                          [(n, n) for n in _clist],
+                          lambda v: _cur.update(char=v), _ci):
+            _cy += rh + gap
+        else:
+            _cy += rh + gap
+        # 阵营（PvP 时）
+        if _pvpm:
+            _ti = max(0, min(_nteams - 1, int(_cur.get("team") or 1) - 1))
+            _dd_box(pygame.Rect(rx, _cy, rw, rh), f"阵营：{'ABCD'[_ti]}（{_nteams} 阵营）")
+            if not _handle_dd("pteam", pygame.Rect(rx, _cy, rw, rh),
+                              [("阵营 " + 'ABCD'[i], i + 1) for i in range(_nteams)],
+                              lambda v: _cur.update(team=v), _ti):
+                _cy += rh + gap
+            else:
+                _cy += rh + gap
+        # 按钮：一键统一 / 开始 / 返回
+        by = int(575 * scale)
+        ub = pygame.Rect(rx, by, int(rw * 0.48), int(52 * scale))
+        pygame.draw.rect(self.screen, (90, 110, 200), ub, border_radius=12)
+        ut = self.game.font.render("当前配置应用到全部", True, WHITE)
+        self.screen.blit(ut, ut.get_rect(center=ub.center))
+        if any(ub.collidepoint(te["pos"]) for te in _ups):
+            _apply_to_all(g, _cur)
+        sb = pygame.Rect(int(sw * 0.5 - 250 * scale), int(650 * scale), int(230 * scale), int(52 * scale))
         pygame.draw.rect(self.screen, (40, 150, 80), sb, border_radius=12)
         st = self.game.font.render("开始游戏", True, WHITE)
         self.screen.blit(st, st.get_rect(center=sb.center))
-        bb = pygame.Rect(int(sw * 0.5 + 12 * scale), sb.y, int(160 * scale), int(54 * scale))
+        if any(sb.collidepoint(te["pos"]) for te in _ups):
+            g.room_name_focus = False
+            try:
+                pygame.key.stop_text_input()
+            except Exception:
+                pass
+            self._start_multi_room_game()
+        bb = pygame.Rect(int(sw * 0.5 + 20 * scale), int(650 * scale), int(230 * scale), int(52 * scale))
         pygame.draw.rect(self.screen, (170, 60, 60), bb, border_radius=12)
         bt = self.game.font.render("返回", True, WHITE)
         self.screen.blit(bt, bt.get_rect(center=bb.center))
-        if any(sb.collidepoint(te["pos"]) for te in _ups):
-            self._start_multi_room_game()
         if any(bb.collidepoint(te["pos"]) for te in _ups):
+            g.room_name_focus = False
+            try:
+                pygame.key.stop_text_input()
+            except Exception:
+                pass
             g.state = GameState.MULTIPLAYER_SELECT
 
+    def _set_room_mode(self, g, idx):
+        try:
+            from config import GameMode
+            g.config.game_mode = [GameMode.ENDLESS, GameMode.STORY, GameMode.TIMED][idx]
+        except Exception:
+            pass
+
     def _cycle_room_mode(self, g):
-        """v2.2.9 房间模式循环：无尽 → 故事 → 争分夺秒"""
+        """v2.2.9 房间模式循环：无尽 → 故事 → 争分夺秒（兼容旧调用）"""
         try:
             from config import GameMode
             _modes = [GameMode.ENDLESS, GameMode.STORY, GameMode.TIMED]
@@ -2179,11 +2363,11 @@ class UiMixin:
             pass
 
     def _start_multi_room_game(self):
-        """v2.2.9 应用房间配置并开始同屏多人对局"""
+        """v2.2.9/11 应用房间配置并开始同屏多人对局（逐玩家配置 + 显式阵营）"""
         g = self.game
         try:
             g.multiplayer_mode = "same_screen"
-            g.coop_player_count = max(2, int(getattr(g, 'coop_player_count', 2) or 2))
+            g.coop_player_count = max(2, min(4, int(getattr(g, 'coop_player_count', 2) or 2)))
             # 地图
             _maps = [None]
             try:
@@ -2196,19 +2380,23 @@ class UiMixin:
             _mv = _maps[g.room_map_idx]
             if _mv is not None:
                 g.selected_map_for_story = _mv
-            # 统一武器：应用到所有玩家（P1~P4）——WeaponType 枚举，与局外装备选择一致
+            # 未单独配置的玩家沿用统一默认武器（默认 P1 的配置或手枪）
+            _rpcs = getattr(g, 'room_player_cfgs', None) or {}
             try:
                 from config import WeaponType
                 _throw = {WeaponType.GRENADE, WeaponType.MOLOTOV, WeaponType.SMOKE_GRENADE}
                 _wlist = [wt for wt in WeaponType if wt not in _throw]
-                g.room_weapon_idx = int(getattr(g, 'room_weapon_idx', 0) or 0) % max(1, len(_wlist))
-                if _wlist:
-                    _w = _wlist[g.room_weapon_idx]
-                    g.selected_weapon = _w
-                    g.selected_weapon_p1 = _w
-                    g.selected_weapon_p2 = _w
-                    g.selected_weapon_p3 = _w
-                    g.selected_weapon_p4 = _w
+                # 兜底：没配武器的玩家用 P1 武器（或默认第一个）
+                _default_w = None
+                for _i in range(1, 5):
+                    _w2 = (_rpcs.get(_i) or {}).get("weapon")
+                    if _w2 is not None:
+                        _default_w = _w2
+                        break
+                if _default_w is None and _wlist:
+                    _default_w = _wlist[0]
+                if _default_w is not None:
+                    g.selected_weapon = _default_w
             except Exception:
                 pass
             g.state = GameState.PLAYING
