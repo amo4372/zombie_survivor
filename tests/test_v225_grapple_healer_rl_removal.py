@@ -186,13 +186,18 @@ g5._update_grapple(1 / 60, p5.x, p5.y, p5)
 check(g5.grapple_state == "idle" or g5.grapple_active is False,
       "到达目标后钩爪复位（极近距离立即到达）")
 
-# 锁定圈：圈内最近非 Boss 敌人
+# v2.2.7 锁定圈：中心=锚点（预瞄终点），圈内最近非 Boss 敌人
 g6 = RiotGear()
 g6.grapple_aiming = True
-e_near = StubEnemy(150, 100, size=20, is_boss=False)
-e_far = StubEnemy(300, 100, size=20, is_boss=False)
-e_boss = StubEnemy(160, 100, size=30, is_boss=True)
-lock = g6.update_grapple_lock(100, 100, [e_boss, e_far, e_near])
+g6.aim_line_angle = 0.0
+g6.grapple_max_range = 800
+g6._grapple_aim_charge = 1.0
+import time as _tt6
+g6._grapple_aim_start = _tt6.time()
+e_near = StubEnemy(790, 100, size=20, is_boss=False)
+e_far = StubEnemy(640, 100, size=20, is_boss=False)
+e_boss = StubEnemy(792, 100, size=30, is_boss=True)
+lock = g6.update_grapple_lock(0, 100, [e_boss, e_far, e_near])
 check(lock is e_near, "锁定圈选中最近非 Boss 敌人")
 g6.grapple_aiming = False
 lock2 = g6.update_grapple_lock(100, 100, [e_near])

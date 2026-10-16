@@ -2205,7 +2205,15 @@ class UiMixin:
         sh = g.scaled_height
         snap = g.net_client.get_snapshot() if g.net_client else {}
         players = snap.get("players", [])
-        me = players[1] if len(players) > 1 else (players[0] if players else None)
+        # v2.2.7：客户端用主机分配的玩家索引定位自己（多人在 1..3；缺失时回退 P2）
+        _my_idx = 1
+        try:
+            _nc = g.net_client
+            if _nc is not None and getattr(_nc, 'player_index', 1) is not None:
+                _my_idx = int(_nc.player_index)
+        except Exception:
+            _my_idx = 1
+        me = players[_my_idx] if 0 <= _my_idx < len(players) else (players[1] if len(players) > 1 else (players[0] if players else None))
         cam_x = (me["x"] if me else 0) - sw / (2.0 * scale)
         cam_y = (me["y"] if me else 0) - sh / (2.0 * scale)
         # 背景网格（轻量）

@@ -534,6 +534,11 @@ class RecordsMixin:
                 logger.info(f"已恢复 {len(self.enemies)} 个敌人")
 
             logger.info(f"存档已加载，模式: {mode_name}, 时间: {save_data.get('total_time', 0):.0f}s")
+            # v2.2.7：加载后强制清除换弹状态（换弹时退出→重载后不再卡死无法开火）
+            try:
+                self._reset_weapons_reload(self.player)
+            except Exception:
+                pass
             self.floating_texts.append(FloatingText(self.player.x, self.player.y - 60, 
                 "对局已恢复！", color=GREEN, lifetime=3.0))
             return True
@@ -685,7 +690,8 @@ class RecordsMixin:
         except Exception:
             self.collected_texts = set()
 
-    def _apply_item_effect(self, item_type):
+    def _apply_item_effect(self, item_type, player=None):
+        p = player or self.player
         """应用特殊道具效果"""
         # 记录道具收集
         if self.session:
@@ -702,16 +708,21 @@ class RecordsMixin:
             self.has_vaccine = True
             if self.session:
                 self.session.set_got_vaccine(True)
-            self.floating_texts.append(FloatingText(self.player.x, self.player.y - 40, "获得疫苗！", color=GREEN, lifetime=3.0))
+            self.floating_texts.append(FloatingText(p.x, p.y - 40, "获得疫苗！", color=GREEN, lifetime=3.0))
         elif item_type == ItemType.HEALTH_PACK:
-            self.player.heal(50)
-            self.floating_texts.append(FloatingText(self.player.x, self.player.y - 40, "+50 HP", color=RED, lifetime=1.5))
+            p.heal(50)
+            # v2.2.7 回血画面效果全模式（单人/双人/网络统一触发）
+            try:
+                self.particles.spawn_heal_particles(p.x, p.y, 16)
+            except Exception:
+                pass
+            self.floating_texts.append(FloatingText(p.x, p.y - 40, "+50 HP", color=RED, lifetime=1.5))
         elif item_type == ItemType.AMMO_BOX:
             # 补充所有武器弹药
-            for weapon in self.player.weapons:
+            for weapon in p.weapons:
                 if hasattr(weapon, 'current_ammo') and weapon.current_ammo != "Inf":
                     weapon.current_ammo = weapon.max_ammo
-            self.floating_texts.append(FloatingText(self.player.x, self.player.y - 40, "弹药补给", color=YELLOW, lifetime=1.5))
+            self.floating_texts.append(FloatingText(p.x, p.y - 40, "弹药补给", color=YELLOW, lifetime=1.5))
         elif item_type == ItemType.RACE_TIME:
             # v2.2.3 争分夺秒加时道具：拾取 +5s（非 TIMED 模式转为小量经验，避免浪费）
             try:
@@ -721,42 +732,42 @@ class RecordsMixin:
                         _hm.add_race_time(5.0)
                         self.race_last_gain = getattr(self, 'race_last_gain', 0) + 5
                         self.race_gain_timer = 1.4
-                        self.floating_texts.append(FloatingText(self.player.x, self.player.y - 40, "+5 秒!", color=GOLD, lifetime=1.5))
+                        self.floating_texts.append(FloatingText(p.x, p.y - 40, "+5 秒!", color=GOLD, lifetime=1.5))
                     else:
-                        self.player.gain_exp(40)
-                        self.floating_texts.append(FloatingText(self.player.x, self.player.y - 40, "+40 经验", color=GOLD, lifetime=1.5))
+                        p.gain_exp(40)
+                        self.floating_texts.append(FloatingText(p.x, p.y - 40, "+40 经验", color=GOLD, lifetime=1.5))
                 else:
-                    self.player.gain_exp(40)
-                    self.floating_texts.append(FloatingText(self.player.x, self.player.y - 40, "+40 经验", color=GOLD, lifetime=1.5))
+                    p.gain_exp(40)
+                    self.floating_texts.append(FloatingText(p.x, p.y - 40, "+40 经验", color=GOLD, lifetime=1.5))
                 self.assets.play_sound("pickup_coin")
-                self.particles.spawn_explosion(self.player.x, self.player.y, (255, 215, 60), 14)
+                self.particles.spawn_explosion(p.x, p.y, (255, 215, 60), 14)
             except Exception:
-                self.player.gain_exp(40)
+                p.gain_exp(40)
         elif item_type == ItemType.SPEED_BOOST:
-            self.player.buff_manager.add_buff(BuffType.SPEED_BOOST, duration=10.0)
-            self.floating_texts.append(FloatingText(self.player.x, self.player.y - 40, "速度提升！", color=BLUE, lifetime=2.0))
+            p.buff_manager.add_buff(BuffType.SPEED_BOOST, duration=10.0)
+            self.floating_texts.append(FloatingText(p.x, p.y - 40, "速度提升！", color=BLUE, lifetime=2.0))
         elif item_type == ItemType.DAMAGE_BOOST:
-            self.player.buff_manager.add_buff(BuffType.DAMAGE_BOOST, duration=10.0)
-            self.floating_texts.append(FloatingText(self.player.x, self.player.y - 40, "伤害提升！", color=ORANGE, lifetime=2.0))
+            p.buff_manager.add_buff(BuffType.DAMAGE_BOOST, duration=10.0)
+            self.floating_texts.append(FloatingText(p.x, p.y - 40, "伤害提升！", color=ORANGE, lifetime=2.0))
         elif item_type == ItemType.SHIELD_REPAIR:
-            if self.player.riot_gear.equipped:
-                self.player.riot_gear.viewing_window_hp = min(
-                    self.player.riot_gear.max_viewing_window_hp,
-                    self.player.riot_gear.viewing_window_hp + 50
+            if p.riot_gear.equipped:
+                p.riot_gear.viewing_window_hp = min(
+                    p.riot_gear.max_viewing_window_hp,
+                    p.riot_gear.viewing_window_hp + 50
                 )
-                self.player.riot_gear.shield_broken = False
-                self.floating_texts.append(FloatingText(self.player.x, self.player.y - 40, "盾牌修复！", color=BLUE, lifetime=2.0))
+                p.riot_gear.shield_broken = False
+                self.floating_texts.append(FloatingText(p.x, p.y - 40, "盾牌修复！", color=BLUE, lifetime=2.0))
         elif item_type == ItemType.WEAPON_BOX:
             # 武器箱：不再掉落武器，改为金币+经验奖励（武器由局外商店购买解锁）
             coin = random.randint(30, 60)
             try:
                 self.records.add_coins(coin)
-                self.floating_texts.append(FloatingText(self.player.x, self.player.y - 40, f"武器箱: +{coin}金币!", color=(200, 160, 80), lifetime=3.0))
+                self.floating_texts.append(FloatingText(p.x, p.y - 40, f"武器箱: +{coin}金币!", color=(200, 160, 80), lifetime=3.0))
             except Exception:
                 pass
-            self.player.gain_exp(50)
+            p.gain_exp(50)
             self.assets.play_sound("pickup_weapon_box")
-            self.particles.spawn_explosion(self.player.x, self.player.y, (200, 160, 80), 15)
+            self.particles.spawn_explosion(p.x, p.y, (200, 160, 80), 15)
 
             # 概率掉落可拾取文本资料
             try:
@@ -764,8 +775,8 @@ class RecordsMixin:
                 uncollected = [tid for tid in PICKABLE_TEXTS if tid not in self.collected_texts]
                 if uncollected and random.random() < 0.35:
                     text_id = random.choice(uncollected)
-                    tx = self.player.x + random.randint(-50, 50)
-                    ty = self.player.y + random.randint(-50, 50)
+                    tx = p.x + random.randint(-50, 50)
+                    ty = p.y + random.randint(-50, 50)
                     self.text_items.append(TextItem(tx, ty, text_id))
             except Exception:
                 pass
@@ -782,10 +793,10 @@ class RecordsMixin:
                 pass
             rewards.append(f"+{coin}金币")
             # 2. 大量经验
-            self.player.gain_exp(100)
+            p.gain_exp(100)
             rewards.append("+100经验")
             # 3. 治疗
-            self.player.heal(30)
+            p.heal(30)
             rewards.append("+30HP")
             # 4. 随机符文（局内永久buff，使用新符文系统）
             luck = self.rune_manager.get_bonus("drop_rate_mult") if hasattr(self, 'rune_manager') else 0
@@ -797,16 +808,16 @@ class RecordsMixin:
             else:
                 rewards.append("符文(已满)")
             # 5. 弹药补给
-            for weapon in self.player.weapons:
+            for weapon in p.weapons:
                 if hasattr(weapon, 'current_ammo') and weapon.current_ammo != "Inf":
                     weapon.current_ammo = weapon.max_ammo
             if self.session:
                 self.session.add_weapon_collected()
                 self.session.add_score(500)
-            self.player.score += 500
+            p.score += 500
             self.assets.play_sound("pickup_treasure")
-            self.particles.spawn_explosion(self.player.x, self.player.y, (255, 215, 0), 30)
-            self.particles.spawn(self.player.x, self.player.y, (255, 255, 200), 20)
+            self.particles.spawn_explosion(p.x, p.y, (255, 215, 0), 30)
+            self.particles.spawn(p.x, p.y, (255, 255, 200), 20)
             reward_text = "宝箱: " + ", ".join(rewards[:3])
 
             # 6. 概率掉落可拾取文本资料
@@ -815,75 +826,75 @@ class RecordsMixin:
                 uncollected = [tid for tid in PICKABLE_TEXTS if tid not in self.collected_texts]
                 if uncollected and random.random() < 0.6:
                     text_id = random.choice(uncollected)
-                    tx = self.player.x + random.randint(-60, 60)
-                    ty = self.player.y + random.randint(-60, 60)
+                    tx = p.x + random.randint(-60, 60)
+                    ty = p.y + random.randint(-60, 60)
                     self.text_items.append(TextItem(tx, ty, text_id))
             except Exception:
                 pass
-            self.floating_texts.append(FloatingText(self.player.x, self.player.y - 50, reward_text, color=(255, 215, 0), lifetime=4.0))
+            self.floating_texts.append(FloatingText(p.x, p.y - 50, reward_text, color=(255, 215, 0), lifetime=4.0))
 
         elif item_type == ItemType.SKILL_SLOT:
             # 技能槽扩展：升级时多一个技能选项
-            if not hasattr(self.player, 'skill_slot_count'):
-                self.player.skill_slot_count = 3
-            self.player.skill_slot_count += 1
-            self.floating_texts.append(FloatingText(self.player.x, self.player.y - 40,
-                f"技能槽+1！(当前{self.player.skill_slot_count}选1)", color=GOLD, lifetime=3.0))
+            if not hasattr(p, 'skill_slot_count'):
+                p.skill_slot_count = 3
+            p.skill_slot_count += 1
+            self.floating_texts.append(FloatingText(p.x, p.y - 40,
+                f"技能槽+1！(当前{p.skill_slot_count}选1)", color=GOLD, lifetime=3.0))
             self.assets.play_sound("pickup_skill_slot")
-            self.particles.spawn_explosion(self.player.x, self.player.y, GOLD, 25)
+            self.particles.spawn_explosion(p.x, p.y, GOLD, 25)
 
         elif item_type == ItemType.BUFF_CHARM:
             # 护符：随机获得一个强力正面buff
             buff_choices = [BuffType.EMPOWER, BuffType.GHOST, BuffType.THORNS,
                            BuffType.BLOOD_FRENZY, BuffType.INVINCIBLE, BuffType.BERSERK]
             chosen = random.choice(buff_choices)
-            self.player.buff_manager.add_buff(chosen, duration=20.0)
+            p.buff_manager.add_buff(chosen, duration=20.0)
             from buff import BUFF_CONFIGS
             buff_name = BUFF_CONFIGS[chosen]["name"]
-            self.floating_texts.append(FloatingText(self.player.x, self.player.y - 40,
+            self.floating_texts.append(FloatingText(p.x, p.y - 40,
                 f"护符: {buff_name}!", color=CYAN, lifetime=3.0))
             self.assets.play_sound("pickup_buff_charm")
-            self.particles.spawn_explosion(self.player.x, self.player.y, CYAN, 20)
+            self.particles.spawn_explosion(p.x, p.y, CYAN, 20)
 
         elif item_type == ItemType.INCENDIARY:
             # 燃烧弹：添加到投掷物库存
-            if not hasattr(self.player, 'throwables'):
-                self.player.throwables = {}
-            self.player.throwables["incendiary"] = self.player.throwables.get("incendiary", 0) + 2
-            self.floating_texts.append(FloatingText(self.player.x, self.player.y - 40,
+            if not hasattr(p, 'throwables'):
+                p.throwables = {}
+            p.throwables["incendiary"] = p.throwables.get("incendiary", 0) + 2
+            self.floating_texts.append(FloatingText(p.x, p.y - 40,
                 "燃烧弹 x2！(按Q投掷)", color=FIRE_ORANGE, lifetime=3.0))
             self.assets.play_sound("pickup_grenade")
-            self.particles.spawn_explosion(self.player.x, self.player.y, FIRE_ORANGE, 15)
+            self.particles.spawn_explosion(p.x, p.y, FIRE_ORANGE, 15)
 
         elif item_type == ItemType.SMOKE_GRENADE:
             # 烟雾弹
-            if not hasattr(self.player, 'throwables'):
-                self.player.throwables = {}
-            self.player.throwables["smoke"] = self.player.throwables.get("smoke", 0) + 2
-            self.floating_texts.append(FloatingText(self.player.x, self.player.y - 40,
+            if not hasattr(p, 'throwables'):
+                p.throwables = {}
+            p.throwables["smoke"] = p.throwables.get("smoke", 0) + 2
+            self.floating_texts.append(FloatingText(p.x, p.y - 40,
                 "烟雾弹 x2！(按Q投掷)", color=SMOKE_GRAY, lifetime=3.0))
             self.assets.play_sound("pickup_grenade")
-            self.particles.spawn_explosion(self.player.x, self.player.y, SMOKE_GRAY, 15)
+            self.particles.spawn_explosion(p.x, p.y, SMOKE_GRAY, 15)
 
         elif item_type == ItemType.CLUSTER_BOMB:
             # 集束炸弹
-            if not hasattr(self.player, 'throwables'):
-                self.player.throwables = {}
-            self.player.throwables["cluster"] = self.player.throwables.get("cluster", 0) + 1
-            self.floating_texts.append(FloatingText(self.player.x, self.player.y - 40,
+            if not hasattr(p, 'throwables'):
+                p.throwables = {}
+            p.throwables["cluster"] = p.throwables.get("cluster", 0) + 1
+            self.floating_texts.append(FloatingText(p.x, p.y - 40,
                 "集束炸弹 x1！(按Q投掷)", color=ORANGE, lifetime=3.0))
             self.assets.play_sound("pickup_grenade")
-            self.particles.spawn_explosion(self.player.x, self.player.y, ORANGE, 20)
+            self.particles.spawn_explosion(p.x, p.y, ORANGE, 20)
 
         elif item_type == ItemType.EMP_GRENADE:
             # EMP脉冲弹
-            if not hasattr(self.player, 'throwables'):
-                self.player.throwables = {}
-            self.player.throwables["emp"] = self.player.throwables.get("emp", 0) + 2
-            self.floating_texts.append(FloatingText(self.player.x, self.player.y - 40,
+            if not hasattr(p, 'throwables'):
+                p.throwables = {}
+            p.throwables["emp"] = p.throwables.get("emp", 0) + 2
+            self.floating_texts.append(FloatingText(p.x, p.y - 40,
                 "EMP脉冲弹 x2！(按Q投掷)", color=CYAN, lifetime=3.0))
             self.assets.play_sound("pickup_grenade")
-            self.particles.spawn_explosion(self.player.x, self.player.y, CYAN, 15)
+            self.particles.spawn_explosion(p.x, p.y, CYAN, 15)
 
         elif item_type == ItemType.RUNE:
             # 符文：局内永久buff
@@ -891,19 +902,19 @@ class RecordsMixin:
             rune_type = random_rune(luck_bonus=luck)
             if hasattr(self, 'rune_manager') and self._gain_rune(rune_type):
                 cfg = RUNE_CONFIG[rune_type]
-                self.floating_texts.append(FloatingText(self.player.x, self.player.y - 40,
+                self.floating_texts.append(FloatingText(p.x, p.y - 40,
                     f"获得符文: {cfg['name']}!", color=cfg['color'], lifetime=3.5))
                 self.assets.play_sound("level_up")
-                self.particles.spawn_explosion(self.player.x, self.player.y, cfg['color'], 20)
+                self.particles.spawn_explosion(p.x, p.y, cfg['color'], 20)
                 # 立即应用属性加成
                 self._apply_rune_bonuses()
             else:
-                self.floating_texts.append(FloatingText(self.player.x, self.player.y - 40,
+                self.floating_texts.append(FloatingText(p.x, p.y - 40,
                     "符文已达上限！", color=GRAY, lifetime=2.0))
 
         elif item_type == ItemType.GOLDEN_CHEST:
             # 黄金宝箱：必出符文+大量资源
-            self.floating_texts.append(FloatingText(self.player.x, self.player.y - 40,
+            self.floating_texts.append(FloatingText(p.x, p.y - 40,
                 "黄金宝箱开启！", color=GOLD, lifetime=2.5))
             self.assets.play_sound("level_up")
             # 必出1-2枚符文
@@ -914,17 +925,22 @@ class RecordsMixin:
                 if hasattr(self, 'rune_manager'):
                     self._gain_rune(rune_type)
                     cfg = RUNE_CONFIG[rune_type]
-                    self.floating_texts.append(FloatingText(self.player.x, self.player.y - 70,
+                    self.floating_texts.append(FloatingText(p.x, p.y - 70,
                         f"符文: {cfg['name']}!", color=cfg['color'], lifetime=3.0))
             # 大量资源
-            self.player.hp = min(self.player.max_hp, self.player.hp + 50)
-            if hasattr(self.player, 'ammo'):
-                for w in self.player.weapons:
+            p.hp = min(p.max_hp, p.hp + 50)
+            # v2.2.7 回血画面效果全模式
+            try:
+                self.particles.spawn_heal_particles(p.x, p.y, 14)
+            except Exception:
+                pass
+            if hasattr(p, 'ammo'):
+                for w in p.weapons:
                     if hasattr(w, 'ammo') and w.ammo is not None:
                         w.ammo = getattr(w, 'max_ammo', w.ammo + 30)
-            self.floating_texts.append(FloatingText(self.player.x, self.player.y - 100,
+            self.floating_texts.append(FloatingText(p.x, p.y - 100,
                 "生命+50, 弹药全满!", color=GREEN, lifetime=2.5))
-            self.particles.spawn_explosion(self.player.x, self.player.y, GOLD, 30)
+            self.particles.spawn_explosion(p.x, p.y, GOLD, 30)
             if hasattr(self, '_apply_rune_bonuses'):
                 self._apply_rune_bonuses()
 
@@ -944,30 +960,30 @@ class RecordsMixin:
             ]
             effect = random.choice(effects)
             etype, ekind, emsg, ecolor = effect
-            self.floating_texts.append(FloatingText(self.player.x, self.player.y - 40,
+            self.floating_texts.append(FloatingText(p.x, p.y - 40,
                 emsg, color=ecolor, lifetime=3.0))
             if etype == "good":
                 if ekind == "full_heal":
-                    self.player.hp = self.player.max_hp
+                    p.hp = p.max_hp
                 elif ekind == "max_hp_up":
-                    self.player.max_hp += 20
-                    self.player.hp += 20
+                    p.max_hp += 20
+                    p.hp += 20
                 elif ekind == "damage_up":
-                    self.player.damage_mult = getattr(self.player, 'damage_mult', 1.0) + 0.10
+                    p.damage_mult = getattr(p, 'damage_mult', 1.0) + 0.10
                 elif ekind == "speed_up":
-                    self.player.speed_mult = getattr(self.player, 'speed_mult', 1.0) + 0.10
+                    p.speed_mult = getattr(p, 'speed_mult', 1.0) + 0.10
                 elif ekind == "rune":
                     if hasattr(self, 'rune_manager'):
                         rt = random_rune()
                         self._gain_rune(rt)
                         self._apply_rune_bonuses()
                 elif ekind == "ammo":
-                    for w in self.player.weapons:
+                    for w in p.weapons:
                         if hasattr(w, 'ammo') and w.ammo is not None:
                             w.ammo = getattr(w, 'max_ammo', w.ammo + 30)
             else:
                 if ekind == "damage":
-                    self.player.hp -= 20
+                    p.hp -= 20
                 elif ekind == "slow":
                     if hasattr(self, 'buff_manager'):
                         self.buff_manager.add_buff(BuffType.SLOW, 5.0)
@@ -976,11 +992,11 @@ class RecordsMixin:
                     for _ in range(5):
                         angle = random.uniform(0, math.pi * 2)
                         dist = random.uniform(150, 250)
-                        zx = self.player.x + math.cos(angle) * dist
-                        zy = self.player.y + math.sin(angle) * dist
+                        zx = p.x + math.cos(angle) * dist
+                        zy = p.y + math.sin(angle) * dist
                         from entities import Enemy, EnemyType
                         self.enemies.append(Enemy(zx, zy, EnemyType.ZOMBIE, 1, self.config.difficulty))
-            self.particles.spawn_explosion(self.player.x, self.player.y, PURPLE, 15)
+            self.particles.spawn_explosion(p.x, p.y, PURPLE, 15)
 
     def _load_permanent_runes(self):
         """符文不跨局永久保存：本局从0开始，不加载跨局存档（符文本局获得/升级/重置）"""

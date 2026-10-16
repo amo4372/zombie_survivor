@@ -208,6 +208,14 @@ class PlayingMixin:
                 self.floating_texts.append(FloatingText(
                     p.x, p.y - 40, "倒地！等待救援...", color=(240, 230, 120), lifetime=2.0))
                 self.assets.play_sound_random(["player_hurt", "hurt"])
+                # v2.2.7 倒地瞬间重置该玩家触控按钮（防按住状态残留导致救起后卡死）
+                try:
+                    tag = "P2" if p is p2 else "P1"
+                    self._reset_touch_state_for(tag)
+                except Exception:
+                    pass
+                # v2.2.7 倒地瞬间强制清除换弹状态（换弹中被击倒→救起后不再卡死无法开火）
+                self._reset_weapons_reload(p)
         # 2) 救援 / 自动复活
         for p in (p1, p2):
             if not p.downed:
@@ -224,6 +232,16 @@ class PlayingMixin:
                 near = mate is not None and not mate.downed and math.hypot(mate.x - p.x, mate.y - p.y) < 120
                 if near and _cd_ok:
                     p.rescue_progress += dt
+                    # v2.2.7 救援者 UI 反馈：救援者与被救者都看到进度（0.5s 节流浮字）
+                    _fb = getattr(self, '_rescue_fb_timer', 0.0) - dt
+                    self._rescue_fb_timer = _fb
+                    if _fb <= 0:
+                        self._rescue_fb_timer = 0.5
+                        _pct = int(p.rescue_progress / 2.5 * 100)
+                        self.floating_texts.append(FloatingText(
+                            mate.x, mate.y - 55, f"正在救援 {tag}... {_pct}%", color=(120, 230, 140), lifetime=0.6))
+                        self.floating_texts.append(FloatingText(
+                            p.x, p.y - 70, f"队友正在救援... {_pct}%", color=(120, 230, 140), lifetime=0.6))
                     if p.rescue_progress >= 2.5:
                         rescued = True
                 else:
@@ -247,6 +265,14 @@ class PlayingMixin:
                 p.last_rescue_time = _now  # 进入救援冷却
                 p.invincible_timer = 1.5
                 self.floating_texts.append(FloatingText(p.x, p.y - 40, "已复活!", color=GREEN, lifetime=1.5))
+                # v2.2.7 被救起后重置该玩家触控按钮（防倒地期间按住的按钮残留卡死）
+                try:
+                    tag = "P2" if p is p2 else "P1"
+                    self._reset_touch_state_for(tag)
+                except Exception:
+                    pass
+                # v2.2.7 被救起后强制清除换弹状态（换弹卡死根因修复）
+                self._reset_weapons_reload(p)
                 try:
                     self.assets.play_sound("heal")
                 except Exception:
@@ -254,12 +280,36 @@ class PlayingMixin:
         # 3) 双人全部倒地 → 游戏结束
         return bool((p1.downed or not p1.alive) and (p2.downed or not p2.alive))
 
+    def _reset_weapons_reload(self, player):
+        """v2.2.7：强制清除玩家所有武器换弹状态（退出重载/倒地救起后调用，
+        防止 reload_timer 残留导致永远无法开火）"""
+        if player is None:
+            return
+        try:
+            for _w in (getattr(player, 'weapons', None) or []):
+                if hasattr(_w, 'reset_reload'):
+                    _w.reset_reload()
+            _cw = player.get_current_weapon() if hasattr(player, 'get_current_weapon') else None
+            if _cw is not None and hasattr(_cw, 'reset_reload'):
+                _cw.reset_reload()
+        except Exception:
+            pass
+
     def _alive_players(self):
         """返回存活的玩家列表（单人=[P1]，双人=[P1,P2]）"""
         ps = [self.player]
         if self.player2:
             ps.append(self.player2)
         return [p for p in ps if p is not None and getattr(p, 'alive', True) and not getattr(p, 'downed', False)]
+
+    def _all_players(self):
+        """v2.2.7 PvPvE：返回全部玩家实体（P1~P4，含 AI 补位）"""
+        ps = []
+        for _a in ("player", "player2", "player3", "player4"):
+            _p = getattr(self, _a, None)
+            if _p is not None:
+                ps.append(_p)
+        return ps
 
     def _damage_players_near(self, x, y, radius, damage, dtype="melee", from_front=True, shake_cam=None):
         """对半径内所有存活玩家造成伤害（双人双判定），shake_cam=(cam, intensity, dur) 可选震屏"""
@@ -533,7 +583,8 @@ class PlayingMixin:
             _rg_aim = self.player.riot_gear
             if self.skill_caster.is_aiming and self.selected_skill == SkillType.GRAPPLE_PULL:
                 _rg_aim.grapple_aiming = True
-                _rg_aim.update_grapple_lock(self.player.x, self.player.y, self.enemies)
+                _rg_aim.update_grapple_lock(self.player.x, self.player.y, self.enemies,
+                                            items=getattr(self.world, 'items', None))
             else:
                 _rg_aim.grapple_aiming = False
                 if not _rg_aim.grapple_active:
@@ -930,7 +981,14 @@ class PlayingMixin:
             except:
                 pass
             if getattr(enemy, "is_boss", False):
-                self._boss_dialogue(spawn_type)
+                try:
+                    self._boss_dialogue(spawn_type)
+                except Exception:
+                    # v2.2.7 防御：BOSS对话触发异常不得中断本帧/卡死游戏
+                    try:
+                        self.state = GameState.PLAYING
+                    except Exception:
+                        pass
                 # 尸潮规模提示
                 scale_name = self.horde_manager.get_current_scale_name()
                 scale_color = self.horde_manager.get_scale_color()
@@ -1624,10 +1682,37 @@ class PlayingMixin:
                         self.damage_numbers.append(DamageNumber(enemy.x, enemy.y, damage))
                         if not enemy.alive:
                             self._on_enemy_death(enemy)
+                # v2.2.7 PvPvE：爆炸对非队友玩家造成伤害
+                if getattr(self.config, 'pvp_enabled', False):
+                    for _pp in self._all_players():
+                        if _pp is proj.owner or not getattr(_pp, 'alive', True) or getattr(_pp, 'downed', False):
+                            continue
+                        if getattr(_pp, 'team_id', 1) == getattr(proj.owner, 'team_id', 0):
+                            continue
+                        _d = math.hypot(_pp.x - proj.x, _pp.y - proj.y)
+                        if _d < proj.explosion_radius:
+                            _dmg = proj.damage * (1 - _d / proj.explosion_radius)
+                            _pp.take_damage(max(1, int(_dmg)), damage_type='ranged', attack_x=proj.x, attack_y=proj.y)
+                            self.damage_numbers.append(DamageNumber(_pp.x, _pp.y, int(_dmg), color=RED))
 
             if not proj.alive:
                 self.projectiles.remove(proj)
                 continue
+
+            # v2.2.7 PvPvE：投射物直接命中非队友玩家
+            if getattr(self.config, 'pvp_enabled', False) and proj.owner is not None and proj.is_laser is False:
+                _pr = proj.get_rect()
+                for _pp in self._all_players():
+                    if _pp is proj.owner or not getattr(_pp, 'alive', True) or getattr(_pp, 'downed', False):
+                        continue
+                    if getattr(_pp, 'team_id', 1) == getattr(proj.owner, 'team_id', 0):
+                        continue
+                    if _pr.colliderect(_pp.get_rect()):
+                        proj.alive = False
+                        proj.hits.append(_pp)
+                        _pp.take_damage(proj.damage, damage_type='ranged', attack_x=proj.x, attack_y=proj.y)
+                        self.damage_numbers.append(DamageNumber(_pp.x, _pp.y, proj.damage, color=RED))
+                        self._on_player_hit_by_projectile(_pp, proj)
 
             # 激光束碰撞检测
             if proj.is_laser:
@@ -1993,6 +2078,16 @@ class PlayingMixin:
             # v2.1.3：P2 升级选卡时暂停 P2 游戏进程（怪物已脱锁，选卡完成后恢复）
             if not (self.is_multiplayer_active() and getattr(self, '_upgrade_pause_player', None) == "P2"):
                 self._update_player2(dt)
+        # v2.2.7：3/4 号玩家（网络联机补位/AI 队友）更新
+        for _i in (3, 4):
+            _pn = getattr(self, f"player{_i}", None)
+            _cam = getattr(self, f"camera{_i}", None)
+            if _pn is not None and _cam is not None:
+                _cam.follow(_pn.x, _pn.y, dt)
+                try:
+                    self._update_ai_companion(_pn, dt)
+                except Exception:
+                    pass
 
         if self.is_multiplayer_active():
             # 双人/联机：救援系统——全部倒地才游戏结束
@@ -2115,6 +2210,16 @@ class PlayingMixin:
             })
         return targets
 
+    def _on_player_hit_by_projectile(self, p, proj):
+        """v2.2.7 PvPvE：玩家被玩家投射物命中时的反馈"""
+        try:
+            self.floating_texts.append(FloatingText(
+                p.x, p.y - 40, f"被 {getattr(proj.owner, 'name', '对方')} 击中!", color=RED, lifetime=1.0))
+            if hasattr(p, 'invincible_timer'):
+                p.invincible_timer = max(getattr(p, 'invincible_timer', 0), 0.3)
+        except Exception:
+            pass
+
     def _damage_player_target(self, target, damage, damage_type="melee", attack_x=0, attack_y=0):
         """对玩家目标造成伤害（单人模式只有本地玩家）"""
         if target.get("obj") is not None:
@@ -2193,20 +2298,29 @@ class PlayingMixin:
                 and not getattr(_locked, "is_boss", False):
             dist = math.hypot(_locked.x - head_pos[0], _locked.y - head_pos[1])
             if dist < getattr(_locked, "size", 20) + 12:
-                base_dmg = 15 + grapple_lvl * 10
-                _locked.take_damage(base_dmg)
-                self.damage_numbers.append(DamageNumber(_locked.x, _locked.y, base_dmg, color=ORANGE))
-                rg._grapple_impact_damage = base_dmg
-                # 4级以上眩晕
-                if grapple_lvl >= 4:
-                    _locked.apply_buff(BuffType.STUN, duration=1.0)
-                rg.set_grapple_target(_locked)
-                rg.grapple_state = "hit"
-                rg.grapple_hit_stun_timer = rg.grapple_hit_stun_duration
-                _locked.grappled = True
-                self.floating_texts.append(FloatingText(
-                    _locked.x, _locked.y - 30, "锁定直飞!", color=(200, 120, 255), lifetime=1.0
-                ))
+                if hasattr(_locked, "take_damage"):
+                    base_dmg = 15 + grapple_lvl * 10
+                    _locked.take_damage(base_dmg)
+                    self.damage_numbers.append(DamageNumber(_locked.x, _locked.y, base_dmg, color=ORANGE))
+                    rg._grapple_impact_damage = base_dmg
+                    # 4级以上眩晕
+                    if grapple_lvl >= 4:
+                        _locked.apply_buff(BuffType.STUN, duration=1.0)
+                    rg.set_grapple_target(_locked)
+                    rg.grapple_state = "hit"
+                    rg.grapple_hit_stun_timer = rg.grapple_hit_stun_duration
+                    _locked.grappled = True
+                    self.floating_texts.append(FloatingText(
+                        _locked.x, _locked.y - 30, "锁定直飞!", color=(200, 120, 255), lifetime=1.0
+                    ))
+                else:
+                    # v2.2.7 锁定特殊道具：与僵尸拉回一致（钩爪线拉回，非磁吸）
+                    rg.set_grapple_target(_locked)
+                    rg.grapple_state = "pulling"
+                    rg._pulling_timer = 0.0
+                    self.floating_texts.append(FloatingText(
+                        _locked.x, _locked.y - 30, "勾取道具!", color=(120, 230, 140), lifetime=1.0
+                    ))
                 return
 
         # 检测钩爪头与敌人的碰撞
@@ -2278,14 +2392,15 @@ class PlayingMixin:
                 self.player.riot_gear._reset_grapple()
                 return
 
-        # 检测世界道具 - 磁化拉向玩家
+        # 检测世界道具 - v2.2.7 与僵尸拉回一致（钩爪线拉回，非磁吸）
         for item in self.world.items:
             if not item.alive:
                 continue
             dist = math.hypot(item.x - head_pos[0], item.y - head_pos[1])
             if dist < item.size + 12:
-                item.magnetized = True
-                self.player.riot_gear._reset_grapple()
+                rg.set_grapple_target(item)
+                rg.grapple_state = "pulling"
+                rg._pulling_timer = 0.0
                 return
 
         # 检测文本资料

@@ -453,7 +453,7 @@ class SkillCardSelector:
         ry = region.y
 
         card_w = int(230 * scale)
-        card_h = int(400 * scale)
+        card_h = min(int(400 * scale), max(260, sh - int(150 * scale)))  # v2.2.7 高度自适应 region
         gap = int(25 * scale)
         total_width = len(self.cards) * card_w + (len(self.cards) - 1) * gap
         # 卡片过宽时按区域缩放卡片宽度
@@ -507,9 +507,10 @@ class SkillCardSelector:
         subtitle_rect = subtitle.get_rect(center=(rx + sw // 2, ry + int(105 * scale)))
         screen.blit(subtitle, subtitle_rect)
 
-        # 绘制技能卡 - 增大卡片高度保证内容完整显示
+        # 绘制技能卡 - 增大卡片高度保证内容完整显示（v2.2.7：高度自适应 region，
+        # 双人半屏/小屏不再溢出）
         card_w = int(230 * scale)
-        card_h = int(400 * scale)
+        card_h = min(int(400 * scale), max(260, sh - int(150 * scale)))
         gap = int(25 * scale)
         total_width = len(self.cards) * card_w + (len(self.cards) - 1) * gap
         if total_width > sw - int(20 * scale):

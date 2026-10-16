@@ -107,11 +107,12 @@ from entities_pkg.gear import RiotGear
 
 _g = RiotGear()
 check(_g.grapple_lock_radius == 200, f"锁定半径 200（拉远）（实际 {_g.grapple_lock_radius}）")
-check(_g.self_pull_speed == 420, f"自我拉拽速度 420（实际 {_g.self_pull_speed}）")
+check(_g.self_pull_speed == 560, f"v2.2.7 自我拉拽速度 560（实际 {_g.self_pull_speed}）")
 
-# B2 self_pull 叠加玩家输入位移（代码级：update 使用 _inp_dx/_inp_dy）
+# B2 v2.2.7 self_pull 禁用玩家输入位移（防"故意不走蹭无敌"）；player 仍记录输入供其他逻辑用
 _src = open("entities_pkg/gear.py", encoding="utf-8").read()
-check("_inp_dx" in _src and "_inp_dy" in _src, "gear.py self_pull 叠加玩家输入位移（_inp_dx/_inp_dy）")
+check("_inp_dx" not in _src.split("self_pull")[1].split("def _begin_self_pull")[0] if "self_pull" in _src else False,
+      "gear.py self_pull 已移除玩家输入位移叠加（_inp_dx/_inp_dy）")
 _srcp = open("entities_pkg/player.py", encoding="utf-8").read()
 check("self._inp_dx" in _srcp and "self._inp_dy" in _srcp, "player.py 记录本帧输入位移 _inp_dx/_inp_dy")
 
@@ -119,20 +120,25 @@ check("self._inp_dx" in _srcp and "self._inp_dy" in _srcp, "player.py 记录本�
 check("grapple_lock_radius" in _src, "gear.draw 使用锁定半径圈")
 check('"aim_circle"' in _src or "draw.circle" in _src.replace(" ","") or "aim_circle" in _src, "gear.draw 存在锁定圈绘制标记")
 
-# B4 锁定顺序：圈内最近非 Boss
+# B4 v2.2.7 锁定圈中心=锚点（预瞄终点），蓄力由小到大，圈内锁定最近非 Boss；道具优先
 class _SE:
     def __init__(self, x, y, is_boss=False, alive=True, size=20):
         self.x = x; self.y = y; self.is_boss = is_boss; self.alive = alive; self.size = size
 
 _g2 = RiotGear()
 _g2.grapple_aiming = True
-_e_near = _SE(105, 100)
-_e_boss = _SE(108, 100, is_boss=True)
-_e_far = _SE(160, 100)
-_g2.update_grapple_lock(100, 100, [_e_boss, _e_near, _e_far])
-check(_g2.grapple_locked_target is _e_near, "圈内锁定最近非 Boss（Boss 跳过）")
+_g2.aim_line_angle = 0.0
+_g2.grapple_max_range = 800
+_e_near = _SE(790, 100)      # 锚点(800,100)圈内最近
+_e_boss = _SE(792, 100, is_boss=True)
+_e_far = _SE(640, 100)       # 距锚点160，仍在圈内但更远
+_g2._grapple_aim_charge = 1.0
+import time as _tt
+_g2._grapple_aim_start = _tt.time()
+_g2.update_grapple_lock(0, 100, [_e_boss, _e_near, _e_far])
+check(_g2.grapple_locked_target is _e_near, "锚点圈内锁定最近非 Boss（Boss 跳过）")
 _g2.grapple_aiming = True
-_g2.update_grapple_lock(100, 100, [_e_boss])
+_g2.update_grapple_lock(0, 100, [_e_boss])
 check(_g2.grapple_locked_target is None, "圈内只有 Boss 时不锁定")
 
 # B5 P2 钩爪施放分支（mix_multi GRAPPLE_PULL + helper）

@@ -43,8 +43,9 @@ def load_vehicle_images():
 class Vehicle:
     """玩家召唤载具：专属血条、不应用回血、可被僵尸破坏"""
 
-    def __init__(self, vehicle_type, x, y, damage_mult=1.0):
-        self.type_id = vehicle_type          # "truck" / "tank" / "heli"
+    def __init__(self, vehicle_type, x, y, damage_mult=1.0, tint=None):
+        self.type_id = vehicle_type          # v2.2.7 三级全为 "truck"（大运），tint 区分红/黄/银
+        self.tint = tint                     # v2.2.7 载具皮肤色调（None=原图）
         self.x = float(x)
         self.y = float(y)
         self.damage_mult = damage_mult
@@ -265,6 +266,16 @@ class Vehicle:
             oy = (self.shake_timer * 30.0) * math.cos(self.shake_timer * 70)
         img = self.image
         if img is not None:
+            if self.tint is not None:
+                try:
+                    _t = pygame.Surface(img.get_size(), pygame.SRCALPHA)
+                    _t.fill((*self.tint, 110))
+                    _img2 = img.copy()
+                    _img2.blit(_t, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+                    _img2.blit(_t, (0, 0), special_flags=pygame.BLEND_RGBA_ADD)
+                    img = _img2
+                except Exception:
+                    pass
             rot = pygame.transform.rotozoom(img, -self.facing_angle, scale)
             rect = rot.get_rect(center=(int(sx + ox), int(sy + oy)))
             screen.blit(rot, rect)

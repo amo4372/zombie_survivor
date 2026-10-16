@@ -111,6 +111,12 @@ def build_split_viewports(game):
     players = [("P1", game.player, game.camera)]
     if getattr(game, "player2", None):
         players.append(("P2", game.player2, game.camera2))
+    # v2.2.7：N 人支持——3/4 号玩家（网络联机补位）同屏分屏渲染
+    for _i in (3, 4):
+        _pn = getattr(game, f"player{_i}", None)
+        _cam = getattr(game, f"camera{_i}", None)
+        if _pn is not None and _cam is not None:
+            players.append((f"P{_i}", _pn, _cam))
     n = len(players)
     half = sw // n
     viewports = []
@@ -149,10 +155,13 @@ def render_split_viewports(renderer, game, viewports):
         viewports: build_split_viewports 返回的视口列表
     """
     orig_screen = renderer.screen
-    for vp in viewports:
+    for i, vp in enumerate(viewports):
         # 场景渲染在 subsurface（视口偏移由 viewport_x 补偿）
+        # v2.2.7：aim_owner 区分视口——P1 视口画 P1 预瞄、P2 视口画 P2 预瞄，
+        # 修复"P2技能/投掷物预瞄线全部画在P1上"（原来 _draw_playing_core 无条件画 P1）
+        aim_owner = "P2" if (i == 1 and vp.label == "P2") else "P1"
         renderer.screen = orig_screen.subsurface(vp.rect)
-        renderer._draw_playing_core(vp.player, vp.camera, viewport_x=vp.rect.x)
+        renderer._draw_playing_core(vp.player, vp.camera, viewport_x=vp.rect.x, aim_owner=aim_owner)
         # v2.1.3：队友方位指示（对方不在本视口内时边缘箭头，倒地仍显示）
         draw_teammate_indicators(renderer, game, viewports, vp)
         # HUD 必须回全屏绘制（_draw_hud_split 内部用全屏绝对坐标 rect.x+…，

@@ -210,7 +210,13 @@ class MultiplayerMixin:
             "throwable_switch": TouchButton(640 + 370, BASE_HEIGHT - 340, 42, "投掷", ORANGE),
             "throwable_caster": SkillCaster(640 + 415, BASE_HEIGHT - 120, 48),
         }
-        self.p2_selected_skill = SkillType.GRENADE  # P2 基础技能默认手雷（与单机一致）
+        # v2.2.7：P2 默认技能按实际解锁列表初始化（不再硬编码手雷——
+        # 手雷需技能树解锁，与 P1 一致；未解锁任何技能则置空）
+        try:
+            _init_sts = self._get_unlocked_skills_for(self.player2) if getattr(self, 'player2', None) else []
+            self.p2_selected_skill = _init_sts[0] if _init_sts else None
+        except Exception:
+            self.p2_selected_skill = None
         # P2 键控技能 U 长按预瞄状态（照 G 键模板）
         self.key_u_press_start = 0
         self.key_u_held = False
@@ -408,6 +414,13 @@ class MultiplayerMixin:
             self._throw_p2()
         # ===== 拾取 =====
         self._pickup_for_player(p2)
+        # v2.2.7：P2 死神镰刀换弹期间同样触发圆形横扫（与 P1 一致）
+        try:
+            _cw2 = p2.get_current_weapon()
+            if getattr(_cw2, "is_scythe", False) and _cw2.is_reloading:
+                self._update_scythe_sweep(_cw2, dt, player=p2)
+        except Exception:
+            pass
         # ===== 受击数字/死亡 =====
         # v2.0.9 修复：遍历后必须清空事件列表（此前未清空导致持续累积、大伤害时严重卡顿）
         for dmg, dtype in getattr(p2, 'buff_damage_events', []):
@@ -431,11 +444,78 @@ class MultiplayerMixin:
             return math.degrees(math.atan2(best.y - p2.y, best.x - p2.x))
         return p2.facing_angle
 
+    def _update_ai_companion(self, p, dt):
+        """3/4 号玩家（网络联机补位）：有网络输入用网络输入（idx=2→P3, 3→P4），
+        无输入则自动作战——找最近敌人移动射击（AI 队友玩法），拾取地面道具"""
+        if not p or not getattr(p, "alive", True):
+            return
+        mx = my = 0.0
+        shoot = False
+        # 网络输入：idx = 2 -> P3, 3 -> P4
+        if self.multiplayer_mode == "network" and self.net_host:
+            ci = self.net_host.get_input(2 if p is getattr(self, 'player3', None) else 3)
+            mx = float(ci.get("mx", 0))
+            my = float(ci.get("my", 0))
+            shoot = bool(ci.get("shoot", False))
+            if mx or my or shoot:
+                p.update(dt, mx, my, p.facing_angle, self.world)
+                if shoot and p.can_act():
+                    _w = p.get_current_weapon()
+                    if _w and _w.can_fire():
+                        self.projectiles.extend(_w.fire(
+                            p.x, p.y, math.radians(p.facing_angle),
+                            p.damage_mult * p.buff_manager.get_damage_mult() * p.damage_multiplier,
+                            p.speed_mult, player=p))
+                self._pickup_for_player(p)
+                return
+        # 自动作战（AI 队友）
+        best = None
+        best_d = 1e9
+        for e in self.enemies:
+            if not getattr(e, 'alive', True):
+                continue
+            d = (e.x - p.x) ** 2 + (e.y - p.y) ** 2
+            if d < best_d:
+                best_d = d
+                best = e
+        if best is not None:
+            dx, dy = best.x - p.x, best.y - p.y
+            dist = math.hypot(dx, dy)
+            if dist > 1e-4:
+                p.facing_angle = math.degrees(math.atan2(dy, dx))
+            # 保持中距离游走：太近后退、太远靠近
+            _vx, _vy = 0.0, 0.0
+            if dist > 260:
+                _vx, _vy = dx / dist, dy / dist
+            elif dist < 140:
+                _vx, _vy = -dx / dist, -dy / dist
+            else:
+                _vx, _vy = -dy / dist, dx / dist  # 侧向环绕
+            p.update(dt, _vx, _vy, p.facing_angle, self.world)
+            if p.can_act():
+                _w = p.get_current_weapon()
+                if _w and _w.can_fire():
+                    self.projectiles.extend(_w.fire(
+                        p.x, p.y, math.radians(p.facing_angle),
+                        p.damage_mult * p.buff_manager.get_damage_mult() * p.damage_multiplier,
+                        p.speed_mult, player=p))
+        else:
+            p.update(dt, 0, 0, p.facing_angle, self.world)
+        self._pickup_for_player(p)
+
     def _use_skill_p2(self, skill_type):
         """玩家2使用技能（P2 精简实现，覆盖常用主动技与传说专属技）"""
         p2 = self.player2
         if not p2:
             return
+        # v2.2.7：未解锁技能不允许施放（P2 不再默认解锁手雷）
+        try:
+            if skill_type not in self._get_unlocked_skills_for(p2):
+                self.floating_texts.append(FloatingText(
+                    p2.x, p2.y - 40, "技能未解锁", color=GRAY, lifetime=1.0))
+                return
+        except Exception:
+            pass
         if skill_type in p2.active_skills:
             self.floating_texts.append(FloatingText(p2.x, p2.y - 40, "冷却中...", color=GRAY, lifetime=1.0))
             return
@@ -492,12 +572,52 @@ class MultiplayerMixin:
                               is_laser=True, laser_width=50, laser_duration=0.85)
             self.projectiles.append(proj)
             cd = 35.0
+        elif skill_type == SkillType.RIOT_GEAR:
+            # v2.2.7：P2 防爆套装（不再提示"暂不支持双人"）——切换装备，规则与 P1 一致
+            ok = True
+            cd = 30.0 * p2.cooldown_mult
+            rg = getattr(p2, 'riot_gear', None)
+            if rg is None:
+                try:
+                    from entities_pkg.gear import RiotGear
+                    rg = RiotGear(p2)
+                    p2.riot_gear = rg
+                except Exception:
+                    rg = None
+            if rg is None:
+                self.floating_texts.append(FloatingText(p2.x, p2.y - 40, "防爆套装不可用", color=GRAY, lifetime=1.2))
+            elif getattr(p2, 'vehicle', None) is not None and getattr(p2.vehicle, 'alive', False):
+                self.floating_texts.append(FloatingText(p2.x, p2.y - 40, "载具内无法装备防爆套装!", color=(255, 160, 60), lifetime=1.2))
+            elif rg.equipped:
+                rg.end_aim()
+                rg.equipped = False
+                self.floating_texts.append(FloatingText(p2.x, p2.y - 40, "卸下防爆套装", color=ORANGE, lifetime=1.0))
+            else:
+                rg.equip()
+                self.floating_texts.append(FloatingText(p2.x, p2.y - 40, "装备防爆套装", color=(120, 200, 255), lifetime=1.0))
+        elif skill_type == SkillType.SHIELD_BASH:
+            # v2.2.7：P2 肘击（防爆套装近战）
+            ok = True
+            cd = 3.0 * p2.cooldown_mult
+            try:
+                self._skill_shield_bash_for(p2)
+            except Exception:
+                self.floating_texts.append(FloatingText(p2.x, p2.y - 40, "需装备防爆套装", color=GRAY, lifetime=1.2))
         else:
             self.floating_texts.append(FloatingText(p2.x, p2.y - 40, "该技能暂不支持双人", color=GRAY, lifetime=1.2))
             return
         if ok:
             p2.active_skills[skill_type] = cd
             self.floating_texts.append(FloatingText(p2.x, p2.y - 45, "技能释放!", color=GOLD, lifetime=1.5))
+
+    def _skill_shield_bash_for(self, p):
+        """P2 肘击：需先装备防爆套装，盾牌前方扇形区域伤害（与 P1 共用 _perform_bash）"""
+        if not getattr(p, 'riot_gear', None) or not p.riot_gear.equipped:
+            self.floating_texts.append(FloatingText(
+                p.x, p.y - 40, "需要先装备防爆套装!", color=RED, lifetime=1.5))
+            return False
+        self._perform_bash(p.facing_angle, player=p)
+        return True
 
     def _use_skill_p2_aimed(self, skill_type, angle, distance_ratio=1.0):
         """P2 带瞄准方向/距离的技能释放（触控长按拖拽/键控长按）"""
@@ -551,6 +671,11 @@ class MultiplayerMixin:
         elif skill_type == SkillType.GRAPPLE_PULL:
             # v2.2.6：P2 钩爪施放（支持锁定直飞/路径勾取/自我拉拽，与 P1 一致）
             rg = p2.riot_gear
+            # v2.2.7 载具中禁用钩爪
+            _v2 = getattr(p2, 'vehicle', None)
+            if _v2 is not None and getattr(_v2, 'alive', False):
+                self.floating_texts.append(FloatingText(p2.x, p2.y - 40, "载具中无法使用钩爪", color=GRAY, lifetime=1.2))
+                return False
             if rg.grapple_cooldown > 0 or rg.grapple_active:
                 self.floating_texts.append(FloatingText(p2.x, p2.y - 40, "冷却中...", color=GRAY, lifetime=1.0))
                 return False
@@ -616,7 +741,8 @@ class MultiplayerMixin:
         rg = p2.riot_gear
         if aiming:
             rg.grapple_aiming = True
-            rg.update_grapple_lock(p2.x, p2.y, self.enemies)
+            rg.update_grapple_lock(p2.x, p2.y, self.enemies,
+                                   items=getattr(self.world, 'items', None))
         else:
             rg.grapple_aiming = False
             if not rg.grapple_active:
@@ -712,13 +838,22 @@ class MultiplayerMixin:
                 self.floating_texts.append(FloatingText(
                     p2.x, p2.y - 40, "P2载具仍在作战中!", color=GRAY, lifetime=1.5))
                 return False
-            vid = {1: "truck", 2: "tank", 3: "heli"}.get(skill.current_level, "truck")
-            vname = {"truck": "大运重卡", "tank": "99A坦克", "heli": "武装直升机"}[vid]
+            # v2.2.7 载具三级全为大运重卡：仅数值与皮肤色调（红→黄→银）区分
+            vid = "truck"
+            tint = {1: (225, 55, 40), 2: (240, 200, 70), 3: (205, 210, 220)}.get(skill.current_level, None)
+            vname = {1: "大运重卡·红", 2: "大运重卡·金", 3: "大运重卡·银"}.get(skill.current_level, "大运重卡")
             from entities_pkg.vehicles import Vehicle, load_vehicle_images, _VEHICLE_IMAGES
             if not _VEHICLE_IMAGES:
                 load_vehicle_images()
             dmg_mult = p2.damage_mult * p2.buff_manager.get_damage_mult() * p2.damage_multiplier
-            p2.vehicle = Vehicle(vid, p2.x, p2.y, damage_mult=dmg_mult)
+            # v2.2.7 钩爪拉取中召唤 → 先终止（防永久无敌）
+            _rg2 = p2.riot_gear
+            if getattr(_rg2, 'self_pull_active', False) or getattr(_rg2, 'grapple_active', False):
+                try:
+                    _rg2._reset_grapple()
+                except Exception:
+                    pass
+            p2.vehicle = Vehicle(vid, p2.x, p2.y, damage_mult=dmg_mult, tint=tint)
             p2.vehicle.on_enemy_death_cb = self._on_enemy_death
             self.floating_texts.append(FloatingText(
                 p2.x, p2.y - 60, f"P2召唤 {vname}!", color=(0, 190, 255), lifetime=2.0))

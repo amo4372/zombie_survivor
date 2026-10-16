@@ -1059,33 +1059,36 @@ class SkillsMixin:
                 ))
                 return False
 
-    def _perform_bash(self, direction_angle=None):
-        """盾牌肘击（v2.2.0 原地肘击：一次性范围伤害+击退+眩晕，不位移）"""
+    def _perform_bash(self, direction_angle=None, player=None):
+        """盾牌肘击（v2.2.0 原地肘击：一次性范围伤害+击退+眩晕，不位移）
+        v2.2.7：player 参数化，P2 可复用"""
+        if player is None:
+            player = self.player
         if self.session:
             self.session.add_bash()
         self.assets.play_sound("bash")
-        rg = self.player.riot_gear
+        rg = player.riot_gear
         success = rg.bash(direction_angle)
         if success:
             # 体力回流共享池
-            self.player.stamina = rg.stamina
+            player.stamina = rg.stamina
             # v2.2.3 肘击：盾牌前方扇形区域（±75°，半径约70）一次性结算
             hit_any = False
             bash_r = 70
-            bash_angle = direction_angle if direction_angle is not None else self.player.facing_angle
+            bash_angle = direction_angle if direction_angle is not None else player.facing_angle
             half_arc = 75.0
             for enemy in self.enemies:
-                dist = math.hypot(enemy.x - self.player.x, enemy.y - self.player.y)
+                dist = math.hypot(enemy.x - player.x, enemy.y - player.y)
                 if dist > bash_r + enemy.size:
                     continue
                 # 前方扇形判定
                 if dist > 1:
-                    ang_to = math.degrees(math.atan2(enemy.y - self.player.y, enemy.x - self.player.x))
+                    ang_to = math.degrees(math.atan2(enemy.y - player.y, enemy.x - player.x))
                     diff = abs((ang_to - bash_angle + 180) % 360 - 180)
                     if diff > half_arc:
                         continue
-                is_crit = random.random() < self.player.crit_chance
-                actual_damage = rg.charge_damage * 1.6 * self.player.damage_mult * self.player.buff_manager.get_damage_mult() * (self.player.crit_damage if is_crit else 1)
+                is_crit = random.random() < player.crit_chance
+                actual_damage = rg.charge_damage * 1.6 * player.damage_mult * player.buff_manager.get_damage_mult() * (player.crit_damage if is_crit else 1)
                 enemy.take_damage(actual_damage)
                 self._vampire_heal(actual_damage)
                 _is_boss = getattr(enemy, "is_boss", False)
@@ -1093,23 +1096,23 @@ class SkillsMixin:
                 enemy.knockdown(1.0 if not _is_boss else 0.5)
                 if dist > 0:
                     _kb = rg.charge_knockback * (0.4 if _is_boss else 1.2)
-                    enemy.x += (enemy.x - self.player.x) / dist * _kb
-                    enemy.y += (enemy.y - self.player.y) / dist * _kb
+                    enemy.x += (enemy.x - player.x) / dist * _kb
+                    enemy.y += (enemy.y - player.y) / dist * _kb
                 self.damage_numbers.append(DamageNumber(enemy.x, enemy.y, actual_damage, is_crit=is_crit, damage_type="melee"))
                 self.particles.spawn_blood(enemy.x, enemy.y, 12)
                 hit_any = True
                 if not enemy.alive:
                     self._on_enemy_death(enemy)
             self.floating_texts.append(FloatingText(
-                self.player.x, self.player.y - 40, "盾牌肘击!", color=CYAN, lifetime=1.0
+                player.x, player.y - 40, "盾牌肘击!", color=CYAN, lifetime=1.0
             ))
-            self.particles.spawn_explosion(self.player.x, self.player.y, CYAN, 22)
+            self.particles.spawn_explosion(player.x, player.y, CYAN, 22)
             self.camera.shake(6 if hit_any else 3, 0.25)
             # 前方扇形冲击波
             if hasattr(self, 'sweep_rings'):
                 self.sweep_rings.append({
-                    "x": self.player.x + math.cos(math.radians(bash_angle)) * 30,
-                    "y": self.player.y + math.sin(math.radians(bash_angle)) * 30,
+                    "x": player.x + math.cos(math.radians(bash_angle)) * 30,
+                    "y": player.y + math.sin(math.radians(bash_angle)) * 30,
                     "r": 20, "max_r": bash_r + 30, "color": (80, 220, 255),
                     "width": 6, "life": 0.35, "max_life": 0.35,
                 })
@@ -1187,6 +1190,12 @@ class SkillsMixin:
 
     def _perform_grapple_at(self, target_x, target_y):
         """在指定位置执行钩爪核心逻辑 - 新逻辑（独立技能）"""
+        # v2.2.7 载具中禁用钩爪
+        _v = getattr(self.player, 'vehicle', None)
+        if _v is not None and getattr(_v, 'alive', False):
+            self.floating_texts.append(FloatingText(
+                self.player.x, self.player.y - 40, "载具中无法使用钩爪", color=GRAY, lifetime=1.2))
+            return False
         # 寻找钩爪路径上的目标
         dx = target_x - self.player.x
         dy = target_y - self.player.y

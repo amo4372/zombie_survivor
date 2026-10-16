@@ -713,6 +713,51 @@ class GameCore:
                     self.player2 = None
                 self.camera2 = Camera(BASE_WIDTH // 2, BASE_HEIGHT)  # 同屏半屏视口宽=半宽
                 self.camera2.shake_enabled = self.config.screen_shake
+                # v2.2.7：网络联机支持最多 4 人——3/4 号客户端由主机补位实体
+                # （无对应客户端时保持 None；有客户端连接时创建 AI 补位，受网络输入驱动）
+                for _i in (3, 4):
+                    setattr(self, f"player{_i}", None)
+                    setattr(self, f"camera{_i}", None)
+                if self.multiplayer_mode == "network" and self.net_host is not None:
+                    try:
+                        _cc = self.net_host.client_count
+                        for _i, _off in ((3, 120), (4, 180)):
+                            if _cc >= _i - 1:
+                                _pw = getattr(self, f'selected_weapon_p{_i}', None) or self.selected_weapon
+                                setattr(self, f"player{_i}", Player(
+                                    self.player.x + _off, self.player.y, start_weapon=_pw,
+                                    start_weapon_level=1))
+                                _cam = Camera(BASE_WIDTH // 2, BASE_HEIGHT)
+                                _cam.shake_enabled = self.config.screen_shake
+                                setattr(self, f"camera{_i}", _cam)
+                    except Exception as _e:
+                        logger.warning(f"创建网络补位玩家失败: {_e}")
+                elif self.multiplayer_mode == "same_screen":
+                    # v2.2.7 同屏 N 人：coop_player_count(2-4)，3/4 号位 AI 队友补位
+                    _ccnt = int(getattr(self, 'coop_player_count', 2) or 2)
+                    for _i, _off in ((3, 120), (4, 180)):
+                        if _ccnt >= _i:
+                            try:
+                                _pw = getattr(self, f'selected_weapon_p{_i}', None) or self.selected_weapon
+                                setattr(self, f"player{_i}", Player(
+                                    self.player.x + _off, self.player.y, start_weapon=_pw,
+                                    start_weapon_level=1))
+                                _cam = Camera(BASE_WIDTH // 2, BASE_HEIGHT)
+                                _cam.shake_enabled = self.config.screen_shake
+                                setattr(self, f"camera{_i}", _cam)
+                            except Exception as _e:
+                                logger.warning(f"创建同屏补位玩家失败: {_e}")
+                # v2.2.7 PvPvE：全员阵营分配（P1/P3 蓝队，P2/P4 红队 → nPvN）
+                try:
+                    _pvpm = getattr(self.config, 'pvp_enabled', False)
+                    for _idx, _pn in enumerate(("player", "player2", "player3", "player4")):
+                        _pp = getattr(self, _pn, None)
+                        if _pp is not None:
+                            _pp.team_id = _idx % 2
+                            if _pvpm:
+                                _pp.hp = _pp.max_hp
+                except Exception as _e:
+                    logger.warning(f"阵营分配失败: {_e}")
                 self._setup_multiplayer_controls()
             else:
                 self.player2 = None
@@ -821,13 +866,22 @@ class GameCore:
                 self.floating_texts.append(FloatingText(
                     self.player.x, self.player.y - 40, "载具仍在作战中!", color=GRAY, lifetime=1.5))
                 return False
-            vid = {1: "truck", 2: "tank", 3: "heli"}.get(skill.current_level, "truck")
-            vname = {"truck": "大运重卡", "tank": "99A坦克", "heli": "武装直升机"}[vid]
+            # v2.2.7 载具三级全为大运重卡：仅数值与皮肤色调（红→黄→银）区分
+            vid = "truck"
+            tint = {1: (225, 55, 40), 2: (240, 200, 70), 3: (205, 210, 220)}.get(skill.current_level, None)
+            vname = {1: "大运重卡·红", 2: "大运重卡·金", 3: "大运重卡·银"}.get(skill.current_level, "大运重卡")
             from entities_pkg.vehicles import Vehicle, load_vehicle_images, _VEHICLE_IMAGES
             if not _VEHICLE_IMAGES:
                 load_vehicle_images()
             dmg_mult = self.player.damage_mult * self.player.damage_boost_mult * self.player.buff_manager.get_damage_mult()
-            self.player.vehicle = Vehicle(vid, self.player.x, self.player.y, damage_mult=dmg_mult)
+            # v2.2.7 钩爪自我拉拽期间召唤载具：先终止拉取（防"拉回无敌+载具无敌"残留永久无敌）
+            _rg = self.player.riot_gear
+            if getattr(_rg, 'self_pull_active', False) or getattr(_rg, 'grapple_active', False):
+                try:
+                    _rg._reset_grapple()
+                except Exception:
+                    pass
+            self.player.vehicle = Vehicle(vid, self.player.x, self.player.y, damage_mult=dmg_mult, tint=tint)
             self.player.vehicle.on_enemy_death_cb = self._on_enemy_death
             self.floating_texts.append(FloatingText(
                 self.player.x, self.player.y - 60, f"召唤 {vname}!", color=(0, 190, 255), lifetime=2.0))
@@ -978,6 +1032,13 @@ class GameCore:
         elif self.state == GameState.NET_CLIENT_PLAY:
             self._update_net_client(dt)
         elif self.state == GameState.DIALOGUE:
+            # v2.2.7：主机在开场/Boss 对话期间也广播快照——
+            # 否则客户端永远收不到 started 快照，卡在"等待主机开始游戏"
+            if self.multiplayer_mode == "network" and self.net_role == "host" and self.net_started:
+                try:
+                    self._net_send_snapshot()
+                except Exception:
+                    pass
             # v2.2.6 兜底：对话对象缺失或已非活跃但状态仍卡在 DIALOGUE → 自动恢复 PLAYING，
             # 防止"整个游戏卡住、点关闭无反应"（异常残留导致输入分支被跳过）
             if self.dialogue is None or not getattr(self.dialogue, "active", False):
@@ -1057,30 +1118,21 @@ class GameCore:
             except Exception as e:
                 action = self.error_silencer.handle(e)
                 if action == "ignore":
-                    # 用户已选择忽略：静默跳过，继续正常运行
+                    # 用户已选择忽略（同类静默）：静默跳过，继续正常运行
                     logger.warning(f"[静默] 已忽略错误: {type(e).__name__}: {e}")
                     continue
-                elif action == "ask":
-                    # 首次出现：记录日志并弹出询问框
-                    logger.log_exception(e)
-                    self.error_ask_visible = True
-                    self.error_ask_choice = None
-                    self.error_ask_pending = self.error_silencer.pending_info
-                    # 防误触：弹出后 1 秒内屏蔽按钮点击（玩家可能正在操作中）
-                    self.error_ask_lock = 1.0
-                    # 显示询问框
-                    self._draw_error_ask(self.error_ask_pending)
-                    pygame.display.flip()
-                    continue
-                else:
-                    # 用户选择不忽略：按原逻辑报错退出
-                    logger.log_exception(e)
-                    self.screen.fill(BLACK)
-                    error_text = self.font.render(f"错误: {str(e)}", True, RED)
-                    self.screen.blit(error_text, (50, self.scaled_height // 2))
-                    pygame.display.flip()
-                    pygame.time.wait(3000)
-                    self.running = False
+                # v2.2.7：每次出现错误都弹窗（ask）；不忽略=仅本次继续，不再退出
+                # 记录到游戏日志（gamelog）+ 独立错误日志（error_silencer 内已强制写）
+                logger.log_exception(e)
+                self.error_ask_visible = True
+                self.error_ask_choice = None
+                self.error_ask_pending = self.error_silencer.pending_info
+                # 防误触：弹出后 1 秒内屏蔽按钮点击（玩家可能正在操作中）
+                self.error_ask_lock = 1.0
+                # 显示询问框（绘制异常有兜底，保证弹窗可见，不会隐形卡死）
+                self._draw_error_ask(self.error_ask_pending)
+                pygame.display.flip()
+                continue
 
         logger.info("游戏退出")
         # 退出时自动保存对局
@@ -1142,50 +1194,96 @@ class GameCore:
                     self.error_ask_visible = False
 
     def _draw_error_ask(self, info):
-        """绘制错误询问框（黑底半透明遮罩+错误摘要+两个按钮）"""
+        """绘制错误询问框（v2.2.7：完整错误日志展示+日志保存路径提示+绘制兜底）
+        - 文本可复制：完整 traceback 已强制写入 data/game_error.log，弹窗显示路径
+        - 每次错误都弹窗；忽略=同类静默，继续运行=仅本次
+        - 绘制兜底：任何异常用最基础矩形+系统字体重绘，保证弹窗可见（防隐形卡死）"""
+        info = info or {}
+        sc = getattr(self, "scale", 1.0)
+        sw = getattr(self, "scaled_width", 1280)
+        sh = getattr(self, "scaled_height", 720)
         try:
-            sc = getattr(self, "scale", 1.0)
-            sw = getattr(self, "scaled_width", 1280)
-            sh = getattr(self, "scaled_height", 720)
             ov = pygame.Surface((sw, sh), pygame.SRCALPHA)
-            ov.fill((0, 0, 0, 170))
+            ov.fill((0, 0, 0, 175))
             self.screen.blit(ov, (0, 0))
-            msg = (info or {}).get("message", "未知错误")
-            trace_txt = (info or {}).get("trace", "")
-            title = self.font_title.render("检测到错误，是否忽略并继续游戏？", True, (255, 200, 60))
-            self.screen.blit(title, title.get_rect(center=(sw // 2, int(sh * 0.35))))
-            lines = [msg[:90]]
-            for tline in trace_txt.split("\n")[-2:]:
-                lines.append(tline[:90])
-            yy = int(sh * 0.42)
-            for ln in lines:
-                ts = self.font.render(ln, True, (255, 120, 120))
+        except Exception:
+            pass
+        try:
+            msg = info.get("message", "未知错误")
+            trace_txt = info.get("trace", "")
+            log_path = info.get("log_path", "")
+            title_txt = "检测到错误，是否继续游戏？"
+            try:
+                title = self.font_title.render(title_txt, True, (255, 200, 60))
+                self.screen.blit(title, title.get_rect(center=(sw // 2, int(sh * 0.24))))
+            except Exception:
+                title = pygame.font.Font(None, 40).render(title_txt, True, (255, 200, 60))
+                self.screen.blit(title, title.get_rect(center=(sw // 2, int(sh * 0.24))))
+            # 错误信息：消息 + 最近若干行 trace（滚动首屏；完整见日志文件）
+            lines = [("错误: " + str(msg))[:100]]
+            tr_lines = [l[:100] for l in trace_txt.split("\n") if l.strip()][-10:]
+            lines.extend(tr_lines)
+            if log_path:
+                lines.append(f"完整日志已保存: {log_path}（可打开复制）")
+            yy = int(sh * 0.30)
+            step = max(20, int(22 * sc))
+            for ln in lines[:12]:
+                try:
+                    ts = self.font.render(ln, True, (255, 140, 140))
+                except Exception:
+                    ts = pygame.font.Font(None, 22).render(ln, True, (255, 140, 140))
                 self.screen.blit(ts, ts.get_rect(center=(sw // 2, yy)))
-                yy += int(26 * sc)
-            hint = self.font.render("Y/回车=忽略并静默（之后同类错误不再提示）  N/ESC=不忽略", True, (180, 180, 180))
-            self.screen.blit(hint, hint.get_rect(center=(sw // 2, int(sh * 0.52))))
+                yy += step
+            hint_txt = "Y/回车/触控=忽略（同类不再提示）  N/ESC=继续运行（仅本次）"
+            try:
+                hint = self.font.render(hint_txt, True, (180, 180, 180))
+            except Exception:
+                hint = pygame.font.Font(None, 22).render(hint_txt, True, (180, 180, 180))
+            self.screen.blit(hint, hint.get_rect(center=(sw // 2, int(sh * 0.80))))
             bx = int(sw * 0.5 - 210 * sc)
-            by = int(sh * 0.5 + 60 * sc)
+            by = int(sh * 0.82)
             bw = int(200 * sc)
             bh = int(60 * sc)
             lock = getattr(self, "error_ask_lock", 0)
             if lock > 0:
-                # 防误触锁定：按钮置灰 + 倒计时提示
                 lock_txt = f"请稍候 {max(1, int(lock) + 1)} 秒…（防误触）"
-                lt = self.font.render(lock_txt, True, (255, 220, 80))
-                self.screen.blit(lt, lt.get_rect(center=(sw // 2, int(sh * 0.5 + 34 * sc))))
+                try:
+                    lt = self.font.render(lock_txt, True, (255, 220, 80))
+                except Exception:
+                    lt = pygame.font.Font(None, 24).render(lock_txt, True, (255, 220, 80))
+                self.screen.blit(lt, lt.get_rect(center=(sw // 2, int(sh * 0.82 - 30 * sc))))
                 pygame.draw.rect(self.screen, (70, 90, 80), (bx, by, bw, bh), border_radius=12)
                 pygame.draw.rect(self.screen, (90, 60, 55), (bx + int(220 * sc), by, bw, bh), border_radius=12)
-                lb = self.font.render("忽略并静默", True, (150, 150, 150))
+                try:
+                    lb = self.font.render("忽略并静默", True, (150, 150, 150))
+                    rb = self.font.render("继续运行", True, (150, 150, 150))
+                except Exception:
+                    lb = pygame.font.Font(None, 24).render("忽略并静默", True, (150, 150, 150))
+                    rb = pygame.font.Font(None, 24).render("继续运行", True, (150, 150, 150))
                 self.screen.blit(lb, lb.get_rect(center=(bx + bw // 2, by + bh // 2)))
-                rb = self.font.render("不忽略", True, (150, 150, 150))
                 self.screen.blit(rb, rb.get_rect(center=(bx + int(220 * sc) + bw // 2, by + bh // 2)))
             else:
                 pygame.draw.rect(self.screen, (40, 160, 90), (bx, by, bw, bh), border_radius=12)
-                lb = self.font.render("忽略并静默", True, (255, 255, 255))
+                try:
+                    lb = self.font.render("忽略并静默", True, (255, 255, 255))
+                except Exception:
+                    lb = pygame.font.Font(None, 24).render("忽略并静默", True, (255, 255, 255))
                 self.screen.blit(lb, lb.get_rect(center=(bx + bw // 2, by + bh // 2)))
                 pygame.draw.rect(self.screen, (200, 70, 60), (bx + int(220 * sc), by, bw, bh), border_radius=12)
-                rb = self.font.render("不忽略", True, (255, 255, 255))
+                try:
+                    rb = self.font.render("继续运行", True, (255, 255, 255))
+                except Exception:
+                    rb = pygame.font.Font(None, 24).render("继续运行", True, (255, 255, 255))
                 self.screen.blit(rb, rb.get_rect(center=(bx + int(220 * sc) + bw // 2, by + bh // 2)))
         except Exception:
-            pass
+            # 最后兜底：极简系统字体渲染，保证弹窗可见可操作
+            try:
+                pygame.draw.rect(self.screen, (20, 20, 20), (0, 0, sw, sh))
+                f = pygame.font.Font(None, 30)
+                for i, ln in enumerate([str(info.get("message", "错误")),
+                                        "Y=忽略  N=继续",
+                                        "完整日志: " + str(info.get("log_path", "data/game_error.log"))]):
+                    t = f.render(ln[:80], True, (255, 255, 255))
+                    self.screen.blit(t, (30, int(sh * 0.3) + i * 36))
+            except Exception:
+                pass

@@ -1031,20 +1031,22 @@ class EffectsMixin:
                         self.particles.spawn_particle(px, py, vx * 0.5, vy * 0.8, fx_second,
                                             random.uniform(0.1, 0.3), max(1, size // 2))
 
-    def _update_scythe_sweep(self, weapon, dt):
+    def _update_scythe_sweep(self, weapon, dt, player=None):
         """死神镰刀换弹期间：玩家周围形成大圆形横扫区域，持续伤害 + 环形刀光特效"""
-        if not self.player or not self.player.alive:
+        if player is None:
+            player = self.player
+        if not player or not player.alive:
             return
         r = getattr(weapon, "sweep_radius", 210)
         dps = getattr(weapon, "sweep_damage", 85)
-        dps *= (self.player.damage_multiplier *
-                self.player.buff_manager.get_damage_mult() *
-                getattr(self.player, 'damage_mult', 1.0))
+        dps *= (player.damage_multiplier *
+                player.buff_manager.get_damage_mult() *
+                getattr(player, 'damage_mult', 1.0))
         # 圆形横扫：对范围内所有敌人持续伤害
         for e in list(self.enemies):
             if not getattr(e, "alive", True):
                 continue
-            dx, dy = e.x - self.player.x, e.y - self.player.y
+            dx, dy = e.x - player.x, e.y - player.y
             if math.hypot(dx, dy) <= r:
                 e.take_damage(dps * dt, damage_type="aoe")
         # 视觉特效
@@ -1052,7 +1054,7 @@ class EffectsMixin:
         if self._sweep_fx_timer <= 0:
             self._sweep_fx_timer = 0.09
             self.sweep_rings.append({
-                "x": self.player.x, "y": self.player.y,
+                "x": player.x, "y": player.y,
                 "r": r * 0.25, "max_r": r, "color": (175, 60, 220),
                 "width": max(4, int(r * 0.05)), "life": 0.38, "max_life": 0.38,
             })
@@ -1062,7 +1064,7 @@ class EffectsMixin:
             import random as _r
             ang = _r.uniform(0, math.pi * 2)
             self.slash_arcs.append(SlashArc(
-                self.player.x, self.player.y, ang, r,
+                player.x, player.y, ang, r,
                 (180, 60, 220), lifetime=0.4, kind="scythe",
                 start_radius=r * 0.55, end_angle_offset=2.9))
         self._sweep_sound_timer = getattr(self, "_sweep_sound_timer", 0.0) - dt

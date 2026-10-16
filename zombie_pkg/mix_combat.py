@@ -194,37 +194,11 @@ class CombatMixin:
         self.projectiles.append(proj)
 
     def _collect_drop(self, drop, player):
-        """拾取掉落物（玩家参数化版）"""
+        """拾取掉落物（v2.2.7：完整委托 _apply_item_effect，覆盖全部 17 种道具——
+        宝箱/武器箱/疫苗/回血/护符/符文/投掷物等，P1/P2 完全一致）"""
         try:
-            from codex import PICKABLE_TEXTS
-            from config import ItemType
-            if drop.item_type == ItemType.HEALTH_PACK:
-                player.heal(30)
-                self.floating_texts.append(FloatingText(drop.x, drop.y - 20, "+30HP", color=GREEN, lifetime=1.2))
-            elif drop.item_type == ItemType.AMMO_BOX:
-                for w in player.weapons:
-                    if hasattr(w, 'current_ammo') and w.current_ammo != "∞":
-                        w.current_ammo = min(w.max_ammo, w.current_ammo + 15)
-            elif drop.item_type == ItemType.SPEED_BOOST:
-                player.speed = player.base_speed * 1.5
-                self.floating_texts.append(FloatingText(drop.x, drop.y - 20, "加速!", color=AMBER, lifetime=1.2))
-            elif drop.item_type == ItemType.RACE_TIME:
-                # v2.2.3 P2 争分夺秒加时道具（+5s）
-                try:
-                    if getattr(self.config, 'game_mode', None) == GameMode.TIMED:
-                        _hm = getattr(self, 'horde_manager', None)
-                        if _hm is not None and hasattr(_hm, 'add_race_time'):
-                            _hm.add_race_time(5.0)
-                            self.race_last_gain = getattr(self, 'race_last_gain', 0) + 5
-                            self.race_gain_timer = 1.4
-                            self.floating_texts.append(FloatingText(drop.x, drop.y - 20, "+5 秒!", color=GOLD, lifetime=1.5))
-                    else:
-                        player.gain_exp(40)
-                        self.floating_texts.append(FloatingText(drop.x, drop.y - 20, "+40 经验", color=GOLD, lifetime=1.2))
-                except Exception:
-                    player.gain_exp(40)
-            elif drop.item_type == ItemType.EXP_BOOST:
-                pass
+            # 委托完整道具效果（参数化玩家；session/音效/粒子等全局共享）
+            self._apply_item_effect(drop.item_type, player)
             if drop.alive:
                 drop.alive = False
             if drop in list(getattr(getattr(self, 'world', None), 'items', [])):

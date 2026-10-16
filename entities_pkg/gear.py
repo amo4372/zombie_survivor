@@ -54,7 +54,7 @@ class RiotGear:
         self.grapple_locked_target = None     # 瞄准圈锁定的僵尸（松开后直飞目标）
         self.grapple_lock_radius = 200        # 锁定圈半径（世界单位，v2.2.6 拉远便于锁定远处目标）
         self.self_pull_active = False         # 自我拉拽中（未命中目标 → 把自己拉向目标点）
-        self.self_pull_speed = 420            # 自我拉拽速度（世界单位/秒，v2.2.6 提速+叠加玩家移动）
+        self.self_pull_speed = 560            # v2.2.7 自我拉拽速度（提速；期间禁用玩家额外位移）
         self.self_pull_immune = False         # 自我拉拽期间免伤标记
         self.self_pull_start = (0, 0)         # 自我拉拽起点（世界坐标）
         self.self_pull_end = (0, 0)           # 自我拉拽终点（世界坐标）
@@ -298,7 +298,7 @@ class RiotGear:
 
         elif self.grapple_state == "self_pull":
             # ===== v2.2.5：自我拉拽——把自己拉向目标点 =====
-            # v2.2.6：叠加玩家本帧输入位移（玩家移动中也能快速拉过去）
+            # v2.2.7：禁用玩家本帧位移叠加（防"故意不走蹭无敌"），提速拉回
             if player is None:
                 self._reset_grapple()
                 return
@@ -307,15 +307,13 @@ class RiotGear:
             dy = ty - player.y
             dist = math.hypot(dx, dy)
             move_dist = self.self_pull_speed * dt
-            _inp_dx = getattr(player, '_inp_dx', 0.0)
-            _inp_dy = getattr(player, '_inp_dy', 0.0)
             if dist <= move_dist + 2:
                 # 到达目标点：结束自我拉拽
                 player.x, player.y = tx, ty
                 self._reset_grapple()
             else:
-                player.x += (dx / dist) * move_dist + _inp_dx
-                player.y += (dy / dist) * move_dist + _inp_dy
+                player.x += (dx / dist) * move_dist
+                player.y += (dy / dist) * move_dist
             # 自我拉拽期间全程免伤（刷新无敌计时；恢复后由 mix_playing 关闭）
             if self.self_pull_immune and player is not None:
                 player.invincible_timer = max(getattr(player, "invincible_timer", 0), 0.1)
@@ -338,22 +336,45 @@ class RiotGear:
         if player is not None:
             player.invincible_timer = max(getattr(player, "invincible_timer", 0), 0.1)
 
-    def update_grapple_lock(self, player_x, player_y, enemies):
-        """瞄准期间更新锁定圈内的最近敌人（死神钩爪/普通钩爪通用）"""
+    def update_grapple_lock(self, player_x, player_y, enemies, items=None):
+        """v2.2.7 瞄准期间更新锁定圈：蓄力圈由小到大 + 优先锁定特殊道具 + 圈内最近敌人
+        锚点=预瞄终点（aim_line_angle 方向 max_range 处）"""
         if not self.grapple_aiming:
             self.grapple_locked_target = None
             return None
+        # 蓄力计时：0.6s 内锁定圈从 35% 扩到 100%
+        import time as _t
+        if getattr(self, '_grapple_aim_charge', None) is None or getattr(self, '_grapple_aim_start', None) is None:
+            self._grapple_aim_charge = 0.0
+            self._grapple_aim_start = _t.time()
+        self._grapple_aim_charge = min(1.0, (_t.time() - self._grapple_aim_start) / 0.6)
+        cur_radius = self.grapple_lock_radius * max(0.35, self._grapple_aim_charge)
+        # 锁定圈中心 = 锚点（预瞄终点）
+        _a = math.radians(self.aim_line_angle)
+        _ax = player_x + math.cos(_a) * self.grapple_max_range
+        _ay = player_y + math.sin(_a) * self.grapple_max_range
         best = None
-        best_d = self.grapple_lock_radius
-        for e in enemies:
-            if not getattr(e, "alive", False):
-                continue
-            if getattr(e, "is_boss", False):
-                continue  # Boss 不可锁定（只能命中僵直）
-            d = math.hypot(e.x - player_x, e.y - player_y)
-            if d < best_d:
-                best_d = d
-                best = e
+        best_d = cur_radius
+        # 1) 优先锁定特殊道具（宝箱/武器箱/加时道具等）
+        if items:
+            for it in items:
+                if not getattr(it, "alive", False):
+                    continue
+                d = math.hypot(it.x - _ax, it.y - _ay)
+                if d < best_d:
+                    best_d = d
+                    best = it
+        # 2) 再锁定圈内最近敌人（Boss 不可锁定）
+        if best is None:
+            for e in enemies:
+                if not getattr(e, "alive", False):
+                    continue
+                if getattr(e, "is_boss", False):
+                    continue
+                d = math.hypot(e.x - _ax, e.y - _ay)
+                if d < best_d:
+                    best_d = d
+                    best = e
         self.grapple_locked_target = best
         return best
 
@@ -371,6 +392,7 @@ class RiotGear:
         self.self_pull_immune = False
         self.grapple_locked_target = None
         self.grapple_aiming = False
+        self._grapple_aim_charge = None
         self.grapple_pull_impact_hit = set()
 
     def get_shield_rect(self, player_x, player_y):
@@ -561,11 +583,18 @@ class RiotGear:
                 pygame.draw.circle(screen, (120, 230, 140), (ex, ey), max(3, int(6 * scale)), max(1, int(2 * scale)))
                 pygame.draw.circle(screen, (*((120, 230, 140))[:3], 60), (ex, ey), max(5, int(10 * scale)))
 
-        # 瞄准锁定圈（长按瞄准中，圈内最近敌人将被锁定直飞）
+        # v2.2.7 瞄准锁定圈：中心=锚点（预瞄终点），半径随蓄力由小到大
         if self.grapple_aiming and not self.grapple_active:
-            lr = int(self.grapple_lock_radius * scale)
-            pygame.draw.circle(screen, (60, 200, 90), (px, py), lr, max(1, int(2 * scale)))
-            pygame.draw.circle(screen, (60, 200, 90), (px, py), lr + int(4 * scale), max(1, int(1 * scale)))
+            _a = math.radians(self.aim_line_angle)
+            _ax = player_x + math.cos(_a) * self.grapple_max_range
+            _ay = player_y + math.sin(_a) * self.grapple_max_range
+            _charge = getattr(self, '_grapple_aim_charge', 1.0) or 1.0
+            _r = self.grapple_lock_radius * max(0.35, _charge)
+            axp = int((_ax - camera_x) * scale)
+            ayp = int((_ay - camera_y) * scale)
+            lr = int(_r * scale)
+            pygame.draw.circle(screen, (60, 200, 90), (axp, ayp), lr, max(1, int(2 * scale)))
+            pygame.draw.circle(screen, (60, 200, 90), (axp, ayp), lr + int(4 * scale), max(1, int(1 * scale)))
             if self.grapple_locked_target is not None and getattr(self.grapple_locked_target, "alive", False):
                 lx = int((self.grapple_locked_target.x - camera_x) * scale)
                 ly = int((self.grapple_locked_target.y - camera_y) * scale)

@@ -38,6 +38,7 @@ class Projectile:
         self.gravity = gravity
         self.is_scythe_throw = is_scythe_throw
         self.is_scythe_slash = is_scythe_slash
+        self.owner = None  # v2.2.7 PvPvE：投射物归属玩家（判定阵营用）
         self.lifetime = 3.0 if is_flame else (laser_duration if is_laser else 10.0)
         self.alive = True
         self.should_explode = False
@@ -556,6 +557,7 @@ class Weapon:
             proj.burn_radius = getattr(self, "burn_radius", 0)
             proj.slow_radius = getattr(self, "slow_radius", 0)
             proj.slow_duration = getattr(self, "slow_duration", 0)
+            proj.owner = player  # v2.2.7 PvPvE 归属
             return [proj]
 
         # 消耗弹药
@@ -604,6 +606,7 @@ class Weapon:
                 False,
                 bool(getattr(self, "is_scythe", False))
             )
+            proj.owner = player  # v2.2.7 PvPvE 归属
             projectiles.append(proj)
         return projectiles
 
@@ -611,6 +614,12 @@ class Weapon:
         if self.reload_time > 0 and not self.is_reloading and self.current_ammo != self.max_ammo:
             self.is_reloading = True
             self.reload_timer = self.reload_time
+
+    def reset_reload(self):
+        """v2.2.7：强制清除换弹状态（退出重载/倒地救起/状态切换时调用，
+        防止 reload_timer 残留导致永远无法开火）"""
+        self.is_reloading = False
+        self.reload_timer = 0
 
     def update(self, dt):
         if self.cooldown_timer > 0:

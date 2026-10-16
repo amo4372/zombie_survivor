@@ -240,7 +240,7 @@ class PlayMixin:
                 self.screen.blit(_bb, (int(_bx + _br - _bt.get_width() - 4), int(_by - _br + 2)))
                 self.screen.blit(_bt, (int(_bx + _br - _bt.get_width()), int(_by - _br + 4)))
 
-    def _draw_playing_core(self, player, camera, viewport_x=0):
+    def _draw_playing_core(self, player, camera, viewport_x=0, aim_owner="P1"):
         if not self.game.world or not player:
             return
 
@@ -594,43 +594,22 @@ class PlayMixin:
                 self.game.weapon_wheel.draw(self.screen, self.game.font, self.game.font_large, scale)
 
         # ==========键鼠长按G瞄准预览（复用SkillCaster原生绘制逻辑） ==========
-        if self.game.config.control_mode == ControlMode.KEYBOARD and self.game.skill_caster.is_aiming:
-            self.game.skill_caster._draw_aim_preview(self.screen, self.game.selected_skill, self.game.scale)
-
-        # ========== 投掷物瞄准预览（键鼠长按Q/触控长按投掷均显示） ==========
-        if hasattr(self.game, 'throwable_caster') and self.game.throwable_caster and self.game.throwable_caster.is_aiming:
-            tc = self.game.throwable_caster
-            scale = self.game.scale
-            px = int((tc.player_x - tc.camera_x) * scale)
-            py = int((tc.player_y - tc.camera_y) * scale)
-            dist = tc.max_skill_distance * tc.distance_ratio
-            tx = px + math.cos(tc.angle) * dist * scale
-            ty = py + math.sin(tc.angle) * dist * scale
-
-            # 抛物线轨迹
-            points = []
-            for t in range(0, 21):
-                ratio = t / 20.0
-                arc_x = px + (tx - px) * ratio
-                arc_y = py + (ty - py) * ratio - math.sin(ratio * math.pi) * 50 * scale
-                points.append((arc_x, arc_y))
-            if len(points) >= 2:
-                pygame.draw.lines(self.screen, (255, 140, 0), False, points, max(1, int(2 * scale)))
-
-            # 爆炸范围圈（投掷物AOE半径约80）
-            aoe_r = int(80 * scale)
-            range_surf = pygame.Surface((aoe_r * 2, aoe_r * 2), pygame.SRCALPHA)
-            pygame.draw.circle(range_surf, (255, 100, 0, 50), (aoe_r, aoe_r), aoe_r)
-            self.screen.blit(range_surf, (int(tx - aoe_r), int(ty - aoe_r)))
-            pygame.draw.circle(self.screen, (255, 140, 0), (int(tx), int(ty)), aoe_r, max(1, int(2 * scale)))
-            # 十字标记
-            cs = int(12 * scale)
-            pygame.draw.line(self.screen, (255, 200, 0), (int(tx) - cs, int(ty)), (int(tx) + cs, int(ty)), 2)
-            pygame.draw.line(self.screen, (255, 200, 0), (int(tx), int(ty) - cs), (int(tx), int(ty) + cs), 2)
-            # 距离指示
-            dist_text = f"{int(dist)}m"
-            dt_surf = pygame.font.SysFont("arial", max(10, int(12 * scale))).render(dist_text, True, (255, 180, 0))
-            self.screen.blit(dt_surf, (int(tx) + 10, int(ty) - 20))
+        # v2.2.7：aim_owner 区分视口——P1 视口画 P1 预瞄，P2 视口画 P2 预瞄（修复"P2预瞄画在P1上"）
+        _g = self.game
+        _is_p2 = aim_owner == "P2"
+        if _is_p2 and _g.p2_controls:
+            _sc2 = _g.p2_controls.get("skill_caster")
+            if _sc2 is not None and getattr(_sc2, "is_aiming", False):
+                _sc2._draw_aim_preview(self.screen, _g.p2_selected_skill or SkillType.GRENADE, _g.scale)
+            _tc2 = _g.p2_controls.get("throwable_caster")
+            if _tc2 is not None and getattr(_tc2, "is_aiming", False):
+                self._draw_throwable_preview(_tc2, _g.scale)
+        elif not _is_p2:
+            if _g.config.control_mode == ControlMode.KEYBOARD and _g.skill_caster.is_aiming:
+                _g.skill_caster._draw_aim_preview(self.screen, _g.selected_skill, _g.scale)
+            # ========== 投掷物瞄准预览（键鼠长按Q/触控长按投掷均显示） ==========
+            if hasattr(_g, 'throwable_caster') and _g.throwable_caster and _g.throwable_caster.is_aiming:
+                self._draw_throwable_preview(_g.throwable_caster, _g.scale)
             
         # =========【v2.0.11 成就/图鉴解锁 toast：徽章式 + 滑入 + 粒子光效】========
         scale = self.game.scale
@@ -705,6 +684,40 @@ class PlayMixin:
         try:
             import mod_loader
             mod_loader.trigger_hook("on_render_hud", self.screen, self.game)
+        except Exception:
+            pass
+
+    def _draw_throwable_preview(self, tc, scale):
+        """投掷物瞄准预览（P1/P2 通用，v2.2.7 提取为共享绘制）"""
+        try:
+            px = int((tc.player_x - tc.camera_x) * scale)
+            py = int((tc.player_y - tc.camera_y) * scale)
+            dist = tc.max_skill_distance * tc.distance_ratio
+            tx = px + math.cos(tc.angle) * dist * scale
+            ty = py + math.sin(tc.angle) * dist * scale
+            # 抛物线轨迹
+            points = []
+            for t in range(0, 21):
+                ratio = t / 20.0
+                arc_x = px + (tx - px) * ratio
+                arc_y = py + (ty - py) * ratio - math.sin(ratio * math.pi) * 50 * scale
+                points.append((arc_x, arc_y))
+            if len(points) >= 2:
+                pygame.draw.lines(self.screen, (255, 140, 0), False, points, max(1, int(2 * scale)))
+            # 爆炸范围圈（投掷物AOE半径约80）
+            aoe_r = int(80 * scale)
+            range_surf = pygame.Surface((aoe_r * 2, aoe_r * 2), pygame.SRCALPHA)
+            pygame.draw.circle(range_surf, (255, 100, 0, 50), (aoe_r, aoe_r), aoe_r)
+            self.screen.blit(range_surf, (int(tx - aoe_r), int(ty - aoe_r)))
+            pygame.draw.circle(self.screen, (255, 140, 0), (int(tx), int(ty)), aoe_r, max(1, int(2 * scale)))
+            # 十字标记
+            cs = int(12 * scale)
+            pygame.draw.line(self.screen, (255, 200, 0), (int(tx) - cs, int(ty)), (int(tx) + cs, int(ty)), 2)
+            pygame.draw.line(self.screen, (255, 200, 0), (int(tx), int(ty) - cs), (int(tx), int(ty) + cs), 2)
+            # 距离指示
+            dist_text = f"{int(dist)}m"
+            dt_surf = pygame.font.SysFont("arial", max(10, int(12 * scale))).render(dist_text, True, (255, 180, 0))
+            self.screen.blit(dt_surf, (int(tx) + 10, int(ty) - 20))
         except Exception:
             pass
 

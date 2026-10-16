@@ -553,8 +553,20 @@ class StoryMixin:
         ])
         def on_complete():
             self.state = GameState.PLAYING
-        self.dialogue.start_dialogue(dialogues, on_complete)
-        self.state = GameState.DIALOGUE
+        # v2.2.7 加固：对话系统异常不得卡死游戏（任何异常 → 跳过对话继续 PLAYING）
+        try:
+            if self.dialogue is None:
+                self.state = GameState.PLAYING
+                return
+            self.dialogue.start_dialogue(dialogues, on_complete)
+            self.state = GameState.DIALOGUE
+        except Exception as _e:
+            try:
+                from logger import logger
+                logger.warning(f"BOSS对话启动异常已跳过: {_e}")
+            except Exception:
+                pass
+            self.state = GameState.PLAYING
 
     def _final_dialogue(self):
         choices = []

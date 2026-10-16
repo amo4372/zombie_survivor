@@ -266,19 +266,7 @@ class NetMixin:
                 "started": True,
                 "time_left": getattr(self, 'time_left', 0),
                 "wave": getattr(self, 'wave_count', 0) if hasattr(self, 'wave_count') else 0,
-                "players": [
-                    {"x": round(self.player.x, 1), "y": round(self.player.y, 1), "hp": int(self.player.hp),
-                     "max_hp": int(self.player.max_hp), "alive": self.player.alive,
-                     "downed": bool(getattr(self.player, 'downed', False)),
-                     "weapon": self.player.get_current_weapon().name if self.player.get_current_weapon() else "PISTOL"},
-                    {"x": round(self.player2.x, 1) if self.player2 else round(self.player.x, 1),
-                     "y": round(self.player2.y, 1) if self.player2 else round(self.player.y, 1),
-                     "hp": int(self.player2.hp) if self.player2 else 0,
-                     "max_hp": int(self.player2.max_hp) if self.player2 else 1,
-                     "alive": bool(self.player2 and self.player2.alive),
-                     "downed": bool(self.player2 and getattr(self.player2, 'downed', False)),
-                     "weapon": self.player2.get_current_weapon().name if (self.player2 and self.player2.get_current_weapon()) else "PISTOL"},
-                ],
+                "players": self._snapshot_players(),
                 "enemies": enems,
                 "projectiles": projs,
                 "effects": effects,
@@ -286,6 +274,25 @@ class NetMixin:
             self.net_host.send_snapshot({"type": "snapshot", "data": snap})
         except Exception as e:
             logger.warning(f"快照发送失败: {e}")
+
+    def _snapshot_players(self):
+        """主机：把所有玩家（P1..P4）序列化为快照 players 列表（与客户端索引对应）"""
+        _slots = [("player", self.player)]
+        for _attr in ("player2", "player3", "player4"):
+            _slots.append((_attr, getattr(self, _attr, None)))
+        out = []
+        for _attr, _p in _slots:
+            if _p is None:
+                out.append({"x": 0.0, "y": 0.0, "hp": 0, "max_hp": 1, "alive": False,
+                            "downed": False, "weapon": "PISTOL"})
+                continue
+            out.append({
+                "x": round(_p.x, 1), "y": round(_p.y, 1), "hp": int(_p.hp),
+                "max_hp": int(_p.max_hp), "alive": bool(_p.alive),
+                "downed": bool(getattr(_p, 'downed', False)),
+                "weapon": _p.get_current_weapon().name if _p.get_current_weapon() else "PISTOL",
+            })
+        return out
 
     def _get_local_ip(self):
         """获取本机局域网IP"""
