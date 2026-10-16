@@ -35,7 +35,11 @@ class Player:
         self.score = 0
 
         # 局外选定武器，局内仅一种武器，不可切换
+        # v2.2.12：装备投掷物（手雷/燃烧瓶/烟雾弹）开局时附带一把手枪备用，
+        # 投掷物 3 发弹药耗尽后可切换手枪继续战斗
         self.weapons = [Weapon(start_weapon, level=start_weapon_level)]
+        if getattr(self.weapons[0], "is_throwable", False):
+            self.weapons.append(Weapon(WeaponType.PISTOL))
         self.current_weapon_idx = 0
 
         self.skill_tree = SkillTree()

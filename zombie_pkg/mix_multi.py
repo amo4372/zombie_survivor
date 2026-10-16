@@ -707,13 +707,20 @@ class MultiplayerMixin:
             actual_dist = rg.grapple_max_range * max(0.1, distance_ratio)
             tx = p2.x + math.cos(angle) * actual_dist
             ty = p2.y + math.sin(angle) * actual_dist
+            # v2.2.12：长按瞄准释放（触控 was_aiming_on_release / 键盘 u_aim_started）
+            _was_aim = bool(getattr(self, '_p2_cast_aimed', False)) or bool(getattr(self, 'u_aim_started', False))
             target = None
             if locked is not None and getattr(locked, "alive", False) and not getattr(locked, "is_boss", False):
                 # 锁定目标直飞（无视沿途）
                 target = locked
                 tx, ty = locked.x, locked.y
+            elif _was_aim:
+                # 长按未锁定：直接拉拽自身到锚点（不勾取路径上任何僵尸/道具）
+                target = None
+                tx, ty = p2.x + math.cos(angle) * actual_dist, p2.y + math.sin(angle) * actual_dist
+                _direct_pull = True
             else:
-                # 路径搜索（方向上的最近非 Boss 敌人）
+                # 短按直发：路径搜索（方向上的最近非 Boss 敌人）
                 _dx = math.cos(angle)
                 _dy = math.sin(angle)
                 best = None
@@ -735,10 +742,14 @@ class MultiplayerMixin:
                 if best is not None:
                     target = best
                     tx, ty = best.x, best.y
-            if rg.use_grapple(tx, ty, p2.x, p2.y, target, scythe=scythe):
+            if rg.use_grapple(tx, ty, p2.x, p2.y, target, scythe=scythe,
+                              direct_pull=locals().get('_direct_pull', False)):
                 ok = True
                 cd = rg.grapple_scythe_max_cooldown if scythe else rg.grapple_max_cooldown
                 self.floating_texts.append(FloatingText(p2.x, p2.y - 45, "钩爪发射!", color=GOLD, lifetime=1.2))
+                # v2.2.12：发射后清理瞄准锁定态（避免残留红色锁定误导）
+                rg.grapple_aiming = False
+                rg.grapple_locked_target = None
             else:
                 return False
         else:

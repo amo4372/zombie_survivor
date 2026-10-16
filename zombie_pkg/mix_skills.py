@@ -316,8 +316,9 @@ class SkillsMixin:
             return True
         return False
 
-    def _use_skill_aimed(self, skill_type, angle, distance_ratio=1.0):
-        """使用带瞄准方向和距离的技能 - distance_ratio: 0.1~1.0"""
+    def _use_skill_aimed(self, skill_type, angle, distance_ratio=1.0, force_self_pull=False):
+        """使用带瞄准方向和距离的技能 - distance_ratio: 0.1~1.0
+        force_self_pull: v2.2.12 长按瞄准未锁定时钩爪直接自我拉拽到锚点（不检查路径僵尸）"""
         if not self.player:
             return False
         if not self.player.can_act():
@@ -1267,16 +1268,21 @@ class SkillsMixin:
             if perp_dist < search_radius + item.size and proj < target_dist:
                 target_dist = proj
 
-        # v2.2.5 钩爪发射决策：
-        # 1) 瞄准圈锁定的僵尸 → 无视沿途可勾取物，直飞锁定目标（沿途可造成伤害）
-        # 2) 路径上检测到敌人 → 勾取拉回
-        # 3) 未命中任何目标 → 自我拉拽（把自己拉向目标点；死神钩爪沿途旋转镰刀伤害）
+        # v2.2.5/12 钩爪发射决策：
+        # 1) 瞄准圈锁定的僵尸/道具 → 无视沿途可勾取物，直飞锁定目标（沿途可造成伤害）
+        # 2) 长按瞄准但未锁定（force_self_pull）→ 直接自我拉拽到锚点，不检查路径上是否有僵尸
+        # 3) 短按直发：路径上检测到敌人 → 勾取拉回
+        # 4) 其余 → 自我拉拽（把自己拉向目标点；死神钩爪沿途旋转镰刀伤害）
         scythe = self._is_wielding_scythe()
         rg = self.player.riot_gear
         locked = getattr(rg, "grapple_locked_target", None)
         if locked is not None and getattr(locked, "alive", False) and not getattr(locked, "is_boss", False):
             success = rg.use_grapple(locked.x, locked.y, self.player.x, self.player.y, locked, scythe=scythe)
             _locked_name = "锁定直飞"
+        elif force_self_pull:
+            success = rg.use_grapple(target_x, target_y, self.player.x, self.player.y, None, scythe=scythe,
+                                     direct_pull=True)
+            _locked_name = "拉拽自身"
         elif target:
             success = rg.use_grapple(target.x, target.y, self.player.x, self.player.y, target, scythe=scythe)
             _locked_name = "勾取拉回"

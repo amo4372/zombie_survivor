@@ -611,8 +611,11 @@ class PlayingMixin:
                                               items=getattr(self.world, 'items', None),
                                               aim_angle=_aim_t_ang, aim_dist=_aim_t_dist)
                 else:
+                    # v2.2.12 修复：释放帧（up 后 is_aiming=False）不得清 locked_target——
+                    # 否则"红色锁定"在松开瞬间被清空，钩爪决策拿不到锁定目标导致未勾取。
+                    # 锁定态由发射决策（_use_skill_aimed 后）统一清理。
                     _rg_t.grapple_aiming = False
-                    if not _rg_t.grapple_active:
+                    if not _rg_t.grapple_active and not cast_result:
                         _rg_t.grapple_locked_target = None
             except Exception:
                 pass
@@ -626,7 +629,8 @@ class PlayingMixin:
                         self.floating_texts.append(FloatingText(
                             self.player.x, self.player.y - 50, "长按技能按钮退出载具", (160, 160, 160), 1.2))
                 elif self.skill_caster.was_aiming_on_release:
-                    self._use_skill_aimed(self.selected_skill, self.skill_caster.angle, self.skill_caster.distance_ratio)
+                    self._use_skill_aimed(self.selected_skill, self.skill_caster.angle, self.skill_caster.distance_ratio,
+                                            force_self_pull=self.skill_caster.was_aiming_on_release)
                 else:
                     self._use_skill(self.selected_skill)
 
@@ -1044,20 +1048,19 @@ class PlayingMixin:
 
         # 更新敌人
         for enemy in self.enemies[:]:
-            # 选择最近的玩家作为目标（双人模式支持多目标，倒地/升级选卡中的玩家不成为目标）
-            # v2.1.3：upgrade_paused 玩家临时脱锁（升级选卡期间怪物不追不攻该玩家）
-            if self.player2:
-                _p1_free = getattr(self.player, 'downed', False) or getattr(self.player, 'upgrade_paused', False)
-                _p2_free = getattr(self.player2, 'downed', False) or getattr(self.player2, 'upgrade_paused', False)
-                d1 = (enemy.x - self.player.x) ** 2 + (enemy.y - self.player.y) ** 2 \
-                    if not _p1_free else 1e18
-                d2 = (enemy.x - self.player2.x) ** 2 + (enemy.y - self.player2.y) ** 2 \
-                    if not _p2_free else 1e18
-                if d2 < d1:
-                    target_x, target_y, target_obj = self.player2.x, self.player2.y, self.player2
-                else:
-                    target_x, target_y, target_obj = self.player.x, self.player.y, self.player
-            else:
+            # v2.2.11 多人目标选择：所有存活玩家（P1~P4）取最近，倒地/升级暂停中不成为目标
+            target_x = target_y = None
+            target_obj = None
+            _best_d = 1e18
+            for _pp in self._all_players():
+                _pf = getattr(_pp, 'downed', False) or getattr(_pp, 'upgrade_paused', False)
+                if _pf:
+                    continue
+                _d = (enemy.x - _pp.x) ** 2 + (enemy.y - _pp.y) ** 2
+                if _d < _best_d:
+                    _best_d = _d
+                    target_x, target_y, target_obj = _pp.x, _pp.y, _pp
+            if target_obj is None:
                 target_x, target_y, target_obj = self.player.x, self.player.y, self.player
             try:
                 trigger_hook(HOOK_ENEMY_UPDATE, enemy, dt)
@@ -2255,6 +2258,10 @@ class PlayingMixin:
             target["obj"].take_damage(damage, damage_type=damage_type, attack_x=attack_x, attack_y=attack_y)
 
     def _update_grapple_collision(self):
+        # v2.2.12 直拉模式：长按未锁定钩爪不勾取路径上任何僵尸/道具，
+        # 直接飞向锚点后自我拉拽（碰撞勾取整体跳过，齿轮 _update_grapple 处理到点 self_pull）
+        if getattr(self.player.riot_gear, 'grapple_direct_pull', False):
+            return
         """更新钩爪碰撞检测 - 敌人/道具/经验球/文本资料/宝箱全部可勾
         v2.2.5：新增自我拉拽沿途伤害 / 锁定目标直飞 / 拉敌撞击词条"""
         rg = self.player.riot_gear

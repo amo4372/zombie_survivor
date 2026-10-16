@@ -2092,7 +2092,7 @@ class UiMixin:
                 if te.get("type") == "up" and te.get("pos") is not None]
         title = self.game.font_title.render("同屏多人 · 房间配置", True, WHITE)
         self.screen.blit(title, title.get_rect(center=(sw // 2, int(46 * scale))))
-        g.coop_player_count = max(2, min(4, int(getattr(g, 'coop_player_count', 2) or 2)))
+        g.coop_player_count = 2  # v2.2.12 同屏固定 2 人
         _pvpm = bool(getattr(g.config, 'pvp_enabled', False))
         _nteams = max(2, min(4, int(getattr(g.config, 'pvp_teams', 2) or 2)))
         # 候选数据
@@ -2133,10 +2133,9 @@ class UiMixin:
         g.room_sel_player = max(1, min(g.coop_player_count, int(g.room_sel_player) or 1))
         _rpcs = g.room_player_cfgs
         _cur = _rpcs.setdefault(g.room_sel_player, {})
-        # 点击非下拉区域关闭展开
+        # v2.2.12 下拉展开状态：不自动清除（此前无事件帧会误关 → "一闪而过"）。
+        # 展开后由点击当前按钮/其他按钮/玩家标签/开始/返回 关闭。
         _dd = getattr(g, 'room_dropdown', None)
-        if _dd and not any(True for _ in _ups if _ is not None):
-            g.room_dropdown = None
         # ===== 下拉通用绘制/交互 =====
         def _dd_box(rect, text, color=(28, 32, 44)):
             pygame.draw.rect(self.screen, color, rect, border_radius=10)
@@ -2188,14 +2187,9 @@ class UiMixin:
         lt = self.game.font.render("全局设置", True, (150, 200, 255))
         self.screen.blit(lt, lt.get_rect(midleft=(int(60 * scale), int(95 * scale))))
         y = int(130 * scale)
-        # 人数
-        _dd_box(pygame.Rect(lx, y, lw, rh), f"人数：{g.coop_player_count} 人")
-        if not _handle_dd("count", pygame.Rect(lx, y, lw, rh),
-                          [(f"{n} 人", n) for n in (2, 3, 4)],
-                          lambda v: setattr(g, 'coop_player_count', v), g.coop_player_count - 2):
-            y += rh + gap
-        else:
-            y += rh + gap
+        # 人数（v2.2.12 同屏固定 2 人，仅显示不可改）
+        _dd_box(pygame.Rect(lx, y, lw, rh), "人数：2 人（同屏）")
+        y += rh + gap
         # 玩法
         _pv = "对战 PvPvE（阵营对抗）" if _pvpm else "合作 nPvE（共同抗僵尸）"
         _dd_box(pygame.Rect(lx, y, lw, rh), f"玩法：{_pv}")
@@ -2205,16 +2199,13 @@ class UiMixin:
             y += rh + gap
         else:
             y += rh + gap
-        # 阵营数（PvP 才可改）
-        _tv = f"{_nteams} 阵营" if _pvpm else "—（合作模式）"
+        # 阵营数（v2.2.12 同屏 PvPvE 固定 2 阵营 1v1，N 阵营归网络联机）
+        _tv = "2 阵营（1v1）" if _pvpm else "—（合作模式）"
         _dd_box(pygame.Rect(lx, y, lw, rh), f"阵营数：{_tv}",
                 (38, 44, 58) if not _pvpm else (28, 32, 44))
         if _pvpm:
-            if not _handle_dd("teams", pygame.Rect(lx, y, lw, rh),
-                              [(f"{n} 阵营", n) for n in (2, 3, 4)],
-                              lambda v: setattr(g.config, 'pvp_teams', v), _nteams - 2):
-                y += rh + gap
-            else:
+            g.config.pvp_teams = 2
+            if True:
                 y += rh + gap
         else:
             y += rh + gap
@@ -2367,7 +2358,7 @@ class UiMixin:
         g = self.game
         try:
             g.multiplayer_mode = "same_screen"
-            g.coop_player_count = max(2, min(4, int(getattr(g, 'coop_player_count', 2) or 2)))
+            g.coop_player_count = 2  # v2.2.12 同屏固定 2 人
             # 地图
             _maps = [None]
             try:

@@ -186,9 +186,8 @@ logger = GameLogger()
 
 class ShopMixin:
     def _get_shop_weapons(self):
-        """局外可选武器列表（排除投掷物类）"""
-        throwable_set = {WeaponType.GRENADE, WeaponType.MOLOTOV, WeaponType.SMOKE_GRENADE}
-        return [wt for wt in WeaponType if wt not in throwable_set]
+        """局外可选武器列表（v2.2.12：与武器图鉴完全一致，全部 32 把含投掷物）"""
+        return list(WeaponType)
 
     def get_weapon_shop_rows(self):
         """返回武器商店行数据：[(wt, name, price, owned, level, locked_reason, desc)]"""

@@ -19,9 +19,11 @@ def check(name, ok):
 # ============ 1. 房间配置 UI 下拉栏重构 ============
 print("\n[1] 房间配置 UI：下拉栏 + 逐玩家")
 _ui = open("renderer_pkg/draw_ui.py", encoding="utf-8").read()
-check("全局下拉：人数", "room_dropdown" in _ui and '"count"' in _ui)
+# v2.2.12：同屏固定 2 人（人数不再可调，显示"人数：2 人（同屏）"）
+check("全局下拉：人数（固定2人，无count下拉）", "room_dropdown" in _ui and '"count"' not in _ui and "2 人（同屏）" in _ui)
 check("全局下拉：玩法 PvP 切换", '"pvp"' in _ui)
-check("全局下拉：阵营数", '"teams"' in _ui)
+# v2.2.12：同屏 PvPvE 固定 2 阵营（无 teams 下拉，显示"2 阵营（1v1）"）
+check("全局下拉：阵营数（固定2阵营，无teams下拉）", '"teams"' not in _ui and "2 阵营（1v1）" in _ui)
 check("全局下拉：难度", '"diff"' in _ui)
 check("全局下拉：模式", '"mode"' in _ui)
 check("全局下拉：地图", '"map"' in _ui)
@@ -120,10 +122,10 @@ ax, ay = rg.grapple_aim_anchor
 check("锚点跟随瞄准方向", abs(ax) < 1 and abs(ay - 200) < 1)
 rg._grapple_aim_start = time.time() - 0.1
 rg.update_grapple_lock(0, 0, [e], [it], aim_angle=0.0, aim_dist=400)
-r0 = rg.grapple_lock_radius * max(0.35, rg._grapple_aim_charge)
+r0 = rg.grapple_lock_radius * max(0.18, rg._grapple_aim_charge)
 rg._grapple_aim_start = time.time() - 1.0
 rg.update_grapple_lock(0, 0, [e], [it], aim_angle=0.0, aim_dist=400)
-r1 = rg.grapple_lock_radius * max(0.35, rg._grapple_aim_charge)
+r1 = rg.grapple_lock_radius * max(0.18, rg._grapple_aim_charge)
 check("锁定圈由小到大", r1 > r0)
 screen = pygame.display.get_surface()
 rg.draw(screen, player_x=0, player_y=0, camera_x=0, camera_y=0, scale=1.0)

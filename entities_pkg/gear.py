@@ -345,13 +345,13 @@ class RiotGear:
             self.grapple_locked_target = None
             self.grapple_aim_anchor = None
             return None
-        # 蓄力计时：0.6s 内锁定圈从 35% 扩到 100%
+        # 蓄力计时：0.6s 内锁定圈从 18% 扩到 100%（v2.2.12 初始圈缩小）
         import time as _t
         if getattr(self, '_grapple_aim_charge', None) is None or getattr(self, '_grapple_aim_start', None) is None:
             self._grapple_aim_charge = 0.0
             self._grapple_aim_start = _t.time()
         self._grapple_aim_charge = min(1.0, (_t.time() - self._grapple_aim_start) / 0.6)
-        cur_radius = self.grapple_lock_radius * max(0.35, self._grapple_aim_charge)
+        cur_radius = self.grapple_lock_radius * max(0.18, self._grapple_aim_charge)
         # 锁定圈中心 = 锚点（预瞄终点，随瞄准移动）
         _a = math.radians(aim_angle if aim_angle is not None else self.aim_line_angle)
         _ad = aim_dist if aim_dist is not None else self.grapple_max_range
@@ -421,6 +421,7 @@ class RiotGear:
         self.grapple_locked_target = None
         self.grapple_aiming = False
         self._grapple_aim_charge = None
+        self.grapple_direct_pull = False
         self.grapple_pull_impact_hit = set()
 
     def get_shield_rect(self, player_x, player_y):
@@ -508,9 +509,12 @@ class RiotGear:
         # 钩爪为独立技能，无需装备防爆套装
         return self.grapple_cooldown <= 0
 
-    def use_grapple(self, target_x, target_y, player_x, player_y, target=None, scythe=False):
+    def use_grapple(self, target_x, target_y, player_x, player_y, target=None, scythe=False,
+                    direct_pull=False):
         """使用钩爪 - 新逻辑：直接发射
-        v2.2.5：scythe=True 时启用死神钩爪（CD 3s，锁定直飞）"""
+        v2.2.5：scythe=True 时启用死神钩爪（CD 3s，锁定直飞）
+        v2.2.12：direct_pull=True 直拉模式——发射后不碰撞勾取路径上任何僵尸/道具，
+        钩爪头到达锚点即自我拉拽（长按未锁定钩爪的默认行为）"""
         if not self.can_grapple():
             return False
 
@@ -535,6 +539,7 @@ class RiotGear:
         self.grapple_state = "shooting"
         self.grapple_target = target
         self.grapple_pull_impact_hit = set()
+        self.grapple_direct_pull = bool(direct_pull)
         return True
 
     def start_aim(self, angle):
@@ -621,7 +626,7 @@ class RiotGear:
                 _ax = player_x + math.cos(_a) * self.grapple_max_range
                 _ay = player_y + math.sin(_a) * self.grapple_max_range
             _charge = getattr(self, '_grapple_aim_charge', 1.0) or 1.0
-            _r = self.grapple_lock_radius * max(0.35, _charge)
+            _r = self.grapple_lock_radius * max(0.18, _charge)
             axp = int((_ax - camera_x) * scale)
             ayp = int((_ay - camera_y) * scale)
             lr = int(_r * scale)
@@ -633,7 +638,7 @@ class RiotGear:
             # 锁定圈：由小到大扩至极点
             pygame.draw.circle(screen, (60, 200, 90), (axp, ayp), lr, max(1, int(2 * scale)))
             pygame.draw.circle(screen, (60, 200, 90), (axp, ayp), lr + int(4 * scale), max(1, int(1 * scale)))
-            # 蓄力进度弧（35%→100%）
+            # 蓄力进度弧（18%→100%）
             try:
                 _ch = max(0.0, min(1.0, _charge))
                 _sa = -math.pi / 2
