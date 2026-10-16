@@ -81,8 +81,10 @@ g.room_map_idx = 1
 g.room_weapon_idx = 0
 # 桩 _start_multi_room_game 依赖的武器映射
 try:
-    from config import WEAPONS
-    _wlist = list(WEAPONS.keys())
+    from config import WeaponType
+    from weapons import Weapon
+    _throw={WeaponType.GRENADE,WeaponType.MOLOTOV,WeaponType.SMOKE_GRENADE}
+    _wlist=[wt for wt in WeaponType if wt not in _throw]
     check("武器候选非空", len(_wlist) > 0)
     g.room_weapon_idx = 0
     check("房间武器索引有效", 0 <= g.room_weapon_idx < len(_wlist))
