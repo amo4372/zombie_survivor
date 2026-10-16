@@ -550,6 +550,7 @@ class GameCore:
         p.speed = p.base_speed
         p.damage_multiplier *= (1 + cfg.get("damage_bonus", 0))
         p.crit_bonus_add += cfg.get("crit_bonus", 0)
+        p.crit_chance += p.crit_bonus_add  # v2.2.9 修复：P2 角色暴击率词条此前未生效
         p.health_regen += cfg.get("regen", 0) * scale_lvl
         p.dmg_reduce += cfg.get("dmg_reduce", 0)
         p.char_name = getattr(self, 'selected_character2')
@@ -703,7 +704,8 @@ class GameCore:
                 p2_w = getattr(self, 'selected_weapon_p2', None) or self.selected_weapon
                 p2_char = getattr(self, 'selected_char_p2', None)
                 try:
-                    self.player2 = Player(self.player.x + 60, self.player.y, start_weapon=p2_w,
+                    # v2.2.9 多人出生点分散（有限地图概念：各玩家独立出生位，避免贴脸出生）
+                    self.player2 = Player(self.player.x + 140, self.player.y, start_weapon=p2_w,
                                           start_weapon_level=getattr(self, 'selected_weapon_p2_level', 1))
                     if p2_char:
                         self.selected_character2 = p2_char
@@ -721,11 +723,12 @@ class GameCore:
                 if self.multiplayer_mode == "network" and self.net_host is not None:
                     try:
                         _cc = self.net_host.client_count
-                        for _i, _off in ((3, 120), (4, 180)):
+                        # v2.2.9 出生点分散：P3 上侧、P4 左侧错开（按序号四向分布）
+                        for _i, _off in ((3, (0, 140)), (4, (-140, 0))):
                             if _cc >= _i - 1:
                                 _pw = getattr(self, f'selected_weapon_p{_i}', None) or self.selected_weapon
                                 setattr(self, f"player{_i}", Player(
-                                    self.player.x + _off, self.player.y, start_weapon=_pw,
+                                    self.player.x + _off[0], self.player.y + _off[1], start_weapon=_pw,
                                     start_weapon_level=1))
                                 _cam = Camera(BASE_WIDTH // 2, BASE_HEIGHT)
                                 _cam.shake_enabled = self.config.screen_shake
@@ -735,12 +738,13 @@ class GameCore:
                 elif self.multiplayer_mode == "same_screen":
                     # v2.2.7 同屏 N 人：coop_player_count(2-4)，3/4 号位 AI 队友补位
                     _ccnt = int(getattr(self, 'coop_player_count', 2) or 2)
-                    for _i, _off in ((3, 120), (4, 180)):
+                    # v2.2.9 出生点四向分散：P1(0,0) P2(右) P3(上) P4(左)
+                    for _i, _off in ((3, (0, 140)), (4, (-140, 0))):
                         if _ccnt >= _i:
                             try:
                                 _pw = getattr(self, f'selected_weapon_p{_i}', None) or self.selected_weapon
                                 setattr(self, f"player{_i}", Player(
-                                    self.player.x + _off, self.player.y, start_weapon=_pw,
+                                    self.player.x + _off[0], self.player.y + _off[1], start_weapon=_pw,
                                     start_weapon_level=1))
                                 _cam = Camera(BASE_WIDTH // 2, BASE_HEIGHT)
                                 _cam.shake_enabled = self.config.screen_shake
@@ -1087,6 +1091,19 @@ class GameCore:
             self._ach_check_timer = 0.5
         self._update_black_holes(dt)
         self._update_medic_pods(dt)
+        # v2.2.9 PvP 敌方位置揭示状态机：开局 8s 全显 + 之后每 45s 闪烁 3s
+        try:
+            if getattr(self.config, 'pvp_enabled', False) and self.is_multiplayer_active():
+                if not hasattr(self, '_pvp_reveal_cycle'):
+                    self._pvp_reveal_cycle = 0.0
+                self._pvp_reveal_cycle += dt
+                _c = self._pvp_reveal_cycle
+                # 开局 0-8s 全显；之后 45s 周期内最后 3s 闪烁
+                self.pvp_reveal_active = _c <= 8.0 or (_c % 45.0) > 42.0
+            else:
+                self.pvp_reveal_active = False
+        except Exception:
+            self.pvp_reveal_active = False
         # 双人救援：每帧结算倒地/救援（全倒地时在此结束游戏）
         if self.is_multiplayer_active() and self._update_rescue(dt):
             self._trigger_multiplayer_game_over()

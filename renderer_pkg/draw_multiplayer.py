@@ -104,6 +104,43 @@ def draw_teammate_indicators(renderer, game, viewports, vp):
                             game.font_small, game.scale, dist_m=dist_m)
 
 
+def draw_enemy_player_indicators(renderer, game, viewports, vp):
+    """v2.2.9 PvP 敌方玩家位置揭示：开局 8s + 每 45s 闪 3s 时，
+    在各玩家视口显示异阵营玩家位置（红点+边缘箭头）"""
+    try:
+        if not getattr(game, "pvp_reveal_active", False):
+            return
+        if not getattr(game.config, "pvp_enabled", False):
+            return
+        sw = vp.rect.width
+        sh = vp.rect.height
+        me = vp.player
+        for other in viewports:
+            if other is vp or other.player is None:
+                continue
+            op = other.player
+            if getattr(me, "team_id", 0) == getattr(op, "team_id", 1):
+                continue  # 队友不标红
+            sx, sy = _screen_pos_of(op.x, op.y, vp.camera, game.scale)
+            if 0 <= sx <= sw and 0 <= sy <= sh:
+                pygame.draw.circle(renderer.screen, (255, 40, 40), (int(sx), int(sy)), max(5, int(9 * game.scale)), 2)
+                pygame.draw.circle(renderer.screen, (255, 90, 90), (int(sx), int(sy)), max(2, int(4 * game.scale)))
+            else:
+                # 屏幕外：边缘红色箭头
+                cx, cy = sw // 2, sh // 2
+                ang = math.atan2(op.y - me.y, op.x - me.x)
+                ex = max(16, min(sw - 16, cx + math.cos(ang) * (sw * 0.42)))
+                ey = max(16, min(sh - 16, cy + math.sin(ang) * (sh * 0.42)))
+                _a1 = ang + 2.6
+                _a2 = ang - 2.6
+                pygame.draw.polygon(renderer.screen, (255, 60, 60), [
+                    (ex + math.cos(ang) * 12, ey + math.sin(ang) * 12),
+                    (ex + math.cos(_a1) * 8, ey + math.sin(_a1) * 8),
+                    (ex + math.cos(_a2) * 8, ey + math.sin(_a2) * 8)])
+    except Exception:
+        pass
+
+
 def build_split_viewports(game):
     """由游戏状态推导同屏视口列表（数据驱动，N 人扩展点）"""
     sw = game.scaled_width
@@ -164,6 +201,8 @@ def render_split_viewports(renderer, game, viewports):
         renderer._draw_playing_core(vp.player, vp.camera, viewport_x=vp.rect.x, aim_owner=aim_owner)
         # v2.1.3：队友方位指示（对方不在本视口内时边缘箭头，倒地仍显示）
         draw_teammate_indicators(renderer, game, viewports, vp)
+        # v2.2.9：PvP 敌方玩家位置揭示（开局 8s + 每 45s 闪 3s）
+        draw_enemy_player_indicators(renderer, game, viewports, vp)
         # HUD 必须回全屏绘制（_draw_hud_split 内部用全屏绝对坐标 rect.x+…，
         # 且双人触控控件 base_x 本身含半屏偏移）
         renderer.screen = orig_screen

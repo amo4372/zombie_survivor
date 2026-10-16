@@ -596,6 +596,19 @@ class PlayingMixin:
             self.skill_caster.set_max_distance(self._get_skill_max_distance(self.selected_skill))
             # 保存释放前的瞄准状态（handle_touch会在up时重置is_aiming）
             cast_result = self.skill_caster.handle_touch(_tev, self.scale)
+            # v2.2.9 触控长按瞄准：钩爪锁定圈同步更新（修复触控端锁定圈完全失效/中心错位）
+            try:
+                _rg_t = self.player.riot_gear
+                if self.skill_caster.is_aiming and self.selected_skill == SkillType.GRAPPLE_PULL:
+                    _rg_t.grapple_aiming = True
+                    _rg_t.update_grapple_lock(self.player.x, self.player.y, self.enemies,
+                                              items=getattr(self.world, 'items', None))
+                else:
+                    _rg_t.grapple_aiming = False
+                    if not _rg_t.grapple_active:
+                        _rg_t.grapple_locked_target = None
+            except Exception:
+                pass
             if cast_result:
                 # v2.2.3 载具存活时长按技能按钮 → 退出载具（不执行预瞄/施放）
                 _veh_t = getattr(self.player, 'vehicle', None)

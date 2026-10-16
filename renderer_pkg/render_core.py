@@ -87,6 +87,8 @@ class RenderCore:
             self._draw_play_select()
         elif state == GameState.MULTIPLAYER_SELECT:
             self._draw_multiplayer_select()
+        elif state == GameState.MULTI_ROOM_CONFIG:
+            self._draw_multi_room_config()
         elif state == GameState.NET_MULTIPLAYER:
             self._draw_net_multiplayer()
         elif state == GameState.NET_WAIT:

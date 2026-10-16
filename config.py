@@ -189,6 +189,7 @@ class GameState(Enum):
     HUD_EDIT = auto()  # 新增：HUD触控按钮自定义布局编辑
     PLAY_SELECT = auto()  # 新增：开始游戏 → 单人/多人选择
     MULTIPLAYER_SELECT = auto()  # 新增：多人 → 同屏双人/网络联机选择
+    MULTI_ROOM_CONFIG = auto()  # v2.2.9：同屏多人房间配置（人数/玩法/阵营/难度/地图/模式/统一武器）
     NET_MULTIPLAYER = auto()  # 新增：网络联机（创建/加入房间）
     NET_WAIT = auto()  # 新增：网络等待（主机等待客户端/客户端连接中）
     NET_CLIENT_PLAY = auto()  # 新增：客户端游玩（渲染主机快照）

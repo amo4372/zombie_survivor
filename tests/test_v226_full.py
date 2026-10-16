@@ -211,10 +211,12 @@ check("救援超时，未能生还" in _srcp2, "倒地超时死亡提示文案�
 check("p._rescue_last_hp > p.hp" in _srcp2 or "_rescue_last_hp" in _srcp2, "受击清空救援进度（_rescue_last_hp 追踪）")
 
 # ==================== F. 同屏双人模式 ====================
-print("\n[F] 同屏双人：默认争分夺秒 + 支持三种模式")
+print("\n[F] 同屏双人：v2.2.9 入口进房间配置 + 支持三种模式")
 _srcd = open("renderer_pkg/draw_ui.py", encoding="utf-8").read()
-check("GameState.MODE_SELECT" in _srcd.split("def _draw_net_multiplayer")[0].split("def _draw_multiplayer_select")[1],
-      "同屏双人入口进模式选择（MODE_SELECT）")
+check("GameState.MULTI_ROOM_CONFIG" in _srcd.split("def _draw_net_multiplayer")[0].split("def _draw_multiplayer_select")[1],
+      "同屏双人入口进房间配置（MULTI_ROOM_CONFIG，v2.2.9 取代 MODE_SELECT）")
+check("def _draw_multi_room_config" in _srcd, "房间配置绘制方法存在")
+check("def _start_multi_room_game" in _srcd, "房间配置开始游戏方法存在")
 from zombie_pkg.mix_multi import Config as MConfig
 _cfg = MConfig()
 check(_cfg.game_mode.name == "TIMED", "Config 默认 TIMED（默认争分夺秒）")

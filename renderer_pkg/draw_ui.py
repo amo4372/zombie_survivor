@@ -2059,9 +2059,15 @@ class UiMixin:
             if btn.update(mouse_pos, mouse_pressed, self.game.touch_events, scale):
                 if i == 0:
                     self.game.multiplayer_mode = "same_screen"
-                    # v2.2.6：同屏双人支持故事/无尽/争分夺秒三种模式，
-                    # 进模式选择（默认争分夺秒 TIMED，未改则保持 config 默认）
-                    self.game.state = GameState.MODE_SELECT
+                    # v2.2.9：进入同屏多人房间配置（人数/玩法/阵营/难度/地图/模式/统一武器）
+                    g = self.game
+                    if not getattr(g, 'coop_player_count', None):
+                        g.coop_player_count = 2
+                    if not hasattr(g, 'room_map_idx'):
+                        g.room_map_idx = 0
+                    if not hasattr(g, 'room_weapon_idx'):
+                        g.room_weapon_idx = 0
+                    self.game.state = GameState.MULTI_ROOM_CONFIG
                 elif i == 1:
                     self.game.multiplayer_mode = "network"
                     self.game.net_ip_input = "127.0.0.1"
@@ -2073,6 +2079,147 @@ class UiMixin:
             if i < 2:
                 d = self.game.font_small.render(descs[i], True, LIGHT_GRAY)
                 self.screen.blit(d, d.get_rect(center=(sw // 2, int((300 + i * 80) * scale))))
+
+    def _draw_multi_room_config(self):
+        """v2.2.9 同屏多人房间配置：人数/玩法/阵营/难度/地图/模式/统一武器 → 开始
+        房主统一一键配置，各玩家同武器同角色（后续可单独微调）"""
+        self.screen.fill(VOID_BLACK)
+        scale = self.game.scale
+        sw = self.game.scaled_width
+        g = self.game
+        mouse_pos = pygame.mouse.get_pos()
+        mouse_pressed = pygame.mouse.get_pressed()
+        title = self.game.font_title.render("同屏多人 · 房间配置", True, WHITE)
+        self.screen.blit(title, title.get_rect(center=(sw // 2, int(55 * scale))))
+        g.coop_player_count = max(2, int(getattr(g, 'coop_player_count', 2) or 2))
+        _pvpm = bool(getattr(g.config, 'pvp_enabled', False))
+        _nteams = max(1, int(getattr(g.config, 'pvp_teams', 2) or 2))
+        # 地图/武器候选
+        _maps = ["校园", "街道", "市中心", "郊区", "核电站", "随机"]
+        try:
+            from config import MapType
+            _map_vals = [MapType.SCHOOL, MapType.STREET, MapType.DOWNTOWN,
+                         MapType.SUBURB, MapType.NUCLEAR_PLANT, None]
+        except Exception:
+            _map_vals = [None] * 6
+        # v2.2.9 武器候选：WeaponType 枚举（排除投掷物），与局外装备选择一致
+        try:
+            from config import WeaponType
+            from weapons import Weapon
+            _throw = {WeaponType.GRENADE, WeaponType.MOLOTOV, WeaponType.SMOKE_GRENADE}
+            _wlist = [wt for wt in WeaponType if wt not in _throw]
+            _wnames = [Weapon(wt).name for wt in _wlist]
+        except Exception:
+            _wlist, _wnames = [], []
+        g.room_map_idx = int(getattr(g, 'room_map_idx', 0) or 0) % len(_maps)
+        g.room_weapon_idx = int(getattr(g, 'room_weapon_idx', 0) or 0) % max(1, len(_wlist))
+        _diff_names = {"easy": "简单", "normal": "普通", "hard": "困难", "hell": "地狱"}
+        _cur_diff = getattr(g.config, 'difficulty', 'normal')
+        _mode_names = {"endless": "无尽模式", "story": "故事模式", "timed": "争分夺秒"}
+        _cur_mode = getattr(g.config, 'game_mode', None)
+        _cur_mode_name = getattr(_cur_mode, 'name', 'endless').lower() if _cur_mode else 'endless'
+        rows = [
+            ("人数", f"{g.coop_player_count} 人", lambda: setattr(g, 'coop_player_count', (g.coop_player_count - 1) % 3 + 2)),
+            ("玩法", ("合作 nPvE" if not _pvpm else "对战 PvPvE"),
+             lambda: setattr(g.config, 'pvp_enabled', not _pvpm)),
+            ("阵营数", (f"{_nteams} 阵营" if _pvpm else "—（合作）"),
+             (lambda: setattr(g.config, 'pvp_teams', (_nteams - 1) % 3 + 2)) if _pvpm else (lambda: None)),
+            ("难度", _diff_names.get(_cur_diff, '普通'),
+             lambda: setattr(g.config, 'difficulty',
+                             ["easy", "normal", "hard", "hell"][(
+                                 ["easy", "normal", "hard", "hell"].index(_cur_diff)
+                                 if _cur_diff in ["easy", "normal", "hard", "hell"] else 1) % 4])),
+            ("地图", _maps[g.room_map_idx], lambda: setattr(g, 'room_map_idx', (g.room_map_idx + 1) % len(_maps))),
+            ("模式", _mode_names.get(_cur_mode_name, "无尽模式"), lambda: self._cycle_room_mode(g)),
+            ("统一武器", (_wnames[g.room_weapon_idx] if _wlist else "默认"),
+             lambda: setattr(g, 'room_weapon_idx', (g.room_weapon_idx + 1) % max(1, len(_wlist)))),
+        ]
+        y0 = int(120 * scale)
+        rh = int(52 * scale)
+        _ups = [te for te in getattr(g, 'touch_events', [])
+                if te.get("type") == "up" and te.get("pos") is not None]
+        for i, (label, val, _cb) in enumerate(rows):
+            y = y0 + i * (rh + int(10 * scale))
+            lx = int(sw * 0.18)
+            _r = pygame.Rect(lx, y, int(sw * 0.64), rh)
+            if any(_r.collidepoint(te["pos"]) for te in _ups):
+                try:
+                    _cb()
+                except Exception:
+                    pass
+            pygame.draw.rect(self.screen, (28, 32, 44), _r, border_radius=10)
+            lt = self.game.font.render(f"{label}: {val}", True, (235, 235, 235))
+            self.screen.blit(lt, lt.get_rect(midleft=(lx + int(18 * scale), y + rh // 2)))
+        # 开始 / 返回
+        sb = pygame.Rect(int(sw * 0.5 - 160 * scale), y0 + len(rows) * (rh + int(10 * scale)) + int(14 * scale),
+                         int(160 * scale), int(54 * scale))
+        pygame.draw.rect(self.screen, (40, 150, 80), sb, border_radius=12)
+        st = self.game.font.render("开始游戏", True, WHITE)
+        self.screen.blit(st, st.get_rect(center=sb.center))
+        bb = pygame.Rect(int(sw * 0.5 + 12 * scale), sb.y, int(160 * scale), int(54 * scale))
+        pygame.draw.rect(self.screen, (170, 60, 60), bb, border_radius=12)
+        bt = self.game.font.render("返回", True, WHITE)
+        self.screen.blit(bt, bt.get_rect(center=bb.center))
+        if any(sb.collidepoint(te["pos"]) for te in _ups):
+            self._start_multi_room_game()
+        if any(bb.collidepoint(te["pos"]) for te in _ups):
+            g.state = GameState.MULTIPLAYER_SELECT
+
+    def _cycle_room_mode(self, g):
+        """v2.2.9 房间模式循环：无尽 → 故事 → 争分夺秒"""
+        try:
+            from config import GameMode
+            _modes = [GameMode.ENDLESS, GameMode.STORY, GameMode.TIMED]
+            cur = getattr(g.config, 'game_mode', GameMode.ENDLESS)
+            if cur in _modes:
+                g.config.game_mode = _modes[(_modes.index(cur) + 1) % len(_modes)]
+            else:
+                g.config.game_mode = GameMode.ENDLESS
+        except Exception:
+            pass
+
+    def _start_multi_room_game(self):
+        """v2.2.9 应用房间配置并开始同屏多人对局"""
+        g = self.game
+        try:
+            g.multiplayer_mode = "same_screen"
+            g.coop_player_count = max(2, int(getattr(g, 'coop_player_count', 2) or 2))
+            # 地图
+            _maps = [None]
+            try:
+                from config import MapType
+                _maps = [MapType.SCHOOL, MapType.STREET, MapType.DOWNTOWN,
+                         MapType.SUBURB, MapType.NUCLEAR_PLANT, None]
+            except Exception:
+                pass
+            g.room_map_idx = int(getattr(g, 'room_map_idx', 0) or 0) % len(_maps)
+            _mv = _maps[g.room_map_idx]
+            if _mv is not None:
+                g.selected_map_for_story = _mv
+            # 统一武器：应用到所有玩家（P1~P4）——WeaponType 枚举，与局外装备选择一致
+            try:
+                from config import WeaponType
+                _throw = {WeaponType.GRENADE, WeaponType.MOLOTOV, WeaponType.SMOKE_GRENADE}
+                _wlist = [wt for wt in WeaponType if wt not in _throw]
+                g.room_weapon_idx = int(getattr(g, 'room_weapon_idx', 0) or 0) % max(1, len(_wlist))
+                if _wlist:
+                    _w = _wlist[g.room_weapon_idx]
+                    g.selected_weapon = _w
+                    g.selected_weapon_p1 = _w
+                    g.selected_weapon_p2 = _w
+                    g.selected_weapon_p3 = _w
+                    g.selected_weapon_p4 = _w
+            except Exception:
+                pass
+            g.state = GameState.PLAYING
+            g.start_game()
+        except Exception as _e:
+            try:
+                from data_io import logger
+                logger.log_exception(_e)
+            except Exception:
+                pass
+            g.state = GameState.MULTI_ROOM_CONFIG
 
     def _draw_net_multiplayer(self):
         """网络联机：创建房间 / 加入房间（IP输入框）"""

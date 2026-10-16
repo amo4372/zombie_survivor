@@ -857,6 +857,13 @@ class InputMixin:
                 # E：切换投掷物类型
                 if self.player.can_act():
                     self._cycle_throwable()
+            elif key == pygame.K_p:
+                # P：P2 切换投掷物类型（v2.2.9）
+                if self.multiplayer_mode == "same_screen" and self.player2:
+                    try:
+                        self._cycle_p2_throwable(self.player2)
+                    except Exception:
+                        pass
             elif key == pygame.K_u:
                 # U：P2 技能（短按快放，长按预瞄释放）
                 if self.multiplayer_mode == "same_screen" and self.player2:

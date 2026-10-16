@@ -19,8 +19,9 @@ CLIENT_SLOTS = MAX_CLIENTS - 1
 class NetHost:
     """主机：监听多个客户端，接收各自输入，广播世界快照"""
 
-    def __init__(self, port=DEFAULT_PORT):
+    def __init__(self, port=DEFAULT_PORT, room_cfg=None):
         self.port = port
+        self.room_cfg = room_cfg or {}
         self.sock = None
         self.running = False
         self.lock = threading.Lock()
@@ -106,9 +107,12 @@ class NetHost:
                 except Exception:
                     pass
                 continue
-            # 欢迎消息：告知客户端其玩家索引
+            # 欢迎消息：告知客户端其玩家索引 + 房间配置（v2.2.9 网络房间同步）
             try:
-                conn.sendall((json.dumps({"type": "welcome", "index": idx_to_send}) + "\n").encode("utf-8"))
+                _w = {"type": "welcome", "index": idx_to_send}
+                if self.room_cfg:
+                    _w["room_cfg"] = self.room_cfg
+                conn.sendall((json.dumps(_w) + "\n").encode("utf-8"))
             except Exception:
                 pass
             threading.Thread(target=self._recv_loop, args=(idx, conn), daemon=True).start()
@@ -198,6 +202,7 @@ class NetClient:
         self.connected = False
         self.error = None
         self.player_index = 1  # 主机分配（默认 P2；多人在 1..3）
+        self.room_cfg = {}  # v2.2.9 主机下发的房间配置
 
     def start(self):
         try:
@@ -241,6 +246,9 @@ class NetClient:
                         elif msg.get("type") == "welcome":
                             with self.lock:
                                 self.player_index = int(msg.get("index", 1))
+                                _rc = msg.get("room_cfg")
+                                if isinstance(_rc, dict):
+                                    self.room_cfg = _rc
                         elif msg.get("type") == "full":
                             with self.lock:
                                 self.error = "房间已满"

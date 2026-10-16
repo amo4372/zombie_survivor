@@ -284,6 +284,12 @@ class MultiplayerMixin:
                 c2 = self.p2_controls
                 c2["skill_caster"].set_player_pos(p2.x, p2.y, self.camera2.x, self.camera2.y)
                 c2["skill_caster"].set_max_distance(self._get_skill_max_distance(self.p2_selected_skill or SkillType.GRENADE))
+                # v2.2.9 P2 投掷预瞄：同样以 P2 位置/视口填充（修复渲染点不在 P2 上）
+                try:
+                    c2["throwable_caster"].set_player_pos(p2.x, p2.y, self.camera2.x, self.camera2.y)
+                    c2["throwable_caster"].set_max_distance(getattr(self, 'throwable_max_dist', 450))
+                except Exception:
+                    pass
                 if not self.u_aim_started and hold_t >= self.key_u_long_threshold:
                     self.u_aim_started = True
                     c2["skill_caster"].is_aiming = True
@@ -311,6 +317,13 @@ class MultiplayerMixin:
                 c2sc = self.p2_controls["skill_caster"]
                 c2sc.set_player_pos(p2.x, p2.y, self.camera2.x, self.camera2.y)
                 c2sc.set_max_distance(self._get_skill_max_distance(self.p2_selected_skill or SkillType.GRENADE))
+                # v2.2.9 P2 投掷预瞄：以 P2 位置/视口填充（修复渲染点不在 P2 上）
+                try:
+                    c2tc = self.p2_controls["throwable_caster"]
+                    c2tc.set_player_pos(p2.x, p2.y, self.camera2.x, self.camera2.y)
+                    c2tc.set_max_distance(getattr(self, 'throwable_max_dist', 450))
+                except Exception:
+                    pass
                 # v2.2.6：P2 钩爪瞄准锁定圈更新（触控长按）
                 self._update_p2_grapple_lock(p2, bool(c2sc.is_aiming))
                 if self.p2_controls["skill_caster"].just_released:
@@ -321,6 +334,9 @@ class MultiplayerMixin:
                     self._p2_cast_ratio = self.p2_controls["skill_caster"].distance_ratio
                 if self.p2_controls["throwable_caster"].just_released:
                     throw = True
+                # v2.2.9 P2 投掷切换（触控投掷切换按钮）：仅在有库存的类型间轮换
+                if self.p2_controls["throwable_switch"].just_released:
+                    self._cycle_p2_throwable(p2)
                 # P2 技能切换（短按）
                 if self.p2_controls["skill_selector"].just_released:
                     sts = self._get_unlocked_skills_for(p2)
@@ -802,22 +818,95 @@ class MultiplayerMixin:
         })
         self.assets.play_sound("grenade_throw")
 
+    def _p2_throwable_stock(self, p2):
+        """确保 P2 有投掷物库存容器（道具拾取/存档会填充，这里兜底给基础库存）"""
+        if not hasattr(p2, 'throwables') or not isinstance(getattr(p2, 'throwables', None), dict):
+            p2.throwables = {}
+        # 初始保底库存：燃烧弹+烟雾弹各 2（与单人开局机制一致）
+        if not getattr(p2, '_throwables_init', False):
+            p2._throwables_init = True
+            if p2.throwables.get("incendiary", 0) <= 0:
+                p2.throwables["incendiary"] = 2
+            if p2.throwables.get("smoke", 0) <= 0:
+                p2.throwables["smoke"] = 2
+
+    def _cycle_p2_throwable(self, p2):
+        """P2 投掷物切换：仅在持有库存的类型间轮换（燃烧弹→烟雾弹→集束→EMP）"""
+        try:
+            self._p2_throwable_stock(p2)
+            types = getattr(self, 'throwable_types', None) or ["incendiary", "smoke", "cluster", "emp"]
+            names = getattr(self, 'throwable_names', None) or {}
+            avail = [t for t in types if p2.throwables.get(t, 0) > 0]
+            if not avail:
+                return
+            cur = getattr(self, 'p2_selected_throwable', None)
+            idx = avail.index(cur) if cur in avail else 0
+            nxt = avail[(idx + 1) % len(avail)]
+            self.p2_selected_throwable = nxt
+            self.floating_texts.append(FloatingText(
+                p2.x, p2.y - 40,
+                f"P2投掷: {names.get(nxt, nxt)}", color=(255, 200, 80), lifetime=1.2))
+        except Exception:
+            pass
+
     def _throw_p2(self):
-        """P2 投掷物释放（v2.2.8：与 P1 一致走 grenades_in_flight 手雷+附魔，
-        修复原来误发"奇怪火焰弹"问题）"""
+        """P2 投掷物释放（v2.2.9：与单人一致——按 p2_selected_throwable 从库存扣减，
+        走 grenades_in_flight 统一飞行/爆炸渲染；修复原来固定发"奇怪火焰弹"）"""
         p2 = self.player2
         if not p2:
             return
         try:
-            _sel = getattr(self, "p2_selected_throwable", "grenade")
+            self._p2_throwable_stock(p2)
+            gtype = getattr(self, 'p2_selected_throwable', "incendiary")
+            if p2.throwables.get(gtype, 0) <= 0:
+                # 自动找第一个有库存的
+                for _t in (getattr(self, 'throwable_types', None) or ["incendiary", "smoke", "cluster", "emp"]):
+                    if p2.throwables.get(_t, 0) > 0:
+                        gtype = _t
+                        self.p2_selected_throwable = _t
+                        break
+                else:
+                    self.floating_texts.append(FloatingText(
+                        p2.x, p2.y - 40, "P2没有投掷物！", color=(230, 80, 80), lifetime=1.0))
+                    return
+            p2.throwables[gtype] = p2.throwables.get(gtype, 0) - 1
+            # 投掷方向：触控用投掷预瞄数据（若有），否则 P2 朝向 300px
             _ang = math.radians(p2.facing_angle)
-            _tx = p2.x + math.cos(_ang) * 300
-            _ty = p2.y + math.sin(_ang) * 300
-            if _sel == "incendiary":
-                # 燃烧弹：改用烈焰手雷附魔（fire），仍走 grenades_in_flight 统一轨迹/爆炸
-                self._throw_skill_grenade_p2(_tx, _ty, p2)
+            _dist = 300.0
+            _tc2 = None
+            try:
+                if self.p2_controls and self.config.control_mode == ControlMode.TOUCH:
+                    _tc2 = self.p2_controls["throwable_caster"]
+                    if getattr(_tc2, "was_aiming_on_release", False):
+                        _ang = _tc2.angle
+                        _dist = getattr(self, 'throwable_max_dist', 450) * max(0.1, _tc2.distance_ratio)
+            except Exception:
+                pass
+            _tx = p2.x + math.cos(_ang) * _dist
+            _ty = p2.y + math.sin(_ang) * _dist
+            _dx = _tx - p2.x
+            _dy = _ty - p2.y
+            _dd = math.hypot(_dx, _dy)
+            _spd = _dd / 1.2 if _dd > 0 else 300
+            if _dd > 0:
+                _vx = _dx / _dd * _spd
+                _vy = _dy / _dd * _spd
             else:
-                self._throw_skill_grenade_p2(_tx, _ty, p2)
+                _vx, _vy = 0, -300
+            p2.facing_angle = math.degrees(math.atan2(_dy, _dx)) if _dd > 0 else p2.facing_angle
+            if not hasattr(self, 'grenades_in_flight'):
+                self.grenades_in_flight = []
+            self.grenades_in_flight.append({
+                "type": gtype,
+                "x": p2.x, "y": p2.y,
+                "vx": _vx, "vy": _vy,
+                "timer": 1.2,
+                "target_x": _tx, "target_y": _ty,
+            })
+            try:
+                self.assets.play_sound("grenade_throw")
+            except Exception:
+                pass
         except Exception:
             # 兜底：基础投掷（防完全失效）
             try:

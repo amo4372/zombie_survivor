@@ -375,6 +375,29 @@ class RiotGear:
                 if d < best_d:
                     best_d = d
                     best = e
+        # v2.2.9 极点自动锁定：蓄力满后圈内若无目标，自动扩到满半径再搜一次
+        # （"直至极点自动锁定"——满蓄力即锁定最近的可锁定对象，无需手动对准）
+        if best is None and self._grapple_aim_charge >= 0.95:
+            full_r = self.grapple_lock_radius
+            if items:
+                for it in items:
+                    if not getattr(it, "alive", False):
+                        continue
+                    d = math.hypot(it.x - _ax, it.y - _ay)
+                    if d < full_r:
+                        full_r = d
+                        best = it
+            if best is None:
+                full_r = self.grapple_lock_radius
+                for e in enemies:
+                    if not getattr(e, "alive", False):
+                        continue
+                    if getattr(e, "is_boss", False):
+                        continue
+                    d = math.hypot(e.x - _ax, e.y - _ay)
+                    if d < full_r:
+                        full_r = d
+                        best = e
         self.grapple_locked_target = best
         return best
 

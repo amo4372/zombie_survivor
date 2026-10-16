@@ -67,25 +67,29 @@ try:
     _boom_b()
 except Exception as e:
     act = es.handle(e)
-    check("不忽略同类错误 -> raise", act == "raise")
+    check("不忽略同类错误 -> 仍弹窗 ask（v2.2.7 起无 raise 路径）", act == "ask")
 
 
-# ==================== 1b. 错误询问框触控命中（v2.2.0 触控端） ====================
+# ==================== 1b. 错误询问框触控命中（v2.2.8 三按钮+复制） ====================
 from zombie_pkg.game_core import GameCore
 
 # 用桩对象绑定类方法验证命中逻辑（触控热区）
+# v2.2.8 布局：按钮行 y0=0.83*720=598, 高58, 三按钮 x0=0.5*1280-598//2=341
+#   ignore(341..531) continue(545..735) menu(749..939)；复制按钮(565..715, 550..586)
 _stub = type("Stub", (), {
     "scale": 1.0, "scaled_width": 1280, "scaled_height": 720,
 })()
 _hit = GameCore._error_ask_hit.__get__(_stub)
-check("触控 忽略按钮中心命中", _hit(430, 420) == "ignore")
-check("触控 不忽略按钮中心命中", _hit(650, 420) == "raise")
+check("触控 忽略按钮中心命中", _hit(436, 598) == "ignore")
+check("触控 继续运行按钮中心命中", _hit(640, 598) == "continue")
+check("触控 返回主菜单按钮中心命中", _hit(844, 598) == "menu")
+check("触控 复制错误按钮中心命中", _hit(640, 568) == "copy")
 check("触控 按钮外不命中", _hit(50, 50) is None)
-check("触控 热区高度60*scale", _hit(430, 465) == "ignore")  # 420+45 仍在高度内
-check("触控 热区外下边界不命中", _hit(430, 486) is None)
+check("触控 热区高度内命中", _hit(436, 627) == "ignore")  # 598+29 仍在高度内
+check("触控 热区外下边界不命中", _hit(436, 657) is None)
 
-# 归一化坐标换算：FINGER 事件 (x=0.41,y=0.62) → 物理 (524, 446) → 忽略按钮内
-fx, fy = 0.41, 0.62
+# 归一化坐标换算：FINGER 事件 (x=0.3406,y=0.8306) → 物理 (436, 598) → 忽略按钮内
+fx, fy = 436 / 1280, 598 / 720
 check("触控 FINGER 归一化换算命中", _hit(fx * 1280, fy * 720) == "ignore")
 
 

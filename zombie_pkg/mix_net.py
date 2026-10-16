@@ -190,6 +190,31 @@ class NetMixin:
         if not self.net_client:
             self.state = GameState.NET_MULTIPLAYER
             return
+        # v2.2.9 应用主机下发的房间配置（幂等，welcome 到达后生效一次）
+        try:
+            _rc = getattr(self.net_client, 'room_cfg', None)
+            if _rc and not getattr(self, '_net_room_cfg_applied', False):
+                self._net_room_cfg_applied = True
+                try:
+                    from config import GameMode
+                    if _rc.get("game_mode"):
+                        _gm = _rc["game_mode"]
+                        if hasattr(GameMode, _gm):
+                            self.config.game_mode = GameMode[_gm]
+                    if _rc.get("difficulty"):
+                        self.config.difficulty = _rc["difficulty"]
+                    if "pvp_enabled" in _rc:
+                        self.config.pvp_enabled = bool(_rc["pvp_enabled"])
+                    if "pvp_teams" in _rc:
+                        self.config.pvp_teams = max(1, int(_rc["pvp_teams"]) or 2)
+                    if "coop_player_count" in _rc:
+                        self.coop_player_count = max(2, min(4, int(_rc["coop_player_count"]) or 2))
+                    if "map" in _rc:
+                        self.room_map_idx = int(_rc["map"]) % 6
+                except Exception:
+                    pass
+        except Exception:
+            pass
         snap = self.net_client.get_snapshot()
         keys = pygame.key.get_pressed()
         mx = (1 if keys[pygame.K_d] else 0) - (1 if keys[pygame.K_a] else 0)
@@ -310,7 +335,19 @@ class NetMixin:
         from net import NetHost
         self._net_stop()
         self.net_role = "host"
-        self.net_host = NetHost(self.net_port)
+        # v2.2.9 网络房间配置同步：主机把房间配置随欢迎消息下发客户端
+        try:
+            _rc = {
+                "game_mode": self.config.game_mode.name if hasattr(self.config, 'game_mode') and hasattr(self.config.game_mode, 'name') else "TIMED",
+                "difficulty": getattr(self.config, 'difficulty', 'normal'),
+                "pvp_enabled": bool(getattr(self.config, 'pvp_enabled', False)),
+                "pvp_teams": int(getattr(self.config, 'pvp_teams', 2) or 2),
+                "coop_player_count": int(getattr(self, 'coop_player_count', 2) or 2),
+                "map": int(getattr(self, 'room_map_idx', 0) or 0),
+            }
+        except Exception:
+            _rc = {}
+        self.net_host = NetHost(self.net_port, room_cfg=_rc)
         if self.net_host.start():
             self.state = GameState.NET_WAIT
             self.floating_texts = []
