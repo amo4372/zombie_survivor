@@ -21,6 +21,47 @@ from weapons import Projectile
 VEHICLE_IMAGE_DIR = os.path.join(os.path.dirname(__file__), "..", "assets", "vehicles")
 
 _VEHICLE_IMAGES = {}
+_VEHICLE_TINT_CACHE = {}  # v2.2.10 智能着色缓存：tint 元组 -> 已着色 surface
+
+
+def _tint_vehicle_image(img, tint):
+    """v2.2.10 载具智能着色：只把原图红色车身染成目标色（红→金→银三级），
+    保留轮胎/车窗/车灯/阴影等非红色细节，避免整图纯色覆盖导致"配色太假"。
+    按车身亮度保留明暗，结果缓存（每级一帧生成一次）。"""
+    if tint is None:
+        return img
+    key = tuple(tint)
+    if key in _VEHICLE_TINT_CACHE:
+        return _VEHICLE_TINT_CACHE[key]
+    try:
+        import numpy as np
+        arr = pygame.surfarray.pixels3d(img).astype(np.int32)  # (w,h,3) RGB
+        r = arr[:, :, 0]
+        g = arr[:, :, 1]
+        b = arr[:, :, 2]
+        # 红色车身判定：R 显著高于 G/B（红色大运经典款的车漆），且非纯黑轮胎/纯白高光
+        mask = (r > g * 1.18) & (r > b * 1.18) & (r > 40) & (r < 245)
+        lum = (r + g + b) / 3.0  # 保留原明暗
+        tr, tg, tb = tint
+        out = arr.copy()
+        out[:, :, 0][mask] = np.clip(tr * lum / 128.0, 0, 255)[mask]
+        out[:, :, 1][mask] = np.clip(tg * lum / 128.0, 0, 255)[mask]
+        out[:, :, 2][mask] = np.clip(tb * lum / 128.0, 0, 255)[mask]
+        res = img.copy()
+        pygame.surfarray.blit_array(res, np.ascontiguousarray(out.astype(np.uint8)))
+        _VEHICLE_TINT_CACHE[key] = res
+        return res
+    except Exception:
+        # 无 numpy/无头环境：回退原透明度叠加（不崩）
+        try:
+            _t = pygame.Surface(img.get_size(), pygame.SRCALPHA)
+            _t.fill((*tint, 110))
+            _img2 = img.copy()
+            _img2.blit(_t, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+            _img2.blit(_t, (0, 0), special_flags=pygame.BLEND_RGBA_ADD)
+            return _img2
+        except Exception:
+            return img
 
 
 def load_vehicle_images():
@@ -267,15 +308,7 @@ class Vehicle:
         img = self.image
         if img is not None:
             if self.tint is not None:
-                try:
-                    _t = pygame.Surface(img.get_size(), pygame.SRCALPHA)
-                    _t.fill((*self.tint, 110))
-                    _img2 = img.copy()
-                    _img2.blit(_t, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
-                    _img2.blit(_t, (0, 0), special_flags=pygame.BLEND_RGBA_ADD)
-                    img = _img2
-                except Exception:
-                    pass
+                img = _tint_vehicle_image(img, self.tint)
             rot = pygame.transform.rotozoom(img, -self.facing_angle, scale)
             rect = rot.get_rect(center=(int(sx + ox), int(sy + oy)))
             screen.blit(rot, rect)

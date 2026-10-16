@@ -727,6 +727,14 @@ class PlayingMixin:
             if _veh is not None and not _veh.alive:
                 self._vehicle_destroyed()
             elif _veh is None:
+                # v2.2.10 修复：钩爪自我拉拽期间禁用玩家额外位移（拉回独占位移，
+                # 防"故意不走蹭无敌"）——玩家输入 move 清零，仅由 gear self_pull 拉回
+                try:
+                    if getattr(self.player, 'riot_gear', None) is not None and \
+                            getattr(self.player.riot_gear, 'grapple_state', None) == "self_pull":
+                        move_x, move_y = 0.0, 0.0
+                except Exception:
+                    pass
                 self.player.update(dt, move_x * _zone_mult, move_y * _zone_mult,
                                    mouse_angle, self.world, sprinting=sprinting)
                 # 符文：再生效果

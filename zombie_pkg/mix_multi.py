@@ -380,6 +380,13 @@ class MultiplayerMixin:
             self._vehicle_destroyed_for(p2)
             p2.update(dt, 0, 0, angle, self.world, sprinting=False)
         elif mx != 0 or my != 0:
+            # v2.2.10 修复：P2 钩爪自我拉拽期间禁用玩家额外位移（拉回独占位移）
+            try:
+                if getattr(p2, 'riot_gear', None) is not None and \
+                        getattr(p2.riot_gear, 'grapple_state', None) == "self_pull":
+                    mx, my = 0.0, 0.0
+            except Exception:
+                pass
             p2.update(dt, mx, my, angle, self.world, sprinting=sprint)
         else:
             p2.update(dt, 0, 0, angle, self.world, sprinting=sprint)
