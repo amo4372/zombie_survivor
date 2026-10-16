@@ -803,15 +803,30 @@ class MultiplayerMixin:
         self.assets.play_sound("grenade_throw")
 
     def _throw_p2(self):
-        """P2 投掷物释放（简化：燃烧弹）"""
+        """P2 投掷物释放（v2.2.8：与 P1 一致走 grenades_in_flight 手雷+附魔，
+        修复原来误发"奇怪火焰弹"问题）"""
         p2 = self.player2
         if not p2:
             return
-        ang = math.radians(p2.facing_angle)
-        proj = Projectile(p2.x, p2.y, math.cos(ang) * 10, math.sin(ang) * 10,
-                          30, 300, (255, 100, 0), 6, is_flame=True)
-        self.projectiles.append(proj)
-        self.assets.play_sound("grenade_throw")
+        try:
+            _sel = getattr(self, "p2_selected_throwable", "grenade")
+            _ang = math.radians(p2.facing_angle)
+            _tx = p2.x + math.cos(_ang) * 300
+            _ty = p2.y + math.sin(_ang) * 300
+            if _sel == "incendiary":
+                # 燃烧弹：改用烈焰手雷附魔（fire），仍走 grenades_in_flight 统一轨迹/爆炸
+                self._throw_skill_grenade_p2(_tx, _ty, p2)
+            else:
+                self._throw_skill_grenade_p2(_tx, _ty, p2)
+        except Exception:
+            # 兜底：基础投掷（防完全失效）
+            try:
+                ang = math.radians(p2.facing_angle)
+                proj = Projectile(p2.x, p2.y, math.cos(ang) * 10, math.sin(ang) * 10,
+                                  30, 300, (255, 100, 0), 6, is_flame=True)
+                self.projectiles.append(proj)
+            except Exception:
+                pass
 
     def _pickup_for_player(self, player):
         """玩家拾取掉落物（world.items）"""

@@ -747,13 +747,16 @@ class GameCore:
                                 setattr(self, f"camera{_i}", _cam)
                             except Exception as _e:
                                 logger.warning(f"创建同屏补位玩家失败: {_e}")
-                # v2.2.7 PvPvE：全员阵营分配（P1/P3 蓝队，P2/P4 红队 → nPvN）
+                # v2.2.7/8 PvPvE 阵营分配：
+                # pvp_enabled=False → nPvE（全体同阵营 0，纯合作抗僵尸）
+                # pvp_enabled=True + pvp_teams=N → aPvbPv...vE（玩家序号轮转 N 阵营，同屏/网络一致）
                 try:
                     _pvpm = getattr(self.config, 'pvp_enabled', False)
+                    _nteams = max(1, int(getattr(self.config, 'pvp_teams', 2) or 2)) if _pvpm else 1
                     for _idx, _pn in enumerate(("player", "player2", "player3", "player4")):
                         _pp = getattr(self, _pn, None)
                         if _pp is not None:
-                            _pp.team_id = _idx % 2
+                            _pp.team_id = _idx % _nteams
                             if _pvpm:
                                 _pp.hp = _pp.max_hp
                 except Exception as _e:
@@ -1089,6 +1092,10 @@ class GameCore:
             self._trigger_multiplayer_game_over()
 
     def draw(self):
+        # v2.2.8 错误弹窗优先绘制（游戏画面不覆盖弹窗，弹窗持续停留可操作）
+        if getattr(self, "error_ask_visible", False):
+            self._draw_error_ask(self.error_ask_pending)
+            return
         self.renderer.render()
 
     def run(self):
@@ -1144,25 +1151,34 @@ class GameCore:
         except:
             pass
 
-    # ==================== 错误可忽略询问框（v2.2.0） ====================
+    # ==================== 错误可忽略询问框（v2.2.0 / v2.2.8 三按钮+复制） ====================
     def _error_ask_hit(self, mx, my):
-        """错误询问框按钮命中：返回 'ignore'/'raise'/None（物理像素坐标）"""
+        """错误询问框按钮命中：返回 'ignore'/'continue'/'menu'/'copy'/None（物理像素坐标）
+        v2.2.8：三按钮（忽略并静默/继续运行/返回主菜单）+ 复制错误按钮"""
         sc = getattr(self, "scale", 1.0)
         sw = getattr(self, "scaled_width", 1280)
         sh = getattr(self, "scaled_height", 720)
-        # 触控友好热区：宽 200*sc 高 60*sc，两按钮间距 220*sc
-        bw = int(200 * sc)
-        bh = int(60 * sc)
-        bx = int(sw * 0.5 - 210 * sc)
-        by = int(sh * 0.5 + 60 * sc)
-        if bx <= mx <= bx + bw and by <= my <= by + bh:
-            return "ignore"
-        if bx + int(220 * sc) <= mx <= bx + int(220 * sc) + bw and by <= my <= by + bh:
-            return "raise"
+        bw = int(190 * sc)
+        bh = int(58 * sc)
+        gap = int(14 * sc)
+        total = bw * 3 + gap * 2
+        x0 = int(sw * 0.5 - total // 2)
+        y0 = int(sh * 0.83)
+        # 复制按钮（位于按钮行上方居中，小按钮）
+        cbw = int(150 * sc)
+        cbh = int(36 * sc)
+        cbx = int(sw * 0.5 - cbw // 2)
+        cby = y0 - int(48 * sc)
+        if cbx <= mx <= cbx + cbw and cby <= my <= cby + cbh:
+            return "copy"
+        for i, act in enumerate(("ignore", "continue", "menu")):
+            bx = x0 + i * (bw + gap)
+            if bx <= mx <= bx + bw and y0 <= my <= y0 + bh:
+                return act
         return None
 
     def _update_error_ask(self, dt):
-        """处理错误询问框输入：Y/回车=忽略，N/ESC=不忽略；
+        """处理错误询问框输入：Y/回车=忽略，N/ESC=继续运行，M=返回主菜单；
         触控/鼠标支持抬手确认（FINGERUP/MOUSEBUTTONUP），热区已加大；
         弹出后 error_ask_lock 秒内屏蔽按钮点击（防误触），键盘仍即时生效"""
         if getattr(self, "error_ask_lock", 0) > 0:
@@ -1175,6 +1191,8 @@ class GameCore:
                 elif ev.key == pygame.K_n or ev.key == pygame.K_ESCAPE:
                     self.error_silencer.decide(False)
                     self.error_ask_visible = False
+                elif ev.key == pygame.K_m:
+                    self._error_ask_menu()
             elif ev.type == pygame.FINGERUP or ev.type == pygame.FINGERDOWN:
                 if getattr(self, "error_ask_lock", 0) > 0:
                     continue  # 防误触锁定期间忽略按钮点击
@@ -1183,15 +1201,61 @@ class GameCore:
                 my = ev.y * self.scaled_height
                 act = self._error_ask_hit(mx, my)
                 if act is not None:
-                    self.error_silencer.decide(act == "ignore")
-                    self.error_ask_visible = False
+                    self._apply_error_ask_choice(act)
             elif ev.type == pygame.MOUSEBUTTONUP or ev.type == pygame.MOUSEBUTTONDOWN:
                 if getattr(self, "error_ask_lock", 0) > 0:
                     continue  # 防误触锁定期间忽略按钮点击
                 act = self._error_ask_hit(*ev.pos)
                 if act is not None:
-                    self.error_silencer.decide(act == "ignore")
-                    self.error_ask_visible = False
+                    self._apply_error_ask_choice(act)
+
+    def _apply_error_ask_choice(self, act):
+        """v2.2.8 统一处理错误弹窗按钮动作"""
+        if act == "ignore":
+            self.error_silencer.decide(True)
+            self.error_ask_visible = False
+        elif act == "continue":
+            self.error_silencer.decide(False)
+            self.error_ask_visible = False
+        elif act == "menu":
+            self._error_ask_menu()
+        elif act == "copy":
+            self._error_ask_copy()
+
+    def _error_ask_menu(self):
+        """v2.2.8 返回主菜单：保存对局并回到菜单"""
+        try:
+            self.error_ask_visible = False
+            self.error_silencer.decide(False)
+            if self.state == GameState.PLAYING:
+                self.save_game_state()
+            self.state = GameState.MENU
+            logger.info("错误弹窗：返回主菜单")
+        except Exception:
+            try:
+                self.state = GameState.MENU
+            except Exception:
+                pass
+
+    def _error_ask_copy(self):
+        """v2.2.8 复制错误内容到剪贴板（pygame.scrap 尽力而为；失败提示日志路径）"""
+        info = getattr(self, "error_ask_pending", {}) or {}
+        txt = "错误: " + str(info.get("message", "")) + "\n" + str(info.get("trace", ""))
+        copied = False
+        try:
+            pygame.scrap.init()
+            pygame.scrap.set_mode(pygame.SCRAP_CLIPBOARD)
+            pygame.scrap.put(pygame.SCRAP_TEXT, txt.encode("utf-8"))
+            copied = True
+        except Exception:
+            copied = False
+        try:
+            self.floating_texts.append(FloatingText(
+                self.player.x, self.player.y - 40,
+                "错误已复制到剪贴板" if copied else f"复制失败，完整日志: {info.get('log_path', 'data/game_error.log')}",
+                color=(120, 230, 140) if copied else (240, 200, 60), lifetime=2.0))
+        except Exception:
+            pass
 
     def _draw_error_ask(self, info):
         """绘制错误询问框（v2.2.7：完整错误日志展示+日志保存路径提示+绘制兜底）
@@ -1234,47 +1298,49 @@ class GameCore:
                     ts = pygame.font.Font(None, 22).render(ln, True, (255, 140, 140))
                 self.screen.blit(ts, ts.get_rect(center=(sw // 2, yy)))
                 yy += step
-            hint_txt = "Y/回车/触控=忽略（同类不再提示）  N/ESC=继续运行（仅本次）"
+            hint_txt = "Y/回车=忽略静默  N/ESC=继续运行  M=返回主菜单（弹窗将停留，可安心操作）"
             try:
                 hint = self.font.render(hint_txt, True, (180, 180, 180))
             except Exception:
                 hint = pygame.font.Font(None, 22).render(hint_txt, True, (180, 180, 180))
-            self.screen.blit(hint, hint.get_rect(center=(sw // 2, int(sh * 0.80))))
-            bx = int(sw * 0.5 - 210 * sc)
-            by = int(sh * 0.82)
-            bw = int(200 * sc)
-            bh = int(60 * sc)
+            self.screen.blit(hint, hint.get_rect(center=(sw // 2, int(sh * 0.775))))
+            # v2.2.8 三按钮 + 复制按钮
+            bw = int(190 * sc)
+            bh = int(58 * sc)
+            gap = int(14 * sc)
+            total = bw * 3 + gap * 2
+            x0 = int(sw * 0.5 - total // 2)
+            y0 = int(sh * 0.83)
+            cbw = int(150 * sc)
+            cbh = int(36 * sc)
+            cbx = int(sw * 0.5 - cbw // 2)
+            cby = y0 - int(48 * sc)
+            pygame.draw.rect(self.screen, (70, 80, 140), (cbx, cby, cbw, cbh), border_radius=10)
+            try:
+                cbt = self.font.render("复制错误", True, (230, 230, 255))
+            except Exception:
+                cbt = pygame.font.Font(None, 24).render("复制错误", True, (230, 230, 255))
+            self.screen.blit(cbt, cbt.get_rect(center=(cbx + cbw // 2, cby + cbh // 2)))
             lock = getattr(self, "error_ask_lock", 0)
+            btns = [("忽略并静默", (40, 160, 90), "ignore"),
+                    ("继续运行", (200, 90, 70), "continue"),
+                    ("返回主菜单", (110, 110, 150), "menu")]
+            for i, (bt, col, act) in enumerate(btns):
+                bx = x0 + i * (bw + gap)
+                if lock > 0:
+                    col = tuple(max(0, c - 60) for c in col)
+                pygame.draw.rect(self.screen, col, (bx, y0, bw, bh), border_radius=12)
+                try:
+                    bt_s = self.font.render(bt, True, (255, 255, 255))
+                except Exception:
+                    bt_s = pygame.font.Font(None, 24).render(bt, True, (255, 255, 255))
+                self.screen.blit(bt_s, bt_s.get_rect(center=(bx + bw // 2, y0 + bh // 2)))
             if lock > 0:
-                lock_txt = f"请稍候 {max(1, int(lock) + 1)} 秒…（防误触）"
                 try:
-                    lt = self.font.render(lock_txt, True, (255, 220, 80))
+                    lt = self.font.render(f"请稍候 {max(1, int(lock) + 1)} 秒…（防误触）", True, (255, 220, 80))
                 except Exception:
-                    lt = pygame.font.Font(None, 24).render(lock_txt, True, (255, 220, 80))
-                self.screen.blit(lt, lt.get_rect(center=(sw // 2, int(sh * 0.82 - 30 * sc))))
-                pygame.draw.rect(self.screen, (70, 90, 80), (bx, by, bw, bh), border_radius=12)
-                pygame.draw.rect(self.screen, (90, 60, 55), (bx + int(220 * sc), by, bw, bh), border_radius=12)
-                try:
-                    lb = self.font.render("忽略并静默", True, (150, 150, 150))
-                    rb = self.font.render("继续运行", True, (150, 150, 150))
-                except Exception:
-                    lb = pygame.font.Font(None, 24).render("忽略并静默", True, (150, 150, 150))
-                    rb = pygame.font.Font(None, 24).render("继续运行", True, (150, 150, 150))
-                self.screen.blit(lb, lb.get_rect(center=(bx + bw // 2, by + bh // 2)))
-                self.screen.blit(rb, rb.get_rect(center=(bx + int(220 * sc) + bw // 2, by + bh // 2)))
-            else:
-                pygame.draw.rect(self.screen, (40, 160, 90), (bx, by, bw, bh), border_radius=12)
-                try:
-                    lb = self.font.render("忽略并静默", True, (255, 255, 255))
-                except Exception:
-                    lb = pygame.font.Font(None, 24).render("忽略并静默", True, (255, 255, 255))
-                self.screen.blit(lb, lb.get_rect(center=(bx + bw // 2, by + bh // 2)))
-                pygame.draw.rect(self.screen, (200, 70, 60), (bx + int(220 * sc), by, bw, bh), border_radius=12)
-                try:
-                    rb = self.font.render("继续运行", True, (255, 255, 255))
-                except Exception:
-                    rb = pygame.font.Font(None, 24).render("继续运行", True, (255, 255, 255))
-                self.screen.blit(rb, rb.get_rect(center=(bx + int(220 * sc) + bw // 2, by + bh // 2)))
+                    lt = pygame.font.Font(None, 24).render(f"请稍候 {max(1, int(lock) + 1)} 秒…（防误触）", True, (255, 220, 80))
+                self.screen.blit(lt, lt.get_rect(center=(sw // 2, int(sh * 0.80))))
         except Exception:
             # 最后兜底：极简系统字体渲染，保证弹窗可见可操作
             try:

@@ -238,8 +238,9 @@ class PlayingMixin:
                     if _fb <= 0:
                         self._rescue_fb_timer = 0.5
                         _pct = int(p.rescue_progress / 2.5 * 100)
+                        _rtag = "P2" if p is p2 else "P1"
                         self.floating_texts.append(FloatingText(
-                            mate.x, mate.y - 55, f"正在救援 {tag}... {_pct}%", color=(120, 230, 140), lifetime=0.6))
+                            mate.x, mate.y - 55, f"正在救援 {_rtag}... {_pct}%", color=(120, 230, 140), lifetime=0.6))
                         self.floating_texts.append(FloatingText(
                             p.x, p.y - 70, f"队友正在救援... {_pct}%", color=(120, 230, 140), lifetime=0.6))
                     if p.rescue_progress >= 2.5:
