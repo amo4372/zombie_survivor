@@ -2349,9 +2349,10 @@ class UiMixin:
                 # 可见行数（到底部，最多显示）
                 _max_rows = max(1, int((sh - _drect.bottom - int(20 * scale)) // (_ih + _gap_i)))
                 _max_rows = min(_max_rows, len(_dopts))
-                _sval = _sc.get(_dkey, 0)
+                # v2.3.4：Android 触控坐标可能为 float，滚动值必须强制 int（否则 _dopts[float] 崩溃）
+                _sval = int(_sc.get(_dkey, 0) or 0)
                 _smax = max(0, len(_dopts) - _max_rows)
-                _sval = max(0, min(_smax, _sval))
+                _sval = int(max(0, min(_smax, _sval)))
                 _list_w = _drect.width
                 _list_h = _max_rows * (_ih + _gap_i)
                 _bar_w = int(9 * scale)
@@ -2360,13 +2361,14 @@ class UiMixin:
                 # 滚轮滚动
                 for _te in getattr(g, 'touch_events', []):
                     if _te.get("type") == "wheel":
-                        _sval = max(0, min(_smax, _sval - int(_te.get("dy", 0))))
+                        _sval = int(max(0, min(_smax, int(_sval) - int(_te.get("dy", 0)))))
                 # 触控拖动滚动（在列表/滚动条区域按下后上下移动）
                 if getattr(g, 'dd_drag', None) == _dkey and _mv:
                     _last = getattr(g, 'dd_drag_y', None)
                     if _last is not None:
-                        _sval = max(0, min(_smax, _sval + (_last - _mv[-1]["pos"][1]) // int(8 * scale)))
-                    g.dd_drag_y = _mv[-1]["pos"][1]
+                        _delta = int((float(_last) - float(_mv[-1]["pos"][1])) // max(1, int(8 * scale)))
+                        _sval = int(max(0, min(_smax, int(_sval) + _delta)))
+                    g.dd_drag_y = int(_mv[-1]["pos"][1])
                 for _te in _dn:
                     if _list_rect.inflate(0, int(6 * scale)).collidepoint(_te["pos"]):
                         g.dd_drag = _dkey
@@ -2385,7 +2387,7 @@ class UiMixin:
                 old_clip = self.screen.get_clip()
                 self.screen.set_clip(_clip)
                 for _oi in range(_max_rows):
-                    _gidx = _sval + _oi
+                    _gidx = int(_sval) + _oi
                     if _gidx >= len(_dopts):
                         break
                     _opt, _val = _dopts[_gidx]
@@ -2402,7 +2404,7 @@ class UiMixin:
                     _bar_y = _drect.bottom + int((_list_h - _bar_h) * (_sval / _smax))
                     pygame.draw.rect(self.screen, (70, 78, 96), (_bar_x, _drect.bottom, _bar_w, _list_h), border_radius=4)
                     pygame.draw.rect(self.screen, (150, 170, 200), (_bar_x, _bar_y, _bar_w, _bar_h), border_radius=4)
-                _sc[_dkey] = _sval
+                _sc[_dkey] = int(_sval)
 
     def _set_room_mode(self, g, idx):
         try:

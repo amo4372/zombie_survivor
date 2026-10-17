@@ -80,7 +80,12 @@ check("测速选最快 pick_fastest_mirror", "def pick_fastest_mirror" in src_up
 check("download_update 下载前测速", "pick_fastest_mirror(download_url)" in src_up and 'UPDATE_STATE["mirror"]' in src_up)
 check("UPDATE_STATE 记录所选节点/延迟", '"mirror": ""' in src_up and '"mirror_latency": 0.0' in src_up)
 
-print("== 0) v2.3.2/2.3.3 崩溃修复 ==")
+print("== 0) v2.3.2~2.3.4 崩溃修复 ==")
+check("下拉滚动值强制 int（Android float 坐标导致 _dopts[float]）",
+      "_sval = int(_sc.get(_dkey, 0) or 0)" in src_draw
+      and "_gidx = int(_sval) + _oi" in src_draw
+      and "_sc[_dkey] = int(_sval)" in src_draw)
+
 check("房间页定义 sh（安卓端 NameError 根因）",
       "sh = self.game.scaled_height  # v2.3.2" in src_draw)
 check("下拉裁剪用 clip()（兼容缺失 clip_ip 的 Android pygame 构建）",
