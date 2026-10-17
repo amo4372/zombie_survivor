@@ -80,10 +80,13 @@ check("测速选最快 pick_fastest_mirror", "def pick_fastest_mirror" in src_up
 check("download_update 下载前测速", "pick_fastest_mirror(download_url)" in src_up and 'UPDATE_STATE["mirror"]' in src_up)
 check("UPDATE_STATE 记录所选节点/延迟", '"mirror": ""' in src_up and '"mirror_latency": 0.0' in src_up)
 
-print("== 0) v2.3.2 崩溃修复 ==")
+print("== 0) v2.3.2/2.3.3 崩溃修复 ==")
 check("房间页定义 sh（安卓端 NameError 根因）",
       "sh = self.game.scaled_height  # v2.3.2" in src_draw)
-check("scrap 复制前检查模块存在性", "hasattr(pygame, 'scrap') and pygame.scrap is not None" in src_gc)
+check("下拉裁剪用 clip()（兼容缺失 clip_ip 的 Android pygame 构建）",
+      "_clip = _clip.clip(pygame.Rect(0, 0, sw, sh))" in src_draw and ".clip_ip(" not in src_draw)
+check("scrap 用 find_spec 探测（避免 import RuntimeWarning）",
+      'find_spec("pygame.scrap")' in src_gc and "hasattr(pygame, 'scrap')" not in src_gc)
 
 print("== 6) 下拉栏图层/滚动 ==")
 check("展开下拉统一末尾绘制（图层最上层）", "_dd_pending" in src_draw and "for _dkey, _drect, _dopts, _dset, _dcur in _dd_pending:" in src_draw)

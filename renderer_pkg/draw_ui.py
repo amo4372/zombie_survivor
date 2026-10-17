@@ -2379,8 +2379,9 @@ class UiMixin:
                         if not _list_rect.inflate(0, int(10 * scale)).collidepoint(_te["pos"]):
                             g.dd_drag = None
                 # 绘制选项（裁剪到屏幕）
+                # v2.3.3：用 clip() 返回新 Rect——clip_ip 在部分 Android pygame 构建缺失
                 _clip = pygame.Rect(_drect.x, _drect.bottom, _list_w, _list_h)
-                _clip.clip_ip(pygame.Rect(0, 0, sw, sh))
+                _clip = _clip.clip(pygame.Rect(0, 0, sw, sh))
                 old_clip = self.screen.get_clip()
                 self.screen.set_clip(_clip)
                 for _oi in range(_max_rows):

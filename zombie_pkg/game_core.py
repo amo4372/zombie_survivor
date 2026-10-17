@@ -1310,12 +1310,15 @@ class GameCore:
         info = getattr(self, "error_ask_pending", {}) or {}
         txt = "错误: " + str(info.get("message", "")) + "\n" + str(info.get("trace", ""))
         copied = False
-        # v2.3.2：Android Pydroid 无 pygame.scrap 模块——先检查存在性，避免 RuntimeWarning
+        # v2.3.3：Android 无 pygame.scrap——用 find_spec 探测，
+        # 属性访问/直接 import 都会触发 "No module named 'pygame.scrap'" RuntimeWarning
         try:
-            if hasattr(pygame, 'scrap') and pygame.scrap is not None:
-                pygame.scrap.init()
-                pygame.scrap.set_mode(pygame.SCRAP_CLIPBOARD)
-                pygame.scrap.put(pygame.SCRAP_TEXT, txt.encode("utf-8"))
+            import importlib.util
+            if importlib.util.find_spec("pygame.scrap") is not None:
+                import pygame.scrap as _scrap
+                _scrap.init()
+                _scrap.set_mode(_scrap.SCRAP_CLIPBOARD)
+                _scrap.put(_scrap.SCRAP_TEXT, txt.encode("utf-8"))
                 copied = True
         except Exception:
             copied = False
