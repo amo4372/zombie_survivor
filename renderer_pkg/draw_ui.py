@@ -2087,6 +2087,7 @@ class UiMixin:
         self.screen.fill(VOID_BLACK)
         scale = self.game.scale
         sw = self.game.scaled_width
+        sh = self.game.scaled_height  # v2.3.2：下拉滚动计算曾引用未定义的 sh（安卓端 NameError）
         g = self.game
         _ups = [te for te in getattr(g, 'touch_events', [])
                 if te.get("type") == "up" and te.get("pos") is not None]

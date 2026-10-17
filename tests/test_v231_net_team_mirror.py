@@ -80,6 +80,11 @@ check("测速选最快 pick_fastest_mirror", "def pick_fastest_mirror" in src_up
 check("download_update 下载前测速", "pick_fastest_mirror(download_url)" in src_up and 'UPDATE_STATE["mirror"]' in src_up)
 check("UPDATE_STATE 记录所选节点/延迟", '"mirror": ""' in src_up and '"mirror_latency": 0.0' in src_up)
 
+print("== 0) v2.3.2 崩溃修复 ==")
+check("房间页定义 sh（安卓端 NameError 根因）",
+      "sh = self.game.scaled_height  # v2.3.2" in src_draw)
+check("scrap 复制前检查模块存在性", "hasattr(pygame, 'scrap') and pygame.scrap is not None" in src_gc)
+
 print("== 6) 下拉栏图层/滚动 ==")
 check("展开下拉统一末尾绘制（图层最上层）", "_dd_pending" in src_draw and "for _dkey, _drect, _dopts, _dset, _dcur in _dd_pending:" in src_draw)
 check("下拉带滚动条", "_bar_x" in src_draw and "_bar_w" in src_draw)
