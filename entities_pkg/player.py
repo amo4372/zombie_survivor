@@ -99,6 +99,7 @@ class Player:
 
         # 升级选择状态
         self.pending_level_up = False
+        self.pending_levels = 0  # v2.5.2 待结算升级次数（多级连升逐级弹卡）
         self.skill_cards = []
         self.skill_slot_count = 3  # 升级时可选技能卡数量
 
@@ -452,9 +453,12 @@ class Player:
         self.skill_tree.skill_points += 1
         self.max_hp += 10
         self.hp = min(self.hp + 20, self.max_hp)
-        # 触发技能选择
+        # v2.5.2 多级连升逐级弹卡：累计待结算次数，仅首次生成卡片；
+        # 选卡确认后若还有剩余级数则再次弹卡（玩家升级属性已全部结算）
+        self.pending_levels = getattr(self, 'pending_levels', 0) + 1
         self.pending_level_up = True
-        self.skill_cards = self.skill_tree.get_random_skill_cards(getattr(self, 'skill_slot_count', 3))
+        if self.pending_levels == 1:
+            self.skill_cards = self.skill_tree.get_random_skill_cards(getattr(self, 'skill_slot_count', 3))
         # 解锁全局技能树（三选一出现过就算）
         try:
             from skill_tree_view import skill_tree_unlock_manager

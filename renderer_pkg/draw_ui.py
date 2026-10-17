@@ -3512,7 +3512,7 @@ class UiMixin:
         y = view_top - self.game.ach_scroll_offset
 
         # 动态遍历所有分组，使用自定义排序顺序
-        custom_order = ["战斗", "生存", "技能武器", "结局挑战", "隐藏", "其他"]
+        custom_order = ["战斗", "生存", "技能武器", "结局挑战", "争分夺秒", "地狱", "多人", "隐藏", "其他"]
         all_groups = list(grouped.keys())
         # 按自定义顺序排序，未在列表中的分组排在最后
         group_order = sorted(all_groups, key=lambda g: custom_order.index(g) if g in custom_order else len(custom_order))
@@ -3535,6 +3535,35 @@ class UiMixin:
                 text_str = prefix + desc
                 surf = self.game.font.render(text_str, True, col)
                 self.screen.blit(surf, (int(40*scale), y))
+                # ===== v2.5.2 成就详细文本（仿剧情资料库：小字说明，换行，不挤进度条）=====
+                detail = ach_data.get("detail") or ""
+                detail_start = y + int(18 * scale)
+                if detail:
+                    _dv = int(13 * scale)
+                    _dc = (200, 200, 210) if unlocked else (120, 120, 130)
+                    _x0 = int(48 * scale)
+                    _maxw = int(560 * scale)
+                    for _li, _ln in enumerate(detail.split("\n")):
+                        _seg = _ln
+                        while self.game.font_small.size(_seg)[0] > _maxw and len(_seg) > 1:
+                            _cut = 0
+                            _acc = ""
+                            for _ch in _seg:
+                                if self.game.font_small.size(_acc + _ch)[0] > _maxw:
+                                    break
+                                _acc += _ch
+                                _cut += 1
+                            if _cut <= 0:
+                                _cut = max(1, len(_seg) - 1)
+                            _part = _seg[:_cut]
+                            _ds = self.game.font_small.render(_part, True, _dc)
+                            self.screen.blit(_ds, (_x0, detail_start + _li * _dv))
+                            _li += 1
+                            _seg = _seg[_cut:]
+                        if _seg:
+                            _ds = self.game.font_small.render(_seg, True, _dc)
+                            self.screen.blit(_ds, (_x0, detail_start + _li * _dv))
+                    y += int(14 * scale) + (_li + 1) * _dv - int(18 * scale)
                 # ===== 成就进度条 =====
                 progress = self.game.records.get_achievement_progress(ach_key)
                 if progress:

@@ -606,14 +606,14 @@ class PlayMixin:
         except Exception:
             pass
 
-        # 绘制创伤效果（屏幕边缘血溅）
-        self._draw_trauma_effect()
+        # 绘制创伤效果（屏幕边缘血溅）—— v2.5.2 双人按视口玩家渲染（修复仅P1显示）
+        self._draw_trauma_effect(player)
 
         # 绘制吸血屏幕效果
         self._draw_lifesteal_effect()
 
         # 绘制Buff屏幕效果（回血发绿、狂暴动态模糊等）
-        self._draw_buff_screen_effect()
+        self._draw_buff_screen_effect(player)
 
         # 绘制枪口闪光
         self._draw_muzzle_flash()
@@ -885,6 +885,20 @@ class PlayMixin:
         time_bg = pygame.Rect(time_rect.x - 10, time_rect.y - 5, time_rect.width + 20, time_rect.height + 10)
         pygame.draw.rect(self.screen, (*CHARCOAL[:3], 200), time_bg, border_radius=5)
         self.screen.blit(time_surf, time_rect)
+
+        # v2.5.2 单人争分夺秒加时画面效果（计时器下方 "+N 秒"，与双人分屏一致）
+        try:
+            if self.game.config.game_mode == GameMode.TIMED:
+                _gain = getattr(self.game, 'race_last_gain', 0)
+                _gt = getattr(self.game, 'race_gain_timer', 0.0)
+                if _gain > 0 and _gt > 0:
+                    _alpha = min(1.0, _gt / 1.4)
+                    _gp = int(255 * _alpha)
+                    _gtxt = self.game.font_small.render(f"+{int(_gain)} 秒", True, (255, int(200 * _alpha), 40))
+                    _gtxt.set_alpha(_gp)
+                    self.screen.blit(_gtxt, _gtxt.get_rect(midtop=(sw // 2, time_rect.bottom + int(6 * scale))))
+        except Exception:
+            pass
 
         # 绘制glitch报错文本（如果存在）
         if self.game.config.game_mode != GameMode.STORY:
@@ -1215,9 +1229,9 @@ class PlayMixin:
             self.screen.blit(surf, (tip_x + pad, cy))
             cy += surf.get_height() + 2
 
-    def _draw_trauma_effect(self):
-        """绘制创伤效果 - 高性能版：预渲染缓存+血渍池+简化流淌"""
-        player = self.game.player
+    def _draw_trauma_effect(self, player=None):
+        """绘制创伤效果 - 高性能版：预渲染缓存+血渍池+简化流淌（v2.5.2 双人按视口玩家）"""
+        player = player or self.game.player
         if not player:
             return
 
@@ -1239,10 +1253,23 @@ class PlayMixin:
             return
 
         # === 1. 缓存边缘渐变（只在trauma变化超过阈值时重建）===
+        # v2.5.2 高伤害卡顿加固：重建节流（trauma 档位变化≥2 才重建，且 0.5s 内至多一次）
+        _now_t = self.game.clock.get_time() if hasattr(self.game, 'clock') else 0
+        if not hasattr(self, '_trauma_rebuild_time'):
+            self._trauma_rebuild_time = 0
+        _rebuild = False
         cache_key = (int(effective_trauma * 10), sw, sh)
         if not hasattr(self, '_trauma_cache_key') or self._trauma_cache_key != cache_key:
+            _delta_key = abs((int(effective_trauma * 10) if hasattr(self, '_trauma_cache_key') else 99) - int(effective_trauma * 10))
+            _elapsed = _now_t - self._trauma_rebuild_time
+            if _delta_key >= 2 or not hasattr(self, '_trauma_cache_key'):
+                _rebuild = True
+            elif _elapsed < 0:  # clock 不可用时按需重建
+                _rebuild = True
+        if _rebuild:
+            self._trauma_rebuild_time = _now_t
             self._trauma_cache_key = cache_key
-            edge_width = max(1, int(100 * scale * effective_trauma))
+            edge_width = max(1, min(60, int(100 * scale * effective_trauma)))
             alpha = int(200 * effective_trauma)
             # 一次性创建四边渐变
             trauma_surf = pygame.Surface((sw, sh), pygame.SRCALPHA)
@@ -1273,7 +1300,8 @@ class PlayMixin:
         trauma_delta = trauma - self._last_trauma
         self._last_trauma = trauma
         if trauma_delta > 0.05:
-            num_new = min(int(trauma_delta * 15) + 1, MAX_BLOOD - len(self.game.screen_blood))
+            # v2.5.2 高伤害卡顿加固：每次至多新增3个血渍（大伤害瞬间曾一次性爆量）
+            num_new = min(3, int(trauma_delta * 15) + 1, MAX_BLOOD - len(self.game.screen_blood))
             for _ in range(max(0, num_new)):
                 sx = random.randint(0, sw)
                 sy = random.randint(0, int(sh * 0.55))
@@ -1382,9 +1410,9 @@ class PlayMixin:
             self._lifesteal_cache[cache_key] = surf
         self.screen.blit(self._lifesteal_cache[cache_key], (0, 0))
 
-    def _draw_buff_screen_effect(self):
-        """绘制Buff屏幕效果：回血发绿、狂暴动态模糊、燃烧热浪等"""
-        player = self.game.player
+    def _draw_buff_screen_effect(self, player=None):
+        """绘制Buff屏幕效果：回血发绿、狂暴动态模糊、燃烧热浪等（v2.5.2 双人按视口玩家）"""
+        player = player or self.game.player
         if not player or not hasattr(player, 'buff_manager'):
             return
         if not self.game.config.render_buff_effects:

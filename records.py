@@ -182,7 +182,8 @@ class GameRecords:
                 "horde_survivor_20": {"unlocked": False, "desc": "累计挺过20波尸潮", "date": None, "group":"生存", "hidden":False},
                 "untouchable": {"unlocked": False, "desc": "单局不受伤通关", "date": None, "group":"生存", "hidden":False, "coef_threshold": 0},
                 "iron_will": {"unlocked": False, "desc": "地狱难度存活8分钟以上", "date": None, "group":"生存", "hidden":False, "coef_threshold": 2.5},
-                "speedrunner": {"unlocked": False, "desc": "争分夺秒模式10分钟内完成挑战", "date": None, "group":"生存", "hidden":False, "coef_threshold": 0},
+                "speedrunner": {"unlocked": False, "desc": "争分夺秒模式10分钟内完成挑战", "date": None, "group":"生存", "hidden":False, "coef_threshold": 0,
+                               "detail": "在争分夺秒模式中，从开局到结算（主动结算或倒计时结束）在10分钟内完成挑战。速战速决，不恋战也是一种战术。"},
                 
                 # 技能武器
                 "skill_master": {"unlocked": False, "desc": "单局升级技能20次", "date": None, "group":"技能武器", "hidden":False, "coef_threshold": 0},
@@ -211,12 +212,40 @@ class GameRecords:
                 "burning_survivor": {"unlocked": False, "desc": "浴火重生：在燃烧状态下存活60秒", "date": None, "group":"隐藏", "hidden":True, "coef_threshold": 0},
                 "bleeding_warrior": {"unlocked": False, "desc": "浴血奋战：在流血状态下击杀20个敌人", "date": None, "group":"隐藏", "hidden":True, "coef_threshold": 0},
                 # 隐藏成就示例
-                "secret_zombie": {"unlocked": False, "desc": "发现秘密僵尸", "date": None, "group":"隐藏", "hidden":True, "coef_threshold": 0},
+                "secret_zombie": {"unlocked": False, "desc": "发现秘密僵尸", "date": None, "group":"隐藏", "hidden":True, "coef_threshold": 0,
+                               "detail": "在地图的某个隐秘角落，藏着一只与众不同的僵尸。它不会主动攻击你，但当你与它对视，会解锁一段隐藏剧情。多逛逛地图的边角，也许会有意外发现。"},
                 # === 争分夺秒成就（v2.2.0）===
                 "race_first_win": {"unlocked": False, "desc": "争分夺秒首次完成挑战", "date": None, "group":"争分夺秒", "hidden":False, "coef_threshold": 0},
                 "race_5_wins": {"unlocked": False, "desc": "争分夺秒累计完成5次挑战", "date": None, "group":"争分夺秒", "hidden":False, "coef_threshold": 0},
                 "race_100_kills": {"unlocked": False, "desc": "争分夺秒单局击杀100个敌人", "date": None, "group":"争分夺秒", "hidden":False, "coef_threshold": 0},
                 "race_30k_score": {"unlocked": False, "desc": "争分夺秒单局得分达到30000", "date": None, "group":"争分夺秒", "hidden":False, "coef_threshold": 0},
+                # === 地狱难度成就（v2.5.2）===
+                "hell_clear": {"unlocked": False, "desc": "地狱难度通关任意地图", "date": None, "group":"地狱", "hidden":False, "coef_threshold": 2.5,
+                               "detail": "在最高难度的地狱模式中，面对成倍血量与伤害的尸群仍然坚持到通关。这是对操作与配装的全方位考验，只有真正的幸存者才能做到。"},
+                "hell_boss": {"unlocked": False, "desc": "地狱难度击败任意Boss", "date": None, "group":"地狱", "hidden":False, "coef_threshold": 2.0,
+                              "detail": "地狱难度下 Boss 的血量与技能强度大幅提升。在弹幕、召唤与软性限制圈的夹击中找到输出窗口并完成击杀。"},
+                "hell_survivor": {"unlocked": False, "desc": "地狱难度存活3分钟", "date": None, "group":"地狱", "hidden":False, "coef_threshold": 1.5,
+                                  "detail": "地狱难度下普通僵尸的伤害都足以致命。在资源匮乏的开局前3分钟活下来，意味着你掌握了走位、格挡与道具利用的精髓。"},
+                # === 争分夺秒进阶成就（v2.5.2）===
+                "race_10_wins": {"unlocked": False, "desc": "争分夺秒累计完成10次挑战", "date": None, "group":"争分夺秒", "hidden":False, "coef_threshold": 0,
+                                 "detail": "在争分夺秒模式中累计完成（主动结算或倒计时结束）10次挑战。每一次结算都会把最高积分写入排行榜。"},
+                "race_200_kills": {"unlocked": False, "desc": "争分夺秒单局击杀200个敌人", "date": None, "group":"争分夺秒", "hidden":False, "coef_threshold": 0,
+                                   "detail": "争分夺秒单局内击杀200个敌人。合理安排武器轮换与技能冷却，让尸潮成为你的加分机器。"},
+                "race_60k_score": {"unlocked": False, "desc": "争分夺秒单局得分达到60000", "date": None, "group":"争分夺秒", "hidden":False, "coef_threshold": 0,
+                                   "detail": "争分夺秒单局得分突破60000。击杀不同敌人获得不同分数，保持连杀节奏才能冲击高分榜。"},
+                # === 多人模式成就（v2.5.2）===
+                "mp_first_win": {"unlocked": False, "desc": "多人模式首次取得胜利", "date": None, "group":"多人", "hidden":False, "coef_threshold": 0,
+                                 "detail": "在任何多人模式（合作或对战）中首次获胜。与队友并肩作战，或在一场阵营对决中活到最后。"},
+                "mp_team_win": {"unlocked": False, "desc": "合作模式通关一场战斗", "date": None, "group":"多人", "hidden":False, "coef_threshold": 0,
+                                "detail": "合作（nPvE）模式下与队友配合通关任意一场战斗。救援倒地队友、共享资源，才能走得更远。"},
+                "mp_pvp_win": {"unlocked": False, "desc": "PvP 对战阵营获胜", "date": None, "group":"多人", "hidden":False, "coef_threshold": 0,
+                               "detail": "在 PvP 或 PvPvE 模式中，让己方阵营成为最后一个存活/积分最高的阵营。注意敌方位置揭示的窗口期。"},
+                "mp_rescue_10": {"unlocked": False, "desc": "累计救援队友10次", "date": None, "group":"多人", "hidden":False, "coef_threshold": 0,
+                                 "detail": "在多人模式中累计将倒地队友救起10次。救援会被怪物打断，先清场再施救是铁律。"},
+                "mp_10_games": {"unlocked": False, "desc": "累计游玩10局多人模式", "date": None, "group":"多人", "hidden":False, "coef_threshold": 0,
+                                "detail": "累计参与10局多人模式（同屏或联机均可）。每局都会计入统计。"},
+                "mp_vehicle": {"unlocked": False, "desc": "多人模式乘坐队友载具", "date": None, "group":"多人", "hidden":False, "coef_threshold": 0,
+                               "detail": "靠近同阵营队友召唤的大运载具，按下技能按钮上车成为乘客。在载具上你仍可射击与使用技能。"},
             },
             # === 杂项统计 ===
             "total_shield_blocks": 0,
@@ -233,6 +262,12 @@ class GameRecords:
             "race_best_score": 0,
             "race_wins": 0,
             "race_total_runs": 0,
+            # === 多人模式统计（v2.5.2）===
+            "mp_games": 0,
+            "mp_wins": 0,
+            "mp_pvp_wins": 0,
+            "mp_rescues": 0,
+            "mp_rides": 0,
             # === 局外武器解锁/升级：{weapon_name: {"unlocked": bool, "level": int}} ===
             "owned_weapons": {},
             # === 角色解锁/升级：{char_name: {"unlocked": bool, "level": int}} ===
@@ -266,9 +301,9 @@ class GameRecords:
                 else:
                     old = self.data["achievements"][ach_key]
                     # 只补缺失字段，保留旧存档unlocked、date、desc
-                    for fill_k in ["group","hidden","coef_threshold"]:
+                    for fill_k in ["group","hidden","coef_threshold","detail"]:
                         if fill_k not in old:
-                            old[fill_k] = def_data.get(fill_k, 0)
+                            old[fill_k] = def_data.get(fill_k, "")
 
         self._save()
 
@@ -359,6 +394,17 @@ class GameRecords:
             "race_5_wins": (self.data.get("race_wins", 0), 5),
             "race_100_kills": (max((e.get("kills", 0) for e in self.data.get("race_leaderboard", [])), default=0), 100),
             "race_30k_score": (max((e.get("score", 0) for e in self.data.get("race_leaderboard", [])), default=0), 30000),
+            # v2.5.2 争分夺秒/多人/地狱进度
+            "race_10_wins": (self.data.get("race_wins", 0), 10),
+            "race_200_kills": (max((e.get("kills", 0) for e in self.data.get("race_leaderboard", [])), default=0), 200),
+            "race_60k_score": (max((e.get("score", 0) for e in self.data.get("race_leaderboard", [])), default=0), 60000),
+            "mp_10_games": (self.data.get("mp_games", 0), 10),
+            "mp_first_win": (self.data.get("mp_wins", 0), 1),
+            "mp_team_win": (self.data.get("mp_wins", 0), 1),
+            "mp_pvp_win": (self.data.get("mp_pvp_wins", 0), 1),
+            "mp_rescue_10": (self.data.get("mp_rescues", 0), 10),
+            "mp_vehicle": (self.data.get("mp_rides", 0), 1),
+            "hell_clear": (0, 1), "hell_boss": (0, 1), "hell_survivor": (0, 1),
         }
         return progress_map.get(key, None)
 
@@ -556,6 +602,17 @@ class GameRecords:
             unlock("dragon_hunter")
         if _kbt.get("boss_xiang", 0) >= 5:
             unlock("xiang_hunter")
+        # v2.5.2 地狱难度成就（本局 difficulty 来自 session data）
+        _hell_game = (d.get("difficulty") == "地狱")
+        if _hell_game:
+            _d_kbt = d.get("kills_by_type", {}) or {}
+            _boss_now = _d_kbt.get("boss_long", 0) + _d_kbt.get("boss_xiang", 0)
+            if d.get("ending") is not None or d.get("victory", False):
+                unlock("hell_clear")
+            if _boss_now > 0:
+                unlock("hell_boss")
+            if d.get("time_survived", 0) >= 180:
+                unlock("hell_survivor")
         # 结局
         ending = d.get("ending")
         if ending == "perfect":
@@ -601,10 +658,15 @@ class GameRecords:
             unlock("gunner")
         if self.data.get("total_damage_taken", 0) >= 200000:
             unlock("tough_guy")
-        if d.get("mode") == "timed" and d.get("time_survived",0) <=600 and not d.get("died",True):
+        # v2.5.2 修复 speedrunner 永不触发：session data 使用 game_mode="TIMED"，d.get("mode") 恒为空
+        _gm = (d.get("game_mode") or d.get("mode") or "").upper()
+        if _gm == "TIMED" and d.get("time_survived", 0) <= 600 and not d.get("died", True):
             unlock("speedrunner")
         if d.get("difficulty") == "地狱" and d.get("time_survived",0)>=480:
             unlock("iron_will")
+        # v2.5.2 修复 no_skill_challenge 触发缺失（session 已有 skills_used 计数）
+        if d.get("skills_used", 0) == 0 and d.get("time_survived", 0) >= 600:
+            unlock("no_skill_challenge")
         # === 新成就检测 ===
         if d.get("turrets_deployed", 0) >= 10:
             unlock("turret_master")
@@ -750,6 +812,36 @@ class GameRecords:
                 _unlock("race_100_kills")
             if score >= 30000:
                 _unlock("race_30k_score")
+            # v2.5.2 争分夺秒进阶成就
+            if victory and self.data.get("race_wins", 0) >= 10:
+                _unlock("race_10_wins")
+            if kills >= 200:
+                _unlock("race_200_kills")
+            if score >= 60000:
+                _unlock("race_60k_score")
+        except Exception:
+            pass
+
+    def add_mp_stat(self, stat_name, amount=1):
+        """v2.5.2 多人模式统计累计 + 对应成就即时解锁"""
+        try:
+            key_map = {
+                "mp_games": ("mp_10_games", 10),
+                "mp_wins": ("mp_first_win", 1),
+                "mp_pvp_wins": ("mp_pvp_win", 1),
+                "mp_rescues": ("mp_rescue_10", 10),
+                "mp_rides": ("mp_vehicle", 1),
+            }
+            if stat_name not in key_map:
+                return
+            self.data[stat_name] = self.data.get(stat_name, 0) + amount
+            ach_key, need = key_map[stat_name]
+            ach = self.data["achievements"]
+            item = ach.get(ach_key)
+            if item and not item.get("unlocked", False) and self.data.get(stat_name, 0) >= need:
+                item["unlocked"] = True
+                item["date"] = datetime.datetime.now().isoformat()
+            self._save()
         except Exception:
             pass
 

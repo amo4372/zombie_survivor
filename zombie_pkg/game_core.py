@@ -891,6 +891,15 @@ class GameCore:
             self.grapple_aiming = False
 
             self.state = GameState.PLAYING
+            # v2.5.2 敌方位置揭示：新局重置周期（防旧局残留导致开局即处于闪烁窗口"一直显示"）
+            self._pvp_reveal_cycle = 0.0
+            self.pvp_reveal_active = False
+            # v2.5.2 多人局数统计（成就 mp_10_games）
+            try:
+                if self.is_multiplayer_active() and getattr(self, 'records', None) is not None:
+                    self.records.add_mp_stat("mp_games")
+            except Exception:
+                pass
             self._start_intro_dialogue()
             logger.info("游戏状态切换到PLAYING")
         except Exception as e:
@@ -1037,6 +1046,82 @@ class GameCore:
         except Exception:
             return False
 
+    # ==================== v2.5.2 玩家速度缓存（僵尸投掷物预测轨迹用） ====================
+    def _update_player_vel_cache(self, dt):
+        try:
+            if not hasattr(self, '_vel_cache'):
+                self._vel_cache = {}
+                self._vel_prev = {}
+            cur = {}
+            for _p in self._all_players():
+                _pid = id(_p)
+                _ox, _oy = self._vel_prev.get(_pid, (_p.x, _p.y))
+                _vx = (_p.x - _ox) / max(dt, 0.001)
+                _vy = (_p.y - _oy) / max(dt, 0.001)
+                cur[_pid] = [_vx, _vy]
+                self._vel_prev[_pid] = (_p.x, _p.y)
+            self._vel_cache = cur
+        except Exception:
+            pass
+
+    def _player_velocity(self, player):
+        try:
+            return self._vel_cache.get(id(player), [0.0, 0.0])
+        except Exception:
+            return [0.0, 0.0]
+
+    # ==================== v2.5.2 刷怪中心 ====================
+    def _spawn_center_player(self):
+        """多人刷怪中心：最近活跃玩家（非倒地/非升级暂停），单人返回 self.player"""
+        try:
+            if not self.is_multiplayer_active():
+                return self.player
+            best, best_d = self.player, 1e18
+            for _p in self._all_players():
+                if getattr(_p, 'downed', False) or getattr(_p, 'upgrade_paused', False):
+                    continue
+                _d = (_p.x - self.player.x) ** 2 + (_p.y - self.player.y) ** 2
+                if _d < best_d:
+                    best_d = _d
+                    best = _p
+            return best
+        except Exception:
+            return self.player
+
+    # ==================== v2.5.2 钩爪玩家锁定辅助 ====================
+    def _downed_teammates_of(self, player):
+        """同阵营倒地玩家（可被钩爪勾取救援，优先级最高）"""
+        try:
+            _res = []
+            _pv = bool(getattr(self.config, 'pvp_enabled', False))
+            _t = getattr(player, 'team_id', 0)
+            for _p in self._all_players():
+                if _p is player or not getattr(_p, 'alive', True) or not getattr(_p, 'downed', False):
+                    continue
+                if _pv and getattr(_p, 'team_id', 1) != _t:
+                    continue  # PvP：仅同阵营
+                _res.append(_p)
+            return _res
+        except Exception:
+            return []
+
+    def _enemy_players_of(self, player):
+        """异阵营存活玩家（可被钩爪勾取+QTE 挣脱）"""
+        try:
+            if not getattr(self.config, 'pvp_enabled', False):
+                return []
+            _t = getattr(player, 'team_id', 0)
+            _res = []
+            for _p in self._all_players():
+                if _p is player or not getattr(_p, 'alive', True) or getattr(_p, 'downed', False):
+                    continue
+                if getattr(_p, 'team_id', 1) == _t:
+                    continue
+                _res.append(_p)
+            return _res
+        except Exception:
+            return []
+
     # ==================== v2.5.1 阵营载具乘坐 ====================
     def _find_board_candidate(self, player):
         """找玩家附近（<140px）同阵营存活载具：合作模式全队可坐，PvP 仅同阵营"""
@@ -1077,6 +1162,12 @@ class GameCore:
                 self.particles.spawn_explosion(player.x, player.y, (0, 190, 255), 16)
                 self.floating_texts.append(FloatingText(
                     player.x, player.y - 50, "登上载具!", color=(0, 190, 255), lifetime=1.2))
+                # v2.5.2 载具乘坐统计（成就 mp_vehicle）
+                try:
+                    if getattr(self, 'records', None) is not None:
+                        self.records.add_mp_stat("mp_rides")
+                except Exception:
+                    pass
                 return True
             return False
         except Exception:
@@ -1235,6 +1326,7 @@ class GameCore:
         self._update_airstrikes(dt)
         self._update_melee_attack(dt)
         self._update_grenades(dt)
+        self._update_player_vel_cache(dt)
         self._update_enemy_throwables(dt)
         self._update_fire_zones(dt)
         self._update_smoke_zones(dt)
@@ -1252,8 +1344,8 @@ class GameCore:
                     self._pvp_reveal_cycle = 0.0
                 self._pvp_reveal_cycle += dt
                 _c = self._pvp_reveal_cycle
-                # 开局 0-8s 全显；之后 45s 周期内最后 3s 闪烁
-                self.pvp_reveal_active = _c <= 8.0 or (_c % 45.0) > 42.0
+                # 开局 0-3s 全显；之后 45s 周期内最后 3s 闪烁（v2.5.2 缩短开局全显防"一直显示"观感）
+                self.pvp_reveal_active = _c <= 3.0 or (_c % 45.0) > 42.0
             else:
                 self.pvp_reveal_active = False
         except Exception:

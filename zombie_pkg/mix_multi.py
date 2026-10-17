@@ -803,7 +803,9 @@ class MultiplayerMixin:
                     pass
             rg.update_grapple_lock(p2.x, p2.y, self.enemies,
                                    items=getattr(self.world, 'items', None),
-                                   aim_angle=_a_ang, aim_dist=_a_dist)
+                                   aim_angle=_a_ang, aim_dist=_a_dist,
+                                   players_down=self._downed_teammates_of(p2),
+                                   players_enemy=self._enemy_players_of(p2))
         else:
             rg.grapple_aiming = False
             if not rg.grapple_active:

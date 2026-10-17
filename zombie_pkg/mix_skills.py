@@ -1225,6 +1225,22 @@ class SkillsMixin:
         target_dist = dist
         search_radius = 30  # 搜索半径
 
+        # v2.5.2 最高优先级：路径上的同阵营倒地队友（勾取救援，拉回身边）
+        try:
+            for _pd in self._downed_teammates_of(self.player):
+                _ex = _pd.x - self.player.x
+                _ey = _pd.y - self.player.y
+                _pr = _ex * dir_x + _ey * dir_y
+                if _pr < 0 or _pr > dist:
+                    continue
+                _px = _ex - _pr * dir_x
+                _py = _ey - _pr * dir_y
+                if math.hypot(_px, _py) < search_radius + 26 and _pr < target_dist:
+                    target = _pd
+                    target_dist = _pr
+        except Exception:
+            pass
+
         for enemy in self.enemies:
             if not enemy.alive:
                 continue
@@ -1380,12 +1396,43 @@ class SkillsMixin:
             self._check_combos()
         except Exception:
             pass
-        player.pending_level_up = False
-        player.skill_cards = []
-        self.pending_upgrade_for = None
+        # v2.5.2 多级连升逐级弹卡：还有剩余级数则重新生成卡片再次触发选卡
+        _left = getattr(player, 'pending_levels', 0) - 1
+        player.pending_levels = max(0, _left)
+        if _left > 0:
+            player.skill_cards = player.skill_tree.get_random_skill_cards(getattr(player, 'skill_slot_count', 3))
+            player.pending_level_up = True
+        else:
+            player.pending_level_up = False
+            player.skill_cards = []
+            self.pending_upgrade_for = None
         # v2.1.3：双人 per-player 升级结束 → 恢复该玩家（重新可被怪物锁定/可移动）
         if getattr(self, '_upgrade_pause_player', None):
             self._upgrade_pause_player = None
             player.upgrade_paused = False
+        if _left > 0:
+            # 还有下一级：多人 per-player 立即重新进入暂停选卡（恢复会在下一级确认后再执行）
+            _tag = "P1" if player is self.player else ("P2" if player is getattr(self, 'player2', None) else "P3")
+            self._upgrade_pause_player = _tag
+            player.upgrade_paused = True
+        # v2.5.2 每次技能卡选择完毕：对玩家周围一定范围僵尸眩晕+击退（选卡保底防围死）
+        try:
+            _sr = 260.0
+            for _e in list(self.enemies):
+                if not getattr(_e, 'alive', False):
+                    continue
+                _dx = _e.x - player.x
+                _dy = _e.y - player.y
+                _dd = math.hypot(_dx, _dy)
+                if _dd < _sr:
+                    _e.apply_buff(BuffType.STUN, duration=1.2)
+                    if _dd > 1:
+                        _k = 230.0 / _dd
+                        _e.x += _dx * _k
+                        _e.y += _dy * _k
+                    self.particles.spawn(_e.x, _e.y, (255, 220, 120), 6, size_range=(2, 5),
+                                         velocity_range=(-60, 60), lifetime_range=(0.2, 0.4))
+        except Exception:
+            pass
         self.skill_card_selector.hide()
         self.state = GameState.PLAYING

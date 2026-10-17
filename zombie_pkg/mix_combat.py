@@ -418,6 +418,9 @@ class CombatMixin:
         self.melee_attack_damage = weapon.melee_attack_damage
         self.melee_attack_weapon = weapon
         self.melee_hit_enemies = set()
+        # v2.5.2 修复PvP连续攻击只受一次伤害：连击/快速挥砍时 timer 被重置，
+        # 旧挥砍的 melee_hit_players 永不走到 clear → 后续挥砍跳过玩家。每次挥砍重置。
+        self.melee_hit_players = set()
         
         # 连击系统：增加连击计数
         if not hasattr(self, 'melee_combo_count'):
@@ -495,6 +498,7 @@ class CombatMixin:
                     enemy.x += math.cos(self.melee_attack_angle) * knockback
                     enemy.y += math.sin(self.melee_attack_angle) * knockback
                 enemy._last_hit_team = getattr(self.player, 'team_id', 0)  # v2.4.0 击杀归属阵营
+                enemy._last_hit_player = self.player  # v2.5.2 击杀归属玩家（P2得分计入）
                 enemy.take_damage(damage)
                 self.damage_numbers.append(DamageNumber(enemy.x, enemy.y, int(damage)))
                 self.melee_hit_enemies.add(id(enemy))
@@ -540,9 +544,35 @@ class CombatMixin:
                 self.melee_combo_count = 0
 
     def _spawn_enemy_throwable(self, throw_data):
-        """生成怪物投掷物"""
-        dx = throw_data["target_x"] - throw_data["x"]
-        dy = throw_data["target_y"] - throw_data["y"]
+        """生成怪物投掷物
+        v2.5.2：不再实时追踪玩家，改为发射时预测玩家轨迹固定着落点直线飞出，
+        准度随难度（EASY 低命中 → HELL 高命中）"""
+        # 预测落点：玩家当前速度 * 飞行时间 * 准度 + 低难度随机偏移
+        try:
+            _target = None
+            for _pl in self._all_players():
+                if getattr(_pl, 'downed', False):
+                    continue
+                _d = math.hypot(throw_data["x"] - _pl.x, throw_data["y"] - _pl.y)
+                if _target is None or _d < _target[0]:
+                    _target = (_d, _pl)
+            _tpx, _tpy = throw_data["target_x"], throw_data["target_y"]
+            if _target is not None:
+                _tp = _target[1]
+                _dist = _target[0]
+                _t_flight = max(0.4, _dist / 250.0)
+                _acc = {0: 0.45, 1: 0.7, 2: 0.9, 3: 1.0}.get(getattr(self.config, 'difficulty', 1), 0.7)
+                _pv = self._player_velocity(_tp)
+                _px = _tp.x + _pv[0] * _t_flight * _acc
+                _py = _tp.y + _pv[1] * _t_flight * _acc
+                _off = (1.0 - _acc) * 150.0
+                _tpx = _px + random.uniform(-_off, _off)
+                _tpy = _py + random.uniform(-_off, _off)
+            dx = _tpx - throw_data["x"]
+            dy = _tpy - throw_data["y"]
+        except Exception:
+            dx = throw_data["target_x"] - throw_data["x"]
+            dy = throw_data["target_y"] - throw_data["y"]
         dist = math.hypot(dx, dy)
         if dist > 0:
             speed = 250
@@ -556,9 +586,11 @@ class CombatMixin:
             "x": throw_data["x"], "y": throw_data["y"],
             "vx": vx, "vy": vy,
             "timer": dist / 250 if dist > 0 else 1.0,
-            "target_x": throw_data["target_x"], "target_y": throw_data["target_y"],
+            "target_x": _tpx if 'dx' in dir() or True else throw_data["target_x"],
+            "target_y": _tpy if 'dx' in dir() or True else throw_data["target_y"],
             "damage": throw_data["damage"],
             "height": 0,  # 抛物线高度
             "owner": throw_data.get("owner", "boss"),
+            "predicted": True,
         })
         self.assets.play_sound("grenade_throw")

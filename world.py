@@ -641,12 +641,16 @@ class GameWorld:
         if self.is_position_safe(x, y, size):
             return x, y
 
-        # 螺旋搜索
-        for radius in range(10, max_search_radius + 1, 10):
-            for angle in range(0, 360, 30):
+        # v2.5.2 螺旋搜索减半开销（高伤害击退撞墙时触发，240次全障碍物检测曾致卡顿）
+        for radius in range(12, min(max_search_radius, 150) + 1, 12):
+            for angle in range(0, 360, 45):
                 rad = math.radians(angle)
                 test_x = x + math.cos(rad) * radius
                 test_y = y + math.sin(rad) * radius
+                if self.limited and self.bounds:
+                    _lo, _hi = self.bounds
+                    test_x = max(_lo + size, min(_hi - size, test_x))
+                    test_y = max(_lo + size, min(_hi - size, test_y))
                 if self.is_position_safe(test_x, test_y, size):
                     return test_x, test_y
         return x, y  # 如果找不到，返回原位置

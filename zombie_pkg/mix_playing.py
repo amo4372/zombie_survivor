@@ -266,6 +266,12 @@ class PlayingMixin:
             if rescued:
                 p.downed = False
                 p.alive = True
+                # v2.5.2 救援统计（成就 mp_rescue_10）
+                try:
+                    if getattr(self, 'records', None) is not None:
+                        self.records.add_mp_stat("mp_rescues")
+                except Exception:
+                    pass
                 p.hp = int(p.max_hp * 0.5)
                 p.rescue_progress = 0.0
                 p.last_rescue_time = _now  # 进入救援冷却
@@ -594,7 +600,9 @@ class PlayingMixin:
                 _aim_dist = self._get_skill_max_distance(self.selected_skill) * self.skill_caster.distance_ratio
                 _rg_aim.update_grapple_lock(self.player.x, self.player.y, self.enemies,
                                             items=getattr(self.world, 'items', None),
-                                            aim_angle=_aim_ang, aim_dist=_aim_dist)
+                                            aim_angle=_aim_ang, aim_dist=_aim_dist,
+                                            players_down=self._downed_teammates_of(self.player),
+                                            players_enemy=self._enemy_players_of(self.player))
             else:
                 _rg_aim.grapple_aiming = False
                 if not _rg_aim.grapple_active:
@@ -614,7 +622,9 @@ class PlayingMixin:
                     _aim_t_dist = self._get_skill_max_distance(self.selected_skill) * self.skill_caster.distance_ratio
                     _rg_t.update_grapple_lock(self.player.x, self.player.y, self.enemies,
                                               items=getattr(self.world, 'items', None),
-                                              aim_angle=_aim_t_ang, aim_dist=_aim_t_dist)
+                                              aim_angle=_aim_t_ang, aim_dist=_aim_t_dist,
+                                              players_down=self._downed_teammates_of(self.player),
+                                              players_enemy=self._enemy_players_of(self.player))
                 else:
                     # v2.2.12 修复：释放帧（up 后 is_aiming=False）不得清 locked_target——
                     # 否则"红色锁定"在松开瞬间被清空，钩爪决策拿不到锁定目标导致未勾取。
@@ -879,6 +889,7 @@ class PlayingMixin:
                     self.assets.play_sound("level_up")
                 else:
                     _pl.pending_level_up = False
+                    _pl.pending_levels = 0  # v2.5.2 无可用卡时清空待结算次数
                 break
 
         # 自动射击 / 盾肘击【修改】
@@ -920,16 +931,55 @@ class PlayingMixin:
                 rune_dmg_mult = 1.0 + getattr(self, 'rune_buffs', {}).get("damage", 0)
                 trigger_hook(HOOK_PLAYER_FIRE, weapon, self.player)
                 _fire_mult = self.player.damage_mult * self.player.damage_boost_mult * self.player.buff_manager.get_damage_mult() * rune_dmg_mult * self.player.damage_multiplier
-                # v2.5.0 近战武器（死神镰刀等）吃近战 buff：MELEE_DAMAGE 技能加成
-                if getattr(weapon, "is_scythe", False) or getattr(weapon, "is_melee", False):
-                    _melee_dmg_skill = self.player.skill_tree.get_skill(SkillType.MELEE_DAMAGE) if getattr(self.player, 'skill_tree', None) else None
+                # v2.5.2 近战武器（死神镰刀等）吃全部近战系列技能：
+                # MELEE_DAMAGE / BERSERKER / COMBO_MASTER 并入火力乘区；
+                # MELEE_SPEED 压缩发射冷却；MELEE_RANGE 临时扩剑气射程；LIFESTEAL 命中回血
+                _is_near = getattr(weapon, "is_scythe", False) or getattr(weapon, "is_melee", False)
+                _melee_bonus_speed = 1.0
+                _melee_bonus_range = 1.0
+                if _is_near and getattr(self.player, 'skill_tree', None):
+                    _st = self.player.skill_tree
+                    # 近战伤害
+                    _melee_dmg_skill = _st.get_skill(SkillType.MELEE_DAMAGE)
                     if _melee_dmg_skill and _melee_dmg_skill.current_level > 0:
                         _fire_mult *= (1.0 + _melee_dmg_skill.current_level * 0.25)
-                proj_list = weapon.fire(
-                    self.player.x, self.player.y, mouse_angle,
-                    _fire_mult, self.player.speed_mult,
-                    player=self.player
-                )
+                    # 狂暴（低血量增伤）
+                    _berserker_skill = _st.get_skill(SkillType.BERSERKER)
+                    if _berserker_skill and _berserker_skill.current_level > 0:
+                        _hp_ratio = self.player.hp / max(1, self.player.max_hp)
+                        if _hp_ratio < 0.5:
+                            _dmg_bonus = _berserker_skill.current_level * 0.3
+                            if _berserker_skill.current_level >= 3 and _hp_ratio < 0.2:
+                                _dmg_bonus += 0.5
+                            _fire_mult *= (1.0 + _dmg_bonus)
+                    # 连击大师
+                    _combo_skill = _st.get_skill(SkillType.COMBO_MASTER)
+                    if _combo_skill and _combo_skill.current_level > 0:
+                        _max_layers = [0, 5, 8, 10][_combo_skill.current_level]
+                        _per_layer = [0, 0.05, 0.08, 0.10][_combo_skill.current_level]
+                        _cc = min(getattr(self, 'melee_combo_count', 0), _max_layers)
+                        _fire_mult *= (1.0 + _cc * _per_layer)
+                    # 近战攻速（发射后压缩冷却）
+                    _melee_speed_skill = _st.get_skill(SkillType.MELEE_SPEED)
+                    if _melee_speed_skill and _melee_speed_skill.current_level > 0:
+                        _melee_bonus_speed = 1.0 + _melee_speed_skill.current_level * 0.2
+                    # 近战范围（发射前临时扩射程）
+                    _melee_range_skill = _st.get_skill(SkillType.MELEE_RANGE)
+                    if _melee_range_skill and _melee_range_skill.current_level > 0:
+                        _melee_bonus_range = 1.0 + _melee_range_skill.current_level * 0.15
+                _orig_range = weapon.range
+                if _melee_bonus_range != 1.0:
+                    weapon.range = int(weapon.range * _melee_bonus_range)
+                try:
+                    proj_list = weapon.fire(
+                        self.player.x, self.player.y, mouse_angle,
+                        _fire_mult, self.player.speed_mult,
+                        player=self.player
+                    )
+                finally:
+                    weapon.range = _orig_range
+                if _melee_bonus_speed != 1.0:
+                    weapon.cooldown_timer = max(0.0, weapon.cooldown_timer / _melee_bonus_speed)
                 self.projectiles.extend(proj_list)
                 # 过热倾泻灼烧：子弹附带火焰
                 if getattr(self.player, 'overdrive_burn', False):
@@ -1019,8 +1069,10 @@ class PlayingMixin:
                             break
             angle = random.uniform(0, math.pi * 2)
             dist = random.randint(400, 700)
-            spawn_x = self.player.x + math.cos(angle) * dist
-            spawn_y = self.player.y + math.sin(angle) * dist
+            # v2.5.2 多人刷怪以最近活跃玩家为中心（修复只有 P1 附近刷僵尸）
+            _sc = self._spawn_center_player()
+            spawn_x = _sc.x + math.cos(angle) * dist
+            spawn_y = _sc.y + math.sin(angle) * dist
             spawn_x, spawn_y = self.world.clamp_position(spawn_x, spawn_y, 20)
             enemy = Enemy(spawn_x, spawn_y, spawn_type, 1, self.config.difficulty)
             # v2.2.4：决策树 AI（无训练硬编程）挂载；未挂载/异常 → 回退原规则 AI
@@ -1075,9 +1127,10 @@ class PlayingMixin:
                         _extra, _dv = _extra
                     _ang2 = random.uniform(0, math.pi * 2)
                     _dist2 = random.randint(400, 700)
+                    _sc2 = self._spawn_center_player()
                     _sx, _sy = self.world.clamp_position(
-                        self.player.x + math.cos(_ang2) * _dist2,
-                        self.player.y + math.sin(_ang2) * _dist2, 20)
+                        _sc2.x + math.cos(_ang2) * _dist2,
+                        _sc2.y + math.sin(_ang2) * _dist2, 20)
                     self.enemies.append(Enemy(_sx, _sy, _extra, 1, self.config.difficulty))
 
         # 更新敌人
@@ -1757,6 +1810,7 @@ class PlayingMixin:
                     if dist < proj.explosion_radius:
                         damage = proj.damage * (1 - dist / proj.explosion_radius)
                         enemy._last_hit_team = _ht  # v2.4.0 击杀归属阵营（争分夺秒分阵营加时）
+                        enemy._last_hit_player = getattr(proj, 'owner', None)  # v2.5.2 击杀归属玩家
                         enemy.take_damage(damage)
                         self.damage_numbers.append(DamageNumber(enemy.x, enemy.y, damage))
                         if not enemy.alive:
@@ -1814,6 +1868,7 @@ class PlayingMixin:
                         is_crit = random.random() < self.player.crit_chance
                         actual_damage = proj.damage * (self.player.crit_damage if is_crit else 1)
                         enemy._last_hit_team = getattr(getattr(proj, 'owner', None), 'team_id', 0)  # v2.4.0
+                        enemy._last_hit_player = getattr(proj, 'owner', None)  # v2.5.2 击杀归属玩家
                         enemy.take_damage(actual_damage)
                         self._apply_rune_elemental_on_hit(enemy, actual_damage)
                         self._vampire_heal(actual_damage, sx=enemy.x, sy=enemy.y)
@@ -1951,6 +2006,11 @@ class PlayingMixin:
 
                     enemy.take_damage(actual_damage)
                     self._vampire_heal(actual_damage, sx=enemy.x, sy=enemy.y)
+                    # v2.5.2 死神镰刀吃近战吸血（MELEE_LIFESTEAL）
+                    if getattr(proj, "is_scythe_slash", False) and getattr(self.player, 'skill_tree', None):
+                        _ls_skill = self.player.skill_tree.get_skill(SkillType.MELEE_LIFESTEAL)
+                        if _ls_skill and _ls_skill.current_level > 0:
+                            self.player.hp = min(self.player.max_hp, self.player.hp + actual_damage * _ls_skill.current_level * 0.1)
                     # 根据武器类型施加debuff
                     wtype = weapon.weapon_type
                     if wtype == WeaponType.FLAMETHROWER or getattr(weapon, 'is_flame', False):
@@ -2252,6 +2312,21 @@ class PlayingMixin:
             return
         self.victory_team = int(team or 0)
         self.victory_timer = 3.0
+        # v2.5.2 多人胜利统计与成就（mp_first_win / mp_pvp_win / mp_team_win）
+        try:
+            if self.is_multiplayer_active() and getattr(self, 'records', None) is not None:
+                self.records.add_mp_stat("mp_wins")
+                if getattr(self.config, 'pvp_enabled', False):
+                    self.records.add_mp_stat("mp_pvp_wins")
+                else:
+                    _tm = self.records.data["achievements"].get("mp_team_win")
+                    if _tm and not _tm.get("unlocked", False):
+                        import datetime as _dt
+                        _tm["unlocked"] = True
+                        _tm["date"] = _dt.datetime.now().isoformat()
+                        self.records._save()
+        except Exception:
+            pass
         try:
             if self.config.game_mode == GameMode.TIMED:
                 self._record_race_result(victory=True)

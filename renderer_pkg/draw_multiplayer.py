@@ -123,8 +123,8 @@ def draw_enemy_player_indicators(renderer, game, viewports, vp):
                 continue  # 队友不标红
             sx, sy = _screen_pos_of(op.x, op.y, vp.camera, game.scale)
             if 0 <= sx <= sw and 0 <= sy <= sh:
-                pygame.draw.circle(renderer.screen, (255, 40, 40), (int(sx), int(sy)), max(5, int(9 * game.scale)), 2)
-                pygame.draw.circle(renderer.screen, (255, 90, 90), (int(sx), int(sy)), max(2, int(4 * game.scale)))
+                # v2.5.2 视口内敌人本身可见，不再画常驻红圈（位置揭示只针对屏幕外）
+                pass
             else:
                 # 屏幕外：边缘红色箭头
                 cx, cy = sw // 2, sh // 2

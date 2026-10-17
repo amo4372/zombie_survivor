@@ -734,15 +734,7 @@ class EffectsMixin:
         if not hasattr(self, 'enemy_throwables'):
             self.enemy_throwables = []
         for g in self.enemy_throwables[:]:
-            # 实时追踪最近的存活玩家（投掷物会调整方向砸向玩家，显著提高命中率）
-            _tgt = min(self._alive_players(), key=lambda p: math.hypot(p.x - g["x"], p.y - g["y"]), default=self.player)
-            dxp = _tgt.x - g["x"]
-            dyp = _tgt.y - g["y"]
-            dp = math.hypot(dxp, dyp)
-            if dp > 1:
-                spd = 260
-                g["vx"] = dxp / dp * spd
-                g["vy"] = dyp / dp * spd
+            # v2.5.2 投掷物固定沿发射时预测方向直线飞行（着落点=预测玩家轨迹，不再实时追踪）
             g["x"] += g["vx"] * dt
             g["y"] += g["vy"] * dt
             g["timer"] -= dt
@@ -1278,7 +1270,9 @@ class EffectsMixin:
         exp_value = getattr(enemy, "exp", 10)
         self.exp_orbs.append(ExpOrb(enemy.x, enemy.y, exp_value))
         gained_score = getattr(enemy, "score", 10)
-        self.player.score += gained_score
+        # v2.5.2 得分计入击杀者玩家（多人 P2 击杀得分不再丢失）
+        _kp = getattr(enemy, '_last_hit_player', None) or self.player
+        _kp.score = getattr(_kp, 'score', 0) + gained_score
         if self.session:
             self.session.add_score(gained_score)
 

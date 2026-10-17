@@ -374,10 +374,12 @@ class RiotGear:
             player.invincible_timer = max(getattr(player, "invincible_timer", 0), 0.1)
 
     def update_grapple_lock(self, player_x, player_y, enemies, items=None,
-                            aim_angle=None, aim_dist=None):
+                            aim_angle=None, aim_dist=None,
+                            players_down=None, players_enemy=None):
         """v2.2.11 瞄准期间更新锁定圈：蓄力圈由小到大 + 优先锁定特殊道具 + 圈内最近敌人
         锚点=预瞄终点（随瞄准方向/距离实时移动），aim_angle（度）/aim_dist 由触控瞄准传入，
-        未传时回退 aim_line_angle 方向 max_range 处。"""
+        未传时回退 aim_line_angle 方向 max_range 处。
+        v2.5.2 锁定优先级：倒地队友 > 异阵营玩家 > 特殊道具 > 僵尸"""
         if not self.grapple_aiming:
             self.grapple_locked_target = None
             self.grapple_aim_anchor = None
@@ -397,8 +399,30 @@ class RiotGear:
         self.grapple_aim_anchor = (_ax, _ay)
         best = None
         best_d = cur_radius
-        # 1) 优先锁定特殊道具（宝箱/武器箱/加时道具等）
-        if items:
+        # v2.5.2 1) 最高优先级：倒地队友（可勾取救援，拉回身边）
+        if players_down:
+            for _pd in players_down:
+                if not getattr(_pd, 'alive', True):
+                    continue
+                if not getattr(_pd, 'downed', False):
+                    continue
+                d = math.hypot(_pd.x - _ax, _pd.y - _ay)
+                if d < best_d:
+                    best_d = d
+                    best = _pd
+        # v2.5.2 2) 异阵营玩家（可勾取+QTE）
+        if best is None and players_enemy:
+            for _pe in players_enemy:
+                if not getattr(_pe, 'alive', True):
+                    continue
+                if getattr(_pe, 'downed', False):
+                    continue
+                d = math.hypot(_pe.x - _ax, _pe.y - _ay)
+                if d < best_d:
+                    best_d = d
+                    best = _pe
+        # 3) 特殊道具（宝箱/武器箱/加时道具等）
+        if best is None and items:
             for it in items:
                 if not getattr(it, "alive", False):
                     continue
@@ -406,7 +430,7 @@ class RiotGear:
                 if d < best_d:
                     best_d = d
                     best = it
-        # 2) 再锁定圈内最近敌人（Boss 不可锁定）
+        # 4) 圈内最近敌人（Boss 不可锁定）
         if best is None:
             for e in enemies:
                 if not getattr(e, "alive", False):
