@@ -430,6 +430,9 @@ class GameCore:
         self.net_host = None
         self.net_client = None
         self.net_port = 26000
+        # v2.2.13 网络配置自定义：端口（文本输入）/最大人数/玩法/模式/地图
+        self.net_port_input = "26000"
+        self.net_port_focused = False
         self.net_ip_input = "127.0.0.1"
         self.net_ip_focused = False
         self.net_started = False
@@ -1074,8 +1077,12 @@ class GameCore:
         if self.state == GameState.PLAYING:
             # v2.2.5：决策树 AI 无批处理需求（即时 decide），无模型加载
             self._update_playing(dt)
-            # 主机广播世界快照给客户端
+            # v2.2.13 主机驱动客户端玩家实体（移动/射击/技能），随后广播快照
             if self.multiplayer_mode == "network" and self.net_role == "host" and self.net_started:
+                try:
+                    self._update_net_host(dt)
+                except Exception:
+                    pass
                 self._net_send_snapshot()
             # 开发者调试面板
             if self.dev_mode and self.dev_panel_open:

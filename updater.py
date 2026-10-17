@@ -48,6 +48,8 @@ UPDATE_STATE = {
     "error": None,
     "changelog": "",
     "download_url": "",
+    "mirror": "",          # v2.2.13 实际选中的下载节点（自动测速）
+    "mirror_latency": 0.0, # 测速延迟（秒）
 }
 
 # 回调函数（游戏中注册）
@@ -336,9 +338,50 @@ def _zip_is_complete(zip_path, expect_version=None):
         return False
 
 
+def _mirror_candidates(url):
+    """v2.2.13 生成候选下载节点：原始 GitHub + 各代理前缀（去重）"""
+    out = [url]
+    prox = _gh_proxy_url(url)
+    if prox != url:
+        out.append(prox)
+    # 备选加速节点（失败自动跳过，测速后选最快）
+    for _p in ("https://ghfast.top/", "https://gh-proxy.com/", "https://mirror.ghproxy.com/"):
+        _c = _p + url if not url.startswith(_p) else url
+        if _c not in out:
+            out.append(_c)
+    return out
+
+
+def pick_fastest_mirror(download_url, timeout=3, sample_bytes=65536):
+    """v2.2.13 自动测速选择最快下载节点/代理：
+    对每个候选节点下载 sample_bytes 字节计时，选最快；全部失败回退原始 URL。
+    返回 (fastest_url, latency_seconds) 或 (download_url, 0) """
+    best_url = download_url
+    best_t = None
+    for _u in _mirror_candidates(download_url):
+        try:
+            _req = urllib.request.Request(_u, headers={"User-Agent": "ZombieSurvivor-Updater/1.0"})
+            _t0 = time.time()
+            with urllib.request.urlopen(_req, timeout=timeout) as _resp:
+                _got = 0
+                while _got < sample_bytes:
+                    _ch = _resp.read(min(8192, sample_bytes - _got))
+                    if not _ch:
+                        break
+                    _got += len(_ch)
+            _lat = time.time() - _t0
+            if best_t is None or _lat < best_t:
+                best_t = _lat
+                best_url = _u
+        except Exception:
+            continue
+    return (best_url, best_t or 0.0)
+
+
 def download_update(download_url, progress_callback=None, version=None):
     """
     下载更新包，带进度条；支持复用已下载缓存、断点续传（.part）。
+    v2.2.13：下载前自动测速选择最快节点/代理。
     返回: 下载的文件路径 或 None
     """
     global UPDATE_STATE
@@ -362,8 +405,14 @@ def download_update(download_url, progress_callback=None, version=None):
             UPDATE_STATE["downloaded_bytes"] = UPDATE_STATE["total_bytes"]
             return output_path
 
-        # 2) 断点续传：复用已下载的部分文件
-        proxied_url = _gh_proxy_url(download_url)
+        # 2) v2.2.13 断点续传前先测速选最快节点（原始 GitHub / 代理镜像）
+        try:
+            _fast, _lat = pick_fastest_mirror(download_url)
+        except Exception:
+            _fast, _lat = _gh_proxy_url(download_url), 0.0
+        proxied_url = _fast
+        UPDATE_STATE["mirror"] = _fast
+        UPDATE_STATE["mirror_latency"] = round(_lat, 2) if _lat else 0
         headers = {"User-Agent": "ZombieSurvivor-Updater/1.0"}
         resume_from = 0
         if os.path.exists(part_path) and os.path.getsize(part_path) > 0:

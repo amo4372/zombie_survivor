@@ -2090,6 +2090,11 @@ class UiMixin:
         g = self.game
         _ups = [te for te in getattr(g, 'touch_events', [])
                 if te.get("type") == "up" and te.get("pos") is not None]
+        _mv = [te for te in getattr(g, 'touch_events', [])
+               if te.get("type") == "move" and te.get("pos") is not None]
+        _dn = [te for te in getattr(g, 'touch_events', [])
+               if te.get("type") == "down" and te.get("pos") is not None]
+        _dd_pending = []  # v2.2.13 展开的下拉收集，末尾统一绘制（图层最上层+滚动）
         title = self.game.font_title.render("同屏多人 · 房间配置", True, WHITE)
         self.screen.blit(title, title.get_rect(center=(sw // 2, int(46 * scale))))
         g.coop_player_count = 2  # v2.2.12 同屏固定 2 人
@@ -2161,15 +2166,10 @@ class UiMixin:
                     _c["team"] = _src_cfg["team"]
 
         def _handle_dd(key, rect, options, setter, current):
-            """下拉：点击展开；选项展开时点击选项选中；返回 True 表示展开态已处理"""
+            """下拉：点击展开；展开态收集到 _dd_pending（v2.2.13 图层/滚动修复：
+            选项统一在页面末尾绘制，位于一切元素之上，支持滚轮与触控拖动滚动）"""
             if _dd == key:
-                for _oi, (_opt, _val) in enumerate(options):
-                    _or = pygame.Rect(rect.x, rect.bottom + _oi * int(44 * scale), rect.width, int(42 * scale))
-                    _dd_item(_or, _opt, _oi == current)
-                    if any(_or.collidepoint(te["pos"]) for te in _ups):
-                        setter(_val)
-                        g.room_dropdown = None
-                        return True
+                _dd_pending.append((key, rect, options, setter, current))
                 return True
             if any(rect.collidepoint(te["pos"]) for te in _ups):
                 g.room_dropdown = key if _dd != key else None
@@ -2292,13 +2292,16 @@ class UiMixin:
             _cy += rh + gap
         else:
             _cy += rh + gap
-        # 阵营（PvP 时）
+        # 阵营（PvP 时）v2.2.13：默认"自动（按序号轮转分阵营）"，
+        # 修复"无论如何还是同阵营"——此前默认 team=1 让显式分支吞掉轮转
         if _pvpm:
             _ti = max(0, min(_nteams - 1, int(_cur.get("team") or 1) - 1))
-            _dd_box(pygame.Rect(rx, _cy, rw, rh), f"阵营：{'ABCD'[_ti]}（{_nteams} 阵营）")
+            _team_v = "自动（开局分阵营）" if _cur.get("team") is None else f"{'ABCD'[_ti]}（{_nteams} 阵营）"
+            _dd_box(pygame.Rect(rx, _cy, rw, rh), f"阵营：{_team_v}")
             if not _handle_dd("pteam", pygame.Rect(rx, _cy, rw, rh),
-                              [("阵营 " + 'ABCD'[i], i + 1) for i in range(_nteams)],
-                              lambda v: _cur.update(team=v), _ti):
+                              [("自动（按序号轮转）", 0)] + [("阵营 " + 'ABCD'[i], i + 1) for i in range(_nteams)],
+                              lambda v: _cur.update(team=(None if v == 0 else v)),
+                              (-1 if _cur.get("team") is None else _ti)):
                 _cy += rh + gap
             else:
                 _cy += rh + gap
@@ -2332,6 +2335,72 @@ class UiMixin:
             except Exception:
                 pass
             g.state = GameState.MULTIPLAYER_SELECT
+
+        # ===== v2.2.13 末尾统一绘制展开的下拉（图层最上层 + 内置滑动条）=====
+        if _dd_pending:
+            _sc = getattr(g, 'dd_scroll', None)
+            if _sc is None:
+                _sc = {}
+                g.dd_scroll = _sc
+            _ih = int(42 * scale)
+            _gap_i = int(3 * scale)
+            for _dkey, _drect, _dopts, _dset, _dcur in _dd_pending:
+                # 可见行数（到底部，最多显示）
+                _max_rows = max(1, int((sh - _drect.bottom - int(20 * scale)) // (_ih + _gap_i)))
+                _max_rows = min(_max_rows, len(_dopts))
+                _sval = _sc.get(_dkey, 0)
+                _smax = max(0, len(_dopts) - _max_rows)
+                _sval = max(0, min(_smax, _sval))
+                _list_w = _drect.width
+                _list_h = _max_rows * (_ih + _gap_i)
+                _bar_w = int(9 * scale)
+                _bar_x = _drect.x + _list_w - _bar_w - int(3 * scale)
+                _list_rect = pygame.Rect(_drect.x, _drect.bottom, _list_w, _list_h)
+                # 滚轮滚动
+                for _te in getattr(g, 'touch_events', []):
+                    if _te.get("type") == "wheel":
+                        _sval = max(0, min(_smax, _sval - int(_te.get("dy", 0))))
+                # 触控拖动滚动（在列表/滚动条区域按下后上下移动）
+                if getattr(g, 'dd_drag', None) == _dkey and _mv:
+                    _last = getattr(g, 'dd_drag_y', None)
+                    if _last is not None:
+                        _sval = max(0, min(_smax, _sval + (_last - _mv[-1]["pos"][1]) // int(8 * scale)))
+                    g.dd_drag_y = _mv[-1]["pos"][1]
+                for _te in _dn:
+                    if _list_rect.inflate(0, int(6 * scale)).collidepoint(_te["pos"]):
+                        g.dd_drag = _dkey
+                        g.dd_drag_y = _te["pos"][1]
+                if getattr(g, 'dd_drag', None) == _dkey and not any(
+                        te.get("type") in ("up",) for te in getattr(g, 'touch_events', [])
+                        if te.get("pos") is not None and _list_rect.inflate(0, int(10 * scale)).collidepoint(te["pos"])):
+                    # 手指抬起在列表外 → 结束拖动
+                    for _te in _ups:
+                        if not _list_rect.inflate(0, int(10 * scale)).collidepoint(_te["pos"]):
+                            g.dd_drag = None
+                # 绘制选项（裁剪到屏幕）
+                _clip = pygame.Rect(_drect.x, _drect.bottom, _list_w, _list_h)
+                _clip.clip_ip(pygame.Rect(0, 0, sw, sh))
+                old_clip = self.screen.get_clip()
+                self.screen.set_clip(_clip)
+                for _oi in range(_max_rows):
+                    _gidx = _sval + _oi
+                    if _gidx >= len(_dopts):
+                        break
+                    _opt, _val = _dopts[_gidx]
+                    _or = pygame.Rect(_drect.x, _drect.bottom + _oi * (_ih + _gap_i), _list_w - _bar_w - int(4 * scale), _ih)
+                    _dd_item(_or, _opt, _gidx == _dcur)
+                    if any(_or.collidepoint(te["pos"]) for te in _ups):
+                        _dset(_val)
+                        g.room_dropdown = None
+                        g.dd_drag = None
+                self.screen.set_clip(old_clip)
+                # 滚动条
+                if _smax > 0:
+                    _bar_h = max(int(22 * scale), int(_list_h * _max_rows / len(_dopts)))
+                    _bar_y = _drect.bottom + int((_list_h - _bar_h) * (_sval / _smax))
+                    pygame.draw.rect(self.screen, (70, 78, 96), (_bar_x, _drect.bottom, _bar_w, _list_h), border_radius=4)
+                    pygame.draw.rect(self.screen, (150, 170, 200), (_bar_x, _bar_y, _bar_w, _bar_h), border_radius=4)
+                _sc[_dkey] = _sval
 
     def _set_room_mode(self, g, idx):
         try:
@@ -2401,63 +2470,137 @@ class UiMixin:
             g.state = GameState.MULTI_ROOM_CONFIG
 
     def _draw_net_multiplayer(self):
-        """网络联机：创建房间 / 加入房间（IP输入框）"""
+        """网络联机：创建房间 / 加入房间
+        v2.2.13 更自定义：端口输入、最大人数、玩法(合作/PvPvE多阵营)、模式、地图（点击循环切换）"""
         self.screen.fill(VOID_BLACK)
         scale = self.game.scale
         sw = self.game.scaled_width
         sh = self.game.scaled_height
-        title = self.game.font_title.render("网络联机", True, WHITE)
-        self.screen.blit(title, title.get_rect(center=(sw // 2, int(70 * scale))))
+        title = self.game.font_title.render("网络联机 · 房间配置", True, WHITE)
+        self.screen.blit(title, title.get_rect(center=(sw // 2, int(60 * scale))))
         mouse_pos = pygame.mouse.get_pos()
         mouse_pressed = pygame.mouse.get_pressed()
         g = self.game
-        # 创建房间
-        host_r = pygame.Rect(int(sw // 2 - 150 * scale), int(150 * scale), int(300 * scale), int(55 * scale))
+        cx = int(sw // 2 - 180 * scale)
+        cw = int(360 * scale)
+        ch = int(46 * scale)
+        cgap = int(8 * scale)
+        y = int(110 * scale)
+        _ups_n = [te for te in getattr(g, 'touch_events', [])
+                  if te.get("type") == "up" and te.get("pos") is not None]
+        _clk = None
+        for _te in _ups_n:
+            _clk = _te["pos"]
+            break
+        if _clk is None and mouse_pressed[0]:
+            _clk = mouse_pos
+
+        def _cfg_box(rect, text, color=(28, 32, 44)):
+            pygame.draw.rect(self.screen, color, rect, border_radius=9)
+            pygame.draw.rect(self.screen, (70, 78, 96), rect, 2, border_radius=9)
+            _t = self.game.font.render(text, True, (235, 235, 235))
+            self.screen.blit(_t, _t.get_rect(midleft=(rect.x + int(12 * scale), rect.centery)))
+
+        # 创建房间按钮
+        host_r = pygame.Rect(cx, y, cw, ch)
         pygame.draw.rect(self.screen, (40, 90, 40), host_r, border_radius=10)
         pygame.draw.rect(self.screen, GREEN, host_r, 2, border_radius=10)
         ht = self.game.font.render("创建房间（主机）", True, WHITE)
         self.screen.blit(ht, ht.get_rect(center=host_r.center))
+        y += ch + cgap
+        # 端口输入框
+        port_r = pygame.Rect(cx, y, cw, ch)
+        _pc = (120, 220, 120) if g.net_port_focused else (70, 78, 96)
+        pygame.draw.rect(self.screen, (25, 25, 35), port_r, border_radius=8)
+        pygame.draw.rect(self.screen, _pc, port_r, 2, border_radius=8)
+        _pt = self.game.font.render("端口：" + g.net_port_input + ("▏" if g.net_port_focused else ""), True, WHITE)
+        self.screen.blit(_pt, (port_r.x + 10, port_r.y + 8))
+        y += ch + cgap
+        # 最大人数（网络 2-4）
+        _ccn = int(getattr(g, 'coop_player_count', 2) or 2)
+        _ccn = 2 if _ccn < 2 else (4 if _ccn > 4 else _ccn)
+        cnt_r = pygame.Rect(cx, y, cw, ch)
+        _cfg_box(cnt_r, f"最大人数：{_ccn} 人（网络）")
+        y += ch + cgap
+        # 玩法：合作 → 对战2 → 对战3 → 对战4 → 合作
+        _pv = bool(getattr(g.config, 'pvp_enabled', False))
+        _nt = int(getattr(g.config, 'pvp_teams', 2) or 2)
+        _pvtxt = "合作 nPvE" if not _pv else f"对战 PvPvE（{_nt} 阵营）"
+        pvp_r = pygame.Rect(cx, y, cw, ch)
+        _cfg_box(pvp_r, f"玩法：{_pvtxt}")
+        y += ch + cgap
+        # 模式
+        _mode_names = ["无尽生存", "故事模式", "争分夺秒"]
+        try:
+            from config import GameMode
+            _mg = getattr(g.config, 'game_mode', GameMode.ENDLESS)
+            _mi = [GameMode.ENDLESS, GameMode.STORY, GameMode.TIMED].index(_mg) if _mg in [GameMode.ENDLESS, GameMode.STORY, GameMode.TIMED] else 0
+        except Exception:
+            _mi = 0
+        mode_r = pygame.Rect(cx, y, cw, ch)
+        _cfg_box(mode_r, f"模式：{_mode_names[_mi]}")
+        y += ch + cgap
+        # 地图
+        _maps_n = ["沦陷的校园", "末日街区", "市中心", "郊区小镇", "核电站"]
+        _mapi = int(getattr(g, 'room_map_idx', 0) or 0) % len(_maps_n)
+        map_r = pygame.Rect(cx, y, cw, ch)
+        _cfg_box(map_r, f"地图：{_maps_n[_mapi]}")
+        y += ch + cgap
         # IP 输入框
-        ip_label = self.game.font.render("加入房间 - 主机IP:", True, LIGHT_GRAY)
-        self.screen.blit(ip_label, (int(sw // 2 - 150 * scale), int(270 * scale)))
-        ip_r = pygame.Rect(int(sw // 2 - 150 * scale), int(305 * scale), int(300 * scale), int(48 * scale))
-        border_col = (120, 220, 120) if g.net_ip_focused else (90, 90, 110)
+        ip_r = pygame.Rect(cx, y, cw, ch)
+        _bc = (120, 220, 120) if g.net_ip_focused else (70, 78, 96)
         pygame.draw.rect(self.screen, (25, 25, 35), ip_r, border_radius=8)
-        pygame.draw.rect(self.screen, border_col, ip_r, 2, border_radius=8)
-        ip_txt = self.game.font.render(g.net_ip_input + ("▏" if g.net_ip_focused else ""), True, WHITE)
+        pygame.draw.rect(self.screen, _bc, ip_r, 2, border_radius=8)
+        ip_txt = self.game.font.render("主机IP：" + g.net_ip_input + ("▏" if g.net_ip_focused else ""), True, WHITE)
         self.screen.blit(ip_txt, (ip_r.x + 10, ip_r.y + 8))
+        y += ch + cgap
         # 加入按钮
-        join_r = pygame.Rect(int(sw // 2 - 150 * scale), int(370 * scale), int(300 * scale), int(55 * scale))
+        join_r = pygame.Rect(cx, y, cw, ch)
         pygame.draw.rect(self.screen, (60, 90, 40), join_r, border_radius=10)
         pygame.draw.rect(self.screen, GOLD, join_r, 2, border_radius=10)
         jt = self.game.font.render("加入房间", True, WHITE)
         self.screen.blit(jt, jt.get_rect(center=join_r.center))
+        y += ch + cgap
         # 返回
-        back_r = pygame.Rect(int(sw // 2 - 150 * scale), int(460 * scale), int(300 * scale), int(44 * scale))
+        back_r = pygame.Rect(cx, y, cw, int(40 * scale))
         pygame.draw.rect(self.screen, (60, 50, 50), back_r, border_radius=10)
         pygame.draw.rect(self.screen, GRAY, back_r, 2, border_radius=10)
         bt = self.game.font_small.render("返回", True, LIGHT_GRAY)
         self.screen.blit(bt, bt.get_rect(center=back_r.center))
-        # 交互：点击聚焦输入框 / 按钮
-        clicked = None
-        for ev in g.touch_events:
-            if ev["type"] == "down":
-                clicked = ev["pos"]
-                break
-        if mouse_pressed[0]:
-            clicked = clicked or mouse_pos
-        if clicked:
-            if host_r.collidepoint(clicked):
+        # 交互
+        if _clk:
+            if host_r.collidepoint(_clk):
                 g._net_start_host()
-            elif ip_r.collidepoint(clicked):
+            elif port_r.collidepoint(_clk):
+                g.net_ip_focused = False
+                g.net_port_focused = True
+                g.start_text_input()
+            elif cnt_r.collidepoint(_clk):
+                g.coop_player_count = 2 if _ccn >= 4 else _ccn + 1
+            elif pvp_r.collidepoint(_clk):
+                if not _pv:
+                    g.config.pvp_enabled = True
+                    g.config.pvp_teams = 2
+                elif _nt < 4:
+                    g.config.pvp_teams = _nt + 1
+                else:
+                    g.config.pvp_enabled = False
+            elif mode_r.collidepoint(_clk):
+                self._cycle_room_mode(g)
+            elif map_r.collidepoint(_clk):
+                g.room_map_idx = (g.room_map_idx + 1) % len(_maps_n)
+            elif ip_r.collidepoint(_clk):
+                g.net_port_focused = False
                 g.net_ip_focused = True
                 g.start_text_input()
-            elif join_r.collidepoint(clicked):
+            elif join_r.collidepoint(_clk):
                 g.net_ip_focused = False
+                g.net_port_focused = False
                 g.stop_text_input()
                 g._net_join()
-            elif back_r.collidepoint(clicked):
+            elif back_r.collidepoint(_clk):
                 g.net_ip_focused = False
+                g.net_port_focused = False
                 g.stop_text_input()
                 g.state = GameState.MULTIPLAYER_SELECT
 
@@ -2586,20 +2729,27 @@ class UiMixin:
                 pygame.draw.arc(arc_surf, (*col, 220), (0, 0, r * 2, r * 2),
                                 fx.get("angle", 0), fx.get("angle", 0) + 0.8, max(4, int(10 * scale)))
                 self.screen.blit(arc_surf, (px - r, py - r))
-        # 玩家
+        # 玩家（v2.2.13 PvPvE：按阵营敌我渲染——敌方红色描边+红标，队友绿色/蓝标）
+        _pvpm = bool(getattr(g.config, 'pvp_enabled', False))
+        _my_team = int(me.get("team", 0)) if me else 0
         labels = ["P1", "P2"]
         cols = [GREEN, CYAN]
         for idx, p in enumerate(players):
             px = int((p["x"] - cam_x) * scale)
             py = int((p["y"] - cam_y) * scale)
             r = max(8, int(16 * scale))
+            _pt = int(p.get("team", 0) or 0)
+            _enemy = _pvpm and _pt != _my_team
+            _bcol = (230, 70, 70) if _enemy else cols[idx] if idx < len(cols) else GREEN
+            _ring = (255, 90, 90) if _enemy else WHITE
             if p.get("downed"):
                 pygame.draw.circle(self.screen, (200, 200, 60), (px, py), r, 3)
                 tag = g.font_small.render(labels[idx] + " 倒地", True, (240, 230, 120))
             else:
-                pygame.draw.circle(self.screen, cols[idx], (px, py), r)
-                pygame.draw.circle(self.screen, WHITE, (px, py), r, 2)
-                tag = g.font_small.render(labels[idx], True, cols[idx])
+                pygame.draw.circle(self.screen, _bcol, (px, py), r)
+                pygame.draw.circle(self.screen, _ring, (px, py), r, 2)
+                _lt = ("敌方 " if _enemy else "") + labels[idx] + ("·" + "AB"[_pt] if _pvpm else "")
+                tag = g.font_small.render(_lt, True, _bcol)
             self.screen.blit(tag, (px - tag.get_width() // 2, py - r - int(14 * scale)))
             # 武器名
             wname = p.get("weapon", "")

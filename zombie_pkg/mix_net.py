@@ -243,16 +243,90 @@ class NetMixin:
         self.net_input_timer = getattr(self, 'net_input_timer', 0) - dt
         if self.net_input_timer <= 0:
             self.net_input_timer = 0.05
+            # v2.2.13 触控端附带瞄准角（主机据此驱动客户端玩家实体射击方向）
+            _aim = None
+            try:
+                if self.config.control_mode == ControlMode.TOUCH:
+                    _aim = round(float(math.degrees(getattr(self.client_aim, 'angle', 0))), 1)
+            except Exception:
+                _aim = None
             self.net_client.send_input({
                 "mx": round(float(mx), 3), "my": round(float(my), 3),
                 "shoot": bool(shoot), "skill": bool(skill),
                 "throw": False, "sprint": False,
+                "aim": _aim,
             })
         # 主机断开 → 返回联机界面
         if not self.net_client.connected:
             self.floating_texts.append(FloatingText(0, 0, "与主机断开连接", color=CRIMSON, lifetime=2.0))
             self._net_stop()
             self.state = GameState.NET_MULTIPLAYER
+
+    def _update_net_host(self, dt):
+        """v2.2.13 主机驱动客户端玩家实体：消费 net_host.inputs（移动/射击/技能）。
+        此前输入只入库无人消费 → 网络玩家原地木桩、无法战斗（核心修复）"""
+        if not self.net_host or not self.net_started:
+            return
+        if self.state not in (GameState.PLAYING, GameState.DIALOGUE, GameState.PAUSED):
+            return
+        try:
+            for _idx in list(self.net_host.clients.keys()):
+                _inp = self.net_host.get_input(_idx)
+                _ent = getattr(self, f"player{_idx + 1}", None)
+                if _ent is None or not getattr(_ent, 'alive', True) or getattr(_ent, 'downed', False):
+                    continue
+                # 移动
+                _mx = float(_inp.get("mx", 0) or 0)
+                _my = float(_inp.get("my", 0) or 0)
+                _spd = getattr(_ent, 'move_speed', 180) * getattr(_ent, 'speed_mult', 1.0)
+                _n = math.hypot(_mx, _my)
+                if _n > 0.01:
+                    _ent.x += _mx / _n * _spd * dt
+                    _ent.y += _my / _n * _spd * dt
+                # 射击（aim 为 None/缺失时用实体朝向）
+                if bool(_inp.get("shoot", False)):
+                    _w = _ent.get_current_weapon()
+                    if _w and _w.can_fire():
+                        _aim = _inp.get("aim")
+                        _ang = math.radians(float(_aim)) if _aim is not None else math.radians(getattr(_ent, 'facing_angle', 0))
+                        try:
+                            _dmg_m = getattr(getattr(_ent, 'buff_manager', None), 'get_damage_mult', lambda: 1.0)()
+                        except Exception:
+                            _dmg_m = 1.0
+                        _projs = _w.fire(_ent.x, _ent.y, _ang,
+                                         getattr(_ent, 'damage_mult', 1.0) * _dmg_m * getattr(_ent, 'damage_multiplier', 1.0),
+                                         getattr(_ent, 'speed_mult', 1.0), player=_ent)
+                        if _projs:
+                            self.projectiles.extend(_projs)
+                # 技能（简化为实体已解锁的首个技能：手雷/钩爪等）
+                if bool(_inp.get("skill", False)):
+                    self._net_drive_skill(_ent, _idx)
+        except Exception as _e:
+            logger.warning(f"主机驱动客户端玩家失败: {_e}")
+
+    def _net_drive_skill(self, ent, idx):
+        """主机端驱动客户端玩家实体施放技能（仅常见技能最小实现）"""
+        try:
+            from weapons import Weapon, WeaponType
+            from config import SkillType
+            sts = [k for k, sk in getattr(ent, 'skill_tree', None).skills.items() if sk and sk.current_level > 0] if getattr(ent, 'skill_tree', None) else []
+            if not sts:
+                return
+            st = sts[0]
+            _ang = getattr(ent, 'facing_angle', 0)
+            if st == SkillType.GRENADE:
+                _w = Weapon(WeaponType.GRENADE)
+                self.projectiles.extend(_w.fire(ent.x, ent.y, math.radians(_ang),
+                                                getattr(ent, 'damage_multiplier', 1.0), 1.0, player=ent))
+            elif st == SkillType.GRAPPLE_PULL:
+                rg = getattr(ent, 'riot_gear', None)
+                if rg is not None and rg.grapple_cooldown <= 0 and not rg.grapple_active:
+                    _r = rg.grapple_max_range
+                    rg.use_grapple(ent.x + math.cos(math.radians(_ang)) * _r,
+                                   ent.y + math.sin(math.radians(_ang)) * _r,
+                                   ent.x, ent.y, None)
+        except Exception:
+            pass
 
     def _net_send_snapshot(self):
         """主机：每帧广播世界快照给客户端（20Hz 节流 + 坐标量化）"""
@@ -316,6 +390,8 @@ class NetMixin:
                 "max_hp": int(_p.max_hp), "alive": bool(_p.alive),
                 "downed": bool(getattr(_p, 'downed', False)),
                 "weapon": _p.get_current_weapon().name if _p.get_current_weapon() else "PISTOL",
+                # v2.2.13 PvPvE：同步阵营（客户端区分敌我渲染）
+                "team": int(getattr(_p, 'team_id', 0) or 0),
             })
         return out
 
@@ -347,6 +423,10 @@ class NetMixin:
             }
         except Exception:
             _rc = {}
+        try:
+            self.net_port = max(1024, min(65535, int(getattr(self, 'net_port_input', '26000') or '26000')))
+        except Exception:
+            self.net_port = 26000
         self.net_host = NetHost(self.net_port, room_cfg=_rc)
         if self.net_host.start():
             self.state = GameState.NET_WAIT
@@ -361,6 +441,10 @@ class NetMixin:
         self._net_stop()
         self.net_role = "client"
         ip = (self.net_ip_input or "127.0.0.1").strip()
+        try:
+            self.net_port = max(1024, min(65535, int(getattr(self, 'net_port_input', '26000') or '26000')))
+        except Exception:
+            self.net_port = 26000
         self.net_client = NetClient(ip, self.net_port)
         ok = self.net_client.start()
         if not ok:

@@ -500,9 +500,36 @@ class CombatMixin:
                 self.particles.spawn(enemy.x, enemy.y, enemy.color, 8, size_range=(3, 6), velocity_range=(-50, 50), lifetime_range=(0.3, 0.6))
                 if not enemy.alive:
                     self._on_enemy_death(enemy)
+
+            # v2.2.13 PvPvE：近战可命中非队友玩家（同屏/网络对战互砍）
+            if getattr(self.config, 'pvp_enabled', False):
+                for _pp in self._all_players():
+                    if _pp is self.player or not getattr(_pp, 'alive', True) or getattr(_pp, 'downed', False):
+                        continue
+                    if getattr(_pp, 'team_id', 1) == getattr(self.player, 'team_id', 0):
+                        continue
+                    _dx = _pp.x - self.player.x
+                    _dy = _pp.y - self.player.y
+                    _dist = math.hypot(_dx, _dy)
+                    if _dist > self.melee_attack_range + 20:
+                        continue
+                    _ea = math.atan2(_dy, _dx)
+                    _ad = abs(((_ea - self.melee_attack_angle + math.pi) % (math.pi * 2)) - math.pi)
+                    if _ad > attack_arc / 2:
+                        continue
+                    if id(_pp) in getattr(self, 'melee_hit_players', set()):
+                        continue
+                    if not hasattr(self, 'melee_hit_players'):
+                        self.melee_hit_players = set()
+                    self.melee_hit_players.add(id(_pp))
+                    _pp.take_damage(self.melee_attack_damage, damage_type='melee',
+                                    attack_x=self.player.x, attack_y=self.player.y)
+                    self.damage_numbers.append(DamageNumber(_pp.x, _pp.y, int(self.melee_attack_damage), color=RED))
         
         if self.melee_attack_timer <= 0:
             self.melee_attack_active = False
+            if hasattr(self, 'melee_hit_players'):
+                self.melee_hit_players.clear()
             self.melee_attack_weapon = None
         
         # 更新连击计时器

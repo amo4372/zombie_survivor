@@ -245,6 +245,9 @@ class InputMixin:
                 if -1 in self._active_touch_ids:
                     self._active_touch_last[-1] = time.time()
                 self.touch_events.append({"type": "move", "pos": event.pos, "id": -1})
+            elif event.type == pygame.MOUSEWHEEL:
+                # v2.2.13：滚轮事件进入统一事件流（下拉栏滚动条等使用）
+                self.touch_events.append({"type": "wheel", "pos": pygame.mouse.get_pos(), "dy": event.y})
 
         mouse_pos = pygame.mouse.get_pos()
         mouse_pressed = pygame.mouse.get_pressed()
@@ -615,12 +618,25 @@ class InputMixin:
 
     # ================= 开发者测试模式 =================
     def _handle_net_ip_keyboard(self, events):
-        """网络联机界面 IP 输入框：聚焦时接受系统输入法输入"""
+        """网络联机界面 IP/端口输入框：聚焦时接受系统输入法输入（v2.2.13 加端口）"""
         for ev in events:
             if ev.type == pygame.TEXTINPUT:
-                if len(self.net_ip_input) < 30:
+                if self.net_port_focused:
+                    if len(self.net_port_input) < 6 and (ev.text.isdigit() or ev.text == ""):
+                        self.net_port_input += ev.text
+                elif len(self.net_ip_input) < 30:
                     self.net_ip_input += ev.text
             elif ev.type == pygame.KEYDOWN:
+                if self.net_port_focused:
+                    if ev.key == pygame.K_RETURN:
+                        self.net_port_focused = False
+                        self.stop_text_input()
+                    elif ev.key == pygame.K_BACKSPACE:
+                        self.net_port_input = self.net_port_input[:-1]
+                    elif ev.key == pygame.K_ESCAPE:
+                        self.net_port_focused = False
+                        self.stop_text_input()
+                    continue
                 if ev.key == pygame.K_RETURN:
                     self.net_ip_focused = False
                     self.stop_text_input()

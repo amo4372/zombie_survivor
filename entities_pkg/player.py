@@ -644,3 +644,13 @@ class Player:
             screen.blit(aura_surf, (px - int(40*scale), py - int(40*scale)))
             if int(pygame.time.get_ticks() / 200) % 2 == 0:
                 pygame.draw.circle(screen, CRIMSON, (px, py), int((s + 8) * scale), max(1, int(2*scale)))
+
+        # v2.2.13 PvPvE 阵营标识：合作模式 team_id=0 不显示，PvP 时头顶 A/B 标签
+        _tid = getattr(self, 'team_id', 0)
+        if _tid and font is not None:
+            try:
+                _tc = (230, 90, 90) if _tid == 1 else (90, 200, 250)
+                _tt = font.render('AB'[_tid % 2], True, _tc)
+                screen.blit(_tt, _tt.get_rect(centerx=px, top=py - s - int(22 * scale)))
+            except Exception:
+                pass
