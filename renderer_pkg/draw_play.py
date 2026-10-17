@@ -285,8 +285,10 @@ class PlayMixin:
                         self.screen.blit(_bt, _bt.get_rect(midtop=(self.game.scaled_width // 2 + viewport_x, int(30 * scale))))
         except Exception:
             pass
-        # 绘制世界
-        self.world.draw(self.screen, cam_x, cam_y, scale, self.game.assets)
+        # 绘制世界（v2.5.1 修复：world 挂载于 game，Renderer 本身无 world 属性）
+        _w = getattr(self.game, 'world', None)
+        if _w is not None:
+            _w.draw(self.screen, cam_x, cam_y, scale, self.game.assets)
 
         # 绘制可拾取文本资料
         for text_item in self.game.text_items:
@@ -446,6 +448,29 @@ class PlayMixin:
                 pygame.draw.line(_ice, (230, 250, 255, 220), (_cx, _cy - _ir + 2), (_cx, _cy + _ir - 2), max(1, int(1 * scale)))
                 pygame.draw.line(_ice, (230, 250, 255, 220), (_cx - _ir + 2, _cy), (_cx + _ir - 2, _cy), max(1, int(1 * scale)))
                 self.screen.blit(_ice, (_ppx - _cx, _ppy - _cy))
+
+        # v2.5.1 阵营载具乘坐提示：乘客"长按下车" / 附近候选"技能按钮上车"
+        try:
+            if self.game.is_multiplayer_active():
+                for _ip in _ice_players:
+                    _ihint = None
+                    if getattr(_ip, 'riding_vehicle', None) is not None and getattr(_ip.riding_vehicle, 'alive', False):
+                        _ihint = "长按技能按钮下车"
+                    else:
+                        _bc = self.game._find_board_candidate(_ip)
+                        if _bc is not None:
+                            _ihint = "技能按钮上车"
+                    if _ihint:
+                        _hx = int((_ip.x - cam_x) * scale)
+                        _hy = int((_ip.y - cam_y) * scale) - int(34 * scale)
+                        _ht = self.game.font_small.render(_ihint, True, (120, 220, 255))
+                        _hb = _ht.get_rect(center=(_hx, _hy))
+                        _bg = pygame.Surface((_ht.get_width() + 8, _ht.get_height() + 4), pygame.SRCALPHA)
+                        _bg.fill((0, 30, 60, 170))
+                        self.screen.blit(_bg, (_hb.x - 4, _hb.y - 2))
+                        self.screen.blit(_ht, _hb)
+        except Exception:
+            pass
 
         # 近战挥砍动画
         if hasattr(self.game, 'melee_attack_active') and self.game.melee_attack_active:

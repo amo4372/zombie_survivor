@@ -633,6 +633,18 @@ class PlayingMixin:
                     else:
                         self.floating_texts.append(FloatingText(
                             self.player.x, self.player.y - 50, "长按技能按钮退出载具", (160, 160, 160), 1.2))
+                elif getattr(self.player, 'riding_vehicle', None) is not None:
+                    # v2.5.1 乘客：长按技能按钮下车
+                    if self.skill_caster.was_aiming_on_release:
+                        self._exit_vehicle(self.player)
+                    else:
+                        self.floating_texts.append(FloatingText(
+                            self.player.x, self.player.y - 50, "长按技能按钮下车", (160, 160, 160), 1.2))
+                elif self._find_board_candidate(self.player) is not None and self.is_multiplayer_active():
+                    # v2.5.1 附近有同阵营载具：按下技能按钮即上车
+                    _bc = self._find_board_candidate(self.player)
+                    if _bc is not None:
+                        self._board_vehicle(self.player, _bc)
                 elif self.skill_caster.was_aiming_on_release:
                     self._use_skill_aimed(self.selected_skill, self.skill_caster.angle, self.skill_caster.distance_ratio,
                                             force_self_pull=self.skill_caster.was_aiming_on_release)
@@ -743,16 +755,21 @@ class PlayingMixin:
             if _veh is not None and not _veh.alive:
                 self._vehicle_destroyed()
             elif _veh is None:
-                # v2.2.10 修复：钩爪自我拉拽期间禁用玩家额外位移（拉回独占位移，
-                # 防"故意不走蹭无敌"）——玩家输入 move 清零，仅由 gear self_pull 拉回
-                try:
-                    if getattr(self.player, 'riot_gear', None) is not None and \
-                            getattr(self.player.riot_gear, 'grapple_state', None) == "self_pull":
-                        move_x, move_y = 0.0, 0.0
-                except Exception:
-                    pass
-                self.player.update(dt, move_x * _zone_mult, move_y * _zone_mult,
-                                   mouse_angle, self.world, sprinting=sprinting)
+                # v2.5.1 阵营载具乘客：位置由载具 update 同步，禁用玩家位移（射击/技能照常）
+                _rv2 = getattr(self.player, 'riding_vehicle', None)
+                if _rv2 is not None and getattr(_rv2, 'alive', False):
+                    self.player.update(dt, 0.0, 0.0, mouse_angle, self.world, sprinting=False)
+                else:
+                    # v2.2.10 修复：钩爪自我拉拽期间禁用玩家额外位移（拉回独占位移，
+                    # 防"故意不走蹭无敌"）——玩家输入 move 清零，仅由 gear self_pull 拉回
+                    try:
+                        if getattr(self.player, 'riot_gear', None) is not None and \
+                                getattr(self.player.riot_gear, 'grapple_state', None) == "self_pull":
+                            move_x, move_y = 0.0, 0.0
+                    except Exception:
+                        pass
+                    self.player.update(dt, move_x * _zone_mult, move_y * _zone_mult,
+                                       mouse_angle, self.world, sprinting=sprinting)
                 # 符文：再生效果
                 if hasattr(self, 'rune_manager'):
                     regen = self.rune_manager.get_bonus("regen")

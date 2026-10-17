@@ -380,14 +380,19 @@ class MultiplayerMixin:
             self._vehicle_destroyed_for(p2)
             p2.update(dt, 0, 0, angle, self.world, sprinting=False)
         elif mx != 0 or my != 0:
-            # v2.2.10 修复：P2 钩爪自我拉拽期间禁用玩家额外位移（拉回独占位移）
-            try:
-                if getattr(p2, 'riot_gear', None) is not None and \
-                        getattr(p2.riot_gear, 'grapple_state', None) == "self_pull":
-                    mx, my = 0.0, 0.0
-            except Exception:
-                pass
-            p2.update(dt, mx, my, angle, self.world, sprinting=sprint)
+            # v2.5.1 P2 阵营载具乘客：位置由载具同步，禁用位移
+            if getattr(p2, 'riding_vehicle', None) is not None and \
+                    getattr(p2.riding_vehicle, 'alive', False):
+                p2.update(dt, 0, 0, angle, self.world, sprinting=False)
+            else:
+                # v2.2.10 修复：P2 钩爪自我拉拽期间禁用玩家额外位移（拉回独占位移）
+                try:
+                    if getattr(p2, 'riot_gear', None) is not None and \
+                            getattr(p2.riot_gear, 'grapple_state', None) == "self_pull":
+                        mx, my = 0.0, 0.0
+                except Exception:
+                    pass
+                p2.update(dt, mx, my, angle, self.world, sprinting=sprint)
         else:
             p2.update(dt, 0, 0, angle, self.world, sprinting=sprint)
         p2.facing_angle = angle
@@ -426,6 +431,18 @@ class MultiplayerMixin:
                     else:
                         self.floating_texts.append(FloatingText(
                             p2.x, p2.y - 50, "长按技能按钮退出载具", (160, 160, 160), 1.2))
+                elif getattr(p2, 'riding_vehicle', None) is not None:
+                    # v2.5.1 P2 乘客：长按技能按钮下车
+                    if getattr(self, '_p2_cast_aimed', False):
+                        self._exit_vehicle(p2)
+                    else:
+                        self.floating_texts.append(FloatingText(
+                            p2.x, p2.y - 50, "长按技能按钮下车", (160, 160, 160), 1.2))
+                elif self._find_board_candidate(p2) is not None and self.is_multiplayer_active():
+                    # v2.5.1 P2 附近有同阵营载具：按下技能按钮上车
+                    _bc2 = self._find_board_candidate(p2)
+                    if _bc2 is not None:
+                        self._board_vehicle(p2, _bc2)
                 elif getattr(self, '_p2_cast_aimed', False):
                     # 触控长按/拖拽预瞄释放（方向+距离）
                     self._use_skill_p2_aimed(st, getattr(self, '_p2_cast_angle', p2.facing_angle),
@@ -985,8 +1002,12 @@ class MultiplayerMixin:
                     _rg2._reset_grapple()
                 except Exception:
                     pass
-            p2.vehicle = Vehicle(vid, p2.x, p2.y, damage_mult=dmg_mult, tint=tint)
+            p2.vehicle = Vehicle(vid, p2.x, p2.y, damage_mult=dmg_mult, tint=tint,
+                                  level=skill.current_level)  # v2.5.1 三级大运属性递增
             p2.vehicle.on_enemy_death_cb = self._on_enemy_death
+            # v2.5.1 阵营乘坐：记录司机与阵营
+            p2.vehicle.owner = p2
+            p2.vehicle.owner_team = getattr(p2, 'team_id', 0)
             self.floating_texts.append(FloatingText(
                 p2.x, p2.y - 60, f"P2召唤 {vname}!", color=(0, 190, 255), lifetime=2.0))
             self.particles.spawn_explosion(p2.x, p2.y, (0, 190, 255), 30)
@@ -998,6 +1019,11 @@ class MultiplayerMixin:
         """指定玩家载具被摧毁（P1/P2 通用）；friendly=True 为主动退出（v2.2.3）"""
         try:
             if getattr(player, 'vehicle', None) is not None:
+                # v2.5.1 乘客全员下车
+                try:
+                    player.vehicle.dismount_all()
+                except Exception:
+                    pass
                 player.vehicle = None
                 cd = 60.0 * getattr(player, 'cooldown_mult', 1.0)
                 player.active_skills[SkillType.VEHICLE_SUMMON] = cd

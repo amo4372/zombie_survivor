@@ -121,6 +121,7 @@ class Player:
 
         # v2.2.0 载具召唤物（玩家骑乘时非 None）
         self.vehicle = None
+        self.riding_vehicle = None  # v2.5.1 阵营载具乘客：乘坐他人载具时指向载具
 
     def can_act(self):
         """检查玩家是否可以执行主动操作（射击/技能/切换武器等）
@@ -467,6 +468,11 @@ class Player:
     def take_damage(self, damage, damage_type="melee", from_front=False, attack_x=None, attack_y=None):
         # 开发者模式：无敌
         if getattr(self, 'dev_god', False):
+            return 0
+        # v2.5.1 阵营载具乘客：受到的伤害记在载具血条上（乘客本体不扣血）
+        _rv = getattr(self, 'riding_vehicle', None)
+        if _rv is not None and getattr(_rv, 'alive', False):
+            _rv.take_damage(max(1, int(damage)), damage_type=damage_type)
             return 0
         # v2.1.3：同屏双人升级选卡期间该玩家免伤（临时脱锁，选卡完成后恢复）
         if getattr(self, 'upgrade_paused', False):

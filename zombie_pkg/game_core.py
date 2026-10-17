@@ -965,8 +965,12 @@ class GameCore:
                     _rg._reset_grapple()
                 except Exception:
                     pass
-            self.player.vehicle = Vehicle(vid, self.player.x, self.player.y, damage_mult=dmg_mult, tint=tint)
+            self.player.vehicle = Vehicle(vid, self.player.x, self.player.y, damage_mult=dmg_mult, tint=tint,
+                                           level=skill.current_level)  # v2.5.1 三级大运属性递增
             self.player.vehicle.on_enemy_death_cb = self._on_enemy_death
+            # v2.5.1 阵营乘坐：记录司机与阵营（PvP 时异阵营不可乘坐）
+            self.player.vehicle.owner = self.player
+            self.player.vehicle.owner_team = getattr(self.player, 'team_id', 0)
             self.floating_texts.append(FloatingText(
                 self.player.x, self.player.y - 60, f"召唤 {vname}!", color=(0, 190, 255), lifetime=2.0))
             self.particles.spawn_explosion(self.player.x, self.player.y, (0, 190, 255), 30)
@@ -977,9 +981,15 @@ class GameCore:
             return False
 
     def _vehicle_destroyed(self):
-        """载具被摧毁：玩家脱离，技能进入冷却"""
+        """载具被摧毁：司机+乘客全员脱离，技能进入冷却"""
         try:
-            if getattr(self.player, 'vehicle', None) is not None:
+            _veh = getattr(self.player, 'vehicle', None)
+            if _veh is not None:
+                # v2.5.1 乘客全员下车
+                try:
+                    _veh.dismount_all()
+                except Exception:
+                    pass
                 self.player.vehicle = None
                 # 技能进入冷却（60s * 冷却缩减）
                 cd = 60.0 * getattr(self.player, 'cooldown_mult', 1.0)
@@ -993,11 +1003,29 @@ class GameCore:
 
     def _exit_vehicle(self, player):
         """v2.2.3 主动退出载具（长按技能键/按钮触发）：
-        玩家脱离载具，载具进入 60s 冷却（与摧毁同规则，从退出后才开始计时）"""
+        玩家脱离载具，载具进入 60s 冷却（与摧毁同规则，从退出后才开始计时）。
+        v2.5.1：乘客下车不触发司机技能冷却，仅司机退出才冷却。"""
         try:
+            # v2.5.1 乘客下车
+            _rv = getattr(player, 'riding_vehicle', None)
+            if _rv is not None:
+                try:
+                    _rv.remove_passenger(player)
+                except Exception:
+                    player.riding_vehicle = None
+                player.riding_vehicle = None
+                self.particles.spawn_explosion(player.x, player.y, (120, 200, 255), 18)
+                self.floating_texts.append(FloatingText(
+                    player.x, player.y - 50, "已下车", color=(120, 200, 255), lifetime=1.2))
+                return True
             veh = getattr(player, 'vehicle', None)
             if veh is None:
                 return False
+            # v2.5.1 司机退出：乘客一并下车
+            try:
+                veh.dismount_all()
+            except Exception:
+                pass
             player.vehicle = None
             cd = 60.0 * getattr(player, 'cooldown_mult', 1.0)
             player.active_skills[SkillType.VEHICLE_SUMMON] = cd
@@ -1006,6 +1034,51 @@ class GameCore:
             self.floating_texts.append(FloatingText(
                 player.x, player.y - 50, "已退出载具", color=(120, 200, 255), lifetime=1.5))
             return True
+        except Exception:
+            return False
+
+    # ==================== v2.5.1 阵营载具乘坐 ====================
+    def _find_board_candidate(self, player):
+        """找玩家附近（<140px）同阵营存活载具：合作模式全队可坐，PvP 仅同阵营"""
+        try:
+            if getattr(player, 'vehicle', None) is not None or getattr(player, 'riding_vehicle', None) is not None:
+                return None
+            pv = self.is_multiplayer_active()
+            if not pv:
+                return None
+            pteam = getattr(player, 'team_id', 0)
+            for _other in self._alive_players():
+                if _other is player:
+                    continue
+                _v = getattr(_other, 'vehicle', None)
+                if _v is None or not getattr(_v, 'alive', False):
+                    continue
+                # 合作模式（pvp_enabled=False）或同阵营：可乘坐
+                if self.pvp_enabled and getattr(_v, 'owner_team', 0) != pteam:
+                    continue
+                if math.hypot(_v.x - player.x, _v.y - player.y) < 140.0:
+                    return _v
+            return None
+        except Exception:
+            return None
+
+    def _board_vehicle(self, player, veh):
+        """上车：同阵营玩家进入载具成为乘客"""
+        try:
+            if veh is None:
+                return False
+            if getattr(player, 'vehicle', None) is not None or getattr(player, 'riding_vehicle', None) is not None:
+                return False
+            if not getattr(veh, 'alive', False):
+                return False
+            if self.pvp_enabled and getattr(veh, 'owner_team', 0) != getattr(player, 'team_id', 0):
+                return False
+            if veh.add_passenger(player):
+                self.particles.spawn_explosion(player.x, player.y, (0, 190, 255), 16)
+                self.floating_texts.append(FloatingText(
+                    player.x, player.y - 50, "登上载具!", color=(0, 190, 255), lifetime=1.2))
+                return True
+            return False
         except Exception:
             return False
 

@@ -102,13 +102,18 @@ def load_vehicle_images():
 class Vehicle:
     """玩家召唤载具：专属血条、不应用回血、可被僵尸破坏"""
 
-    def __init__(self, vehicle_type, x, y, damage_mult=1.0, tint=None):
+    def __init__(self, vehicle_type, x, y, damage_mult=1.0, tint=None, level=1):
         self.type_id = vehicle_type          # v2.2.7 三级全为 "truck"（大运），tint 区分红/黄/银
         self.tint = tint                     # v2.2.7 载具皮肤色调（None=原图）
+        self.level = max(1, min(3, int(level or 1)))  # v2.5.1 三级数值递增
         self.x = float(x)
         self.y = float(y)
         self.damage_mult = damage_mult
         self.facing_angle = 0.0
+        # v2.5.1 阵营乘坐系统：owner=召唤者(司机)，passengers=同阵营乘客，owner_team 用于同阵营判定
+        self.owner = None
+        self.owner_team = 0
+        self.passengers = []
 
         # === 类型属性表（等级1重卡为基础，2坦克、3武直增强）===
         base = {
@@ -132,6 +137,13 @@ class Vehicle:
                 "fire_rate": 0.14, "fire_timer": 0.0, "rocket_cd": 0.0,
                 "armor_reduction": 0.15, "collision": 66,   # v2.5.0 武直碰撞箱
             })
+        # v2.5.1 三级全为大运：属性按级增强（红→金→银），每级血量/撞击/车身/碰撞箱递增
+        if vehicle_type == "truck" and self.level > 1:
+            _lv_up = {
+                2: {"hp": 1500, "speed": 265, "ram_damage": 110, "size": 50, "collision": 84},
+                3: {"hp": 2200, "speed": 282, "ram_damage": 160, "size": 55, "collision": 96},
+            }.get(self.level, {})
+            base.update(_lv_up)
 
         self.max_hp = base["hp"]
         self.hp = self.max_hp
@@ -175,6 +187,11 @@ class Vehicle:
     def update(self, dt):
         if self.dead:
             return
+        # v2.5.1 乘客位置跟随载具（射击/技能从载具位置发出，伤害判定在载具上）
+        for _ps in list(getattr(self, 'passengers', []) or []):
+            if getattr(_ps, 'alive', False):
+                _ps.x = self.x
+                _ps.y = self.y
         if self.reload_timer > 0:
             self.reload_timer = max(0.0, self.reload_timer - dt)
             if self.reload_timer <= 0 and self.mag_size > 0:
@@ -185,6 +202,36 @@ class Vehicle:
             self.rocket_cd = max(0.0, self.rocket_cd - dt)
         if self.shake_timer > 0:
             self.shake_timer = max(0.0, self.shake_timer - dt)
+
+    # ==================== v2.5.1 乘客 ====================
+    def add_passenger(self, p):
+        """同阵营玩家上车成为乘客：位置锁定到载具，受击转扣载具"""
+        if p is None or getattr(p, 'riding_vehicle', None) is self:
+            return False
+        if p is self.owner or getattr(p, 'vehicle', None) is not None:
+            return False  # 司机/已有载具者不能作为乘客
+        self.passengers.append(p)
+        p.riding_vehicle = self
+        p.x = self.x
+        p.y = self.y
+        # 上车后清空位移输入痕迹
+        try:
+            p.vx = p.vy = 0.0
+        except Exception:
+            pass
+        return True
+
+    def remove_passenger(self, p):
+        if p in self.passengers:
+            self.passengers.remove(p)
+        if getattr(p, 'riding_vehicle', None) is self:
+            p.riding_vehicle = None
+        return True
+
+    def dismount_all(self):
+        for _ps in list(self.passengers or []):
+            self.remove_passenger(_ps)
+        self.passengers = []
 
     # ==================== 移动 ====================
     def move(self, move_x, move_y, dt, clamp_func=None):
