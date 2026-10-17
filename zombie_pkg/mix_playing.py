@@ -229,7 +229,12 @@ class PlayingMixin:
             p._rescue_last_hp = p.hp
             if self.multiplayer_mode == "same_screen":
                 _cd_ok = (_now - getattr(p, 'last_rescue_time', -999.0)) >= self.RESCUE_COOLDOWN
-                near = mate is not None and not mate.downed and math.hypot(mate.x - p.x, mate.y - p.y) < 120
+                # v2.4.0 PvPvE：只有同阵营队友可救援（异阵营不能互相救）
+                _same_team = True
+                if getattr(self.config, 'pvp_enabled', False):
+                    _same_team = getattr(p, 'team_id', 0) == getattr(mate, 'team_id', 1)
+                near = (mate is not None and not mate.downed and _same_team
+                        and math.hypot(mate.x - p.x, mate.y - p.y) < 120)
                 if near and _cd_ok:
                     p.rescue_progress += dt
                     # v2.2.7 救援者 UI 反馈：救援者与被救者都看到进度（0.5s 节流浮字）
@@ -1014,6 +1019,12 @@ class PlayingMixin:
             except:
                 pass
             if getattr(enemy, "is_boss", False):
+                # v2.4.0 boss 软性限制圈：中心=生成点，半径随波次增大（出圈减速拉回，不硬阻挡）
+                try:
+                    _bzr = 420.0 + min(260.0, getattr(self.horde_manager, 'wave_count', 0) * 12.0)
+                    enemy.boss_zone = (float(enemy.x), float(enemy.y), _bzr)
+                except Exception:
+                    pass
                 try:
                     self._boss_dialogue(spawn_type)
                 except Exception:
@@ -1654,6 +1665,17 @@ class PlayingMixin:
                             if dist < enemy.heal_radius:
                                 other.hp = min(other.max_hp, other.hp + enemy.heal_amount * 2.0)
 
+            # v2.4.0 boss 软性限制圈：出圈越远拉回越强（软性，圈内完全自由）
+            _z = getattr(enemy, 'boss_zone', None)
+            if _z and getattr(enemy, 'is_boss', False) and enemy.alive:
+                _zx, _zy, _zr = _z
+                _zd = math.hypot(enemy.x - _zx, enemy.y - _zy)
+                if _zd > _zr:
+                    _pull = min(1.0, (_zd - _zr) / max(50.0, _zr * 0.5))
+                    _fx = (_zx - enemy.x) / _zd
+                    _fy = (_zy - enemy.y) / _zd
+                    enemy.x += _fx * 90.0 * _pull * dt
+                    enemy.y += _fy * 90.0 * _pull * dt
             # 限制怪物在地图内
             enemy.x, enemy.y = self.world.clamp_position(enemy.x, enemy.y, enemy.size)
 
@@ -1706,10 +1728,12 @@ class PlayingMixin:
             if result == "explode":
                 self.particles.spawn_explosion(proj.x, proj.y, ORANGE, 30)
                 self.camera.shake(5, 0.3)
+                _ht = getattr(getattr(proj, 'owner', None), 'team_id', 0)
                 for enemy in self.enemies:
                     dist = math.hypot(enemy.x - proj.x, enemy.y - proj.y)
                     if dist < proj.explosion_radius:
                         damage = proj.damage * (1 - dist / proj.explosion_radius)
+                        enemy._last_hit_team = _ht  # v2.4.0 击杀归属阵营（争分夺秒分阵营加时）
                         enemy.take_damage(damage)
                         self.damage_numbers.append(DamageNumber(enemy.x, enemy.y, damage))
                         if not enemy.alive:
@@ -1766,6 +1790,7 @@ class PlayingMixin:
                         proj.hits.append(enemy)
                         is_crit = random.random() < self.player.crit_chance
                         actual_damage = proj.damage * (self.player.crit_damage if is_crit else 1)
+                        enemy._last_hit_team = getattr(getattr(proj, 'owner', None), 'team_id', 0)  # v2.4.0
                         enemy.take_damage(actual_damage)
                         self._apply_rune_elemental_on_hit(enemy, actual_damage)
                         self._vampire_heal(actual_damage, sx=enemy.x, sy=enemy.y)
@@ -2134,6 +2159,91 @@ class PlayingMixin:
                     self._settle_race_auto()
             except Exception:
                 pass
+
+    # ==================== v2.4.0 阵营胜负判定 ====================
+    def _init_team_race(self):
+        """争分夺秒：为每个阵营初始化独立计时器（阵营内共享；单人=单一阵营 0）"""
+        if getattr(self, '_team_race_inited', False):
+            return
+        self._team_race_inited = True
+        self.team_race = {}
+        _init = float(getattr(getattr(self, 'horde_manager', None), 'race_time_left', 60.0) or 60.0)
+        _init = max(_init, getattr(getattr(self, 'horde_manager', None), 'race_max_time', 180.0) or 180.0)
+        _teams = set()
+        for _pp in self._all_players():
+            if _pp is not None:
+                _teams.add(getattr(_pp, 'team_id', 0))
+        for _t in _teams or {0}:
+            self.team_race[int(_t)] = {"time": float(_init), "out": False}
+
+    def _team_race_add_time(self, team, amount):
+        """分阵营加时（击杀归属阵营）"""
+        try:
+            _init = float(getattr(getattr(self, 'horde_manager', None), 'race_max_time', 180.0) or 180.0)
+            _tr = self.team_race.get(int(team))
+            if _tr is not None:
+                _tr["time"] = min(_init, _tr["time"] + max(0.0, float(amount)))
+        except Exception:
+            pass
+
+    def _check_round_end(self, dt):
+        """v2.4.0 阵营胜负判定（多人）：
+        故事/无尽 PvPvE：只剩一个阵营有存活玩家 → 该阵营胜利；
+        争分夺秒：每阵营独立计时（阵营内共享），计时尽或全灭 → 出局，最后一阵营胜利。
+        返回胜利阵营 team_id（int）或 None（继续游戏）。"""
+        if not self.is_multiplayer_active():
+            return None
+        _players = [p for p in self._all_players() if p is not None]
+        if not _players:
+            return None
+        _alive_teams = set()
+        for _pp in _players:
+            if getattr(_pp, 'alive', False) and not getattr(_pp, 'downed', False):
+                _alive_teams.add(getattr(_pp, 'team_id', 0))
+        if self.config.game_mode == GameMode.TIMED:
+            if not getattr(self, '_team_race_inited', False):
+                self._init_team_race()
+            # 阵营计时递减 / 全灭出局
+            for _t in list(getattr(self, 'team_race', {}).keys()):
+                _tr = self.team_race[_t]
+                if _t in _alive_teams and not _tr["out"]:
+                    _tr["time"] = max(0.0, _tr["time"] - dt)
+                    if _tr["time"] <= 0.0:
+                        _tr["out"] = True
+                elif _t not in _alive_teams:
+                    _tr["out"] = True
+            _active = [t for t, v in self.team_race.items() if not v["out"]]
+            if len(_active) <= 1:
+                return _active[0] if _active else None
+            return None
+        # 故事/无尽 PvP：只剩一个阵营存活 → 胜利
+        if getattr(self.config, 'pvp_enabled', False):
+            if len(_alive_teams) <= 1:
+                return next(iter(_alive_teams), None)
+        return None
+
+    def _trigger_team_victory(self, team):
+        """v2.4.0 阵营胜利结算：显示阵营胜利页面"""
+        if self.state != GameState.PLAYING:
+            return
+        self.victory_team = int(team or 0)
+        self.victory_timer = 3.0
+        try:
+            if self.config.game_mode == GameMode.TIMED:
+                self._record_race_result(victory=True)
+            if self.session:
+                self.session.end_session(victory=True)
+                _unlocks = self.session.finalize() or []
+                for _k in _unlocks:
+                    _ad = self.records.data["achievements"].get(_k)
+                    if _ad:
+                        self.ach_toast_queue.append({"key": _k, "desc": _ad["desc"], "timer": 4.0})
+            self.session = None
+        except Exception:
+            pass
+        self.assets.play_music("gameover")
+        self.delete_saved_game()
+        self.state = GameState.GAME_OVER
 
     # ==================== 争分夺秒结算（v2.2.0） ====================
     def _record_race_result(self, victory=True):

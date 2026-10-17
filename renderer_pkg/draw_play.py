@@ -51,27 +51,44 @@ class PlayMixin:
         # ===== 顶部：时间/尸潮倒计时（P1）与波次（P2） =====
         hm = getattr(g, 'horde_manager', None)
         if label == "P1":
-            try:
-                t_text, is_cd = hm.get_time_display() if hm else ("00:00", True)
-                t_color = RED if (is_cd and int(t_text.split(":")[0]) * 60 + int(t_text.split(":")[1]) < 30) else WHITE
-                t_txt = g.font.render(t_text, True, t_color)
-                self.screen.blit(t_txt, t_txt.get_rect(midtop=(rect.x + half_w // 2, rect.y + int(4 * scale))))
-                # v2.2.3 争分夺秒加时反馈：计时器下方显示 "+N 秒"（随时间淡出）
+            # v2.4.0 争分夺秒分阵营计时：PvP 时显示本阵营独立计时器（阵营内共享）
+            _tr = getattr(g, 'team_race', None)
+            _my_team = getattr(player, 'team_id', 0)
+            if (_tr and getattr(g.config, 'pvp_enabled', False)
+                    and g.config.game_mode == GameMode.TIMED and _my_team in _tr):
                 try:
-                    _gain = getattr(g, 'race_last_gain', 0)
-                    _gt = getattr(g, 'race_gain_timer', 0.0)
-                    if _gain > 0 and _gt > 0:
-                        _alpha = min(1.0, _gt / 1.4)
-                        _gp = int(255 * _alpha)
-                        _gtxt = g.font_small.render(f"+{int(_gain)} 秒", True, (255, int(200 * _alpha), 40))
-                        _gtxt.set_alpha(_gp)
-                        self.screen.blit(_gtxt, _gtxt.get_rect(midtop=(rect.x + half_w // 2, rect.y + int(26 * scale))))
+                    _tt = _tr[_my_team]
+                    if _tt["out"]:
+                        t_txt = g.font.render("出局", True, (130, 130, 130))
+                    else:
+                        _sec = max(0, int(_tt["time"]))
+                        _tc = (230, 90, 90) if _my_team == 1 else (90, 200, 250)
+                        t_txt = g.font.render(f"{_sec // 60:02d}:{_sec % 60:02d} {'AB'[_my_team % 2]}", True, _tc)
+                    self.screen.blit(t_txt, t_txt.get_rect(midtop=(rect.x + half_w // 2, rect.y + int(4 * scale))))
                 except Exception:
                     pass
-            except Exception:
-                tl = max(0, int(getattr(g, 'time_left', 0)))
-                t_txt = g.font.render(f"{tl // 60:02d}:{tl % 60:02d}", True, WHITE)
-                self.screen.blit(t_txt, t_txt.get_rect(midtop=(rect.x + half_w // 2, rect.y + int(4 * scale))))
+            else:
+                try:
+                    t_text, is_cd = hm.get_time_display() if hm else ("00:00", True)
+                    t_color = RED if (is_cd and int(t_text.split(":")[0]) * 60 + int(t_text.split(":")[1]) < 30) else WHITE
+                    t_txt = g.font.render(t_text, True, t_color)
+                    self.screen.blit(t_txt, t_txt.get_rect(midtop=(rect.x + half_w // 2, rect.y + int(4 * scale))))
+                    # v2.2.3 争分夺秒加时反馈：计时器下方显示 "+N 秒"（随时间淡出）
+                    try:
+                        _gain = getattr(g, 'race_last_gain', 0)
+                        _gt = getattr(g, 'race_gain_timer', 0.0)
+                        if _gain > 0 and _gt > 0:
+                            _alpha = min(1.0, _gt / 1.4)
+                            _gp = int(255 * _alpha)
+                            _gtxt = g.font_small.render(f"+{int(_gain)} 秒", True, (255, int(200 * _alpha), 40))
+                            _gtxt.set_alpha(_gp)
+                            self.screen.blit(_gtxt, _gtxt.get_rect(midtop=(rect.x + half_w // 2, rect.y + int(26 * scale))))
+                    except Exception:
+                        pass
+                except Exception:
+                    tl = max(0, int(getattr(g, 'time_left', 0)))
+                    t_txt = g.font.render(f"{tl // 60:02d}:{tl % 60:02d}", True, WHITE)
+                    self.screen.blit(t_txt, t_txt.get_rect(midtop=(rect.x + half_w // 2, rect.y + int(4 * scale))))
         else:
             if hm and getattr(hm, 'is_horde_active', lambda: False)():
                 w_txt = g.font.render("尸潮!", True, RED)
@@ -329,6 +346,17 @@ class PlayMixin:
 
         # 绘制敌人
         for enemy in self.game.enemies:
+            # v2.4.0 boss 软性限制圈渲染（淡红圈，提示 boss 活动范围）
+            _z = getattr(enemy, 'boss_zone', None)
+            if _z and getattr(enemy, 'is_boss', False):
+                _ex = int((_z[0] - cam_x) * scale)
+                _ey = int((_z[1] - cam_y) * scale)
+                _er = int(_z[2] * scale)
+                if -_er < _ex < self.screen.get_width() + _er and -_er < _ey < self.screen.get_height() + _er:
+                    _zs = pygame.Surface((_er * 2, _er * 2), pygame.SRCALPHA)
+                    pygame.draw.circle(_zs, (220, 40, 40, 28), (_er, _er), _er, max(2, int(3 * scale)))
+                    pygame.draw.circle(_zs, (220, 60, 60, 40), (_er, _er), _er, 1)
+                    self.screen.blit(_zs, (_ex - _er, _ey - _er))
             enemy.draw(self.screen, cam_x, cam_y, self.game.font, scale, self.game.assets,
                        getattr(player, 'x', None), getattr(player, 'y', None))
             # 技能前摇预警：释放带前摇的技能时显示警示（红色闪烁圈+危险标记）

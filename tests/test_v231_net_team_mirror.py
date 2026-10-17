@@ -64,8 +64,11 @@ check("端口键盘输入处理", "net_port_focused" in src_inp and "net_port_in
 check("主机/客户端端口取自输入框", "int(getattr(self, 'net_port_input', '26000')" in src_net)
 check("网络页配置行：人数/玩法/模式/地图",
       "最大人数：" in src_draw and "玩法：" in src_draw and "模式：" in src_draw and "地图：" in src_draw)
-check("网络页 PvP 循环切换（合作→对战2→3→4→合作）",
-      "g.config.pvp_teams = _nt + 1" in src_draw and "g.config.pvp_enabled = False" in src_draw)
+# v2.4.0 网络页改下滑栏：人数/玩法/模式/地图为 _dd_row 下拉（不再点击循环）
+check("网络页下滑栏：_dd_row 与 _opt_pending 尾渲染",
+      "def _dd_row" in src_draw and "_opt_pending" in src_draw and "net_dd_key" in src_draw)
+check("网络页下滑栏覆盖人数/玩法/模式/地图",
+      '"net_cnt"' in src_draw and '"net_pvp"' in src_draw and '"net_mode"' in src_draw and '"net_map"' in src_draw)
 check("主机驱动客户端玩家 _update_net_host", "def _update_net_host" in src_net)
 check("_update_net_host 消费 net_host.inputs/get_input", "self.net_host.get_input(_idx)" in src_net)
 check("客户端输入帧上报 aim 角度", '"aim": _aim' in src_net)

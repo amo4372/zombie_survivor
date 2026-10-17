@@ -641,7 +641,11 @@ class GameCore:
                 self.map_config = MAP_CONFIGS[self.current_map]
                 logger.info(f"争分夺秒模式随机地图: {self.map_config['name']}")
 
-            self.world = GameWorld(map_type=self.current_map)
+            # v2.4.0 全模式有限大地图（12000² 正方形）：删除无限地图
+            self.world = GameWorld(map_type=self.current_map, limited=True)
+            # v2.4.0 新局重置阵营胜负状态
+            self.victory_team = None
+            self._team_race_inited = False
             # v2.0.13/14：可选加载 .zmap 二进制大地图（默认空=原随机地图；缺失/损坏自动回退并提示）
             _mf = getattr(self.config, "MAP_FILE", "")
             if _mf:
@@ -658,7 +662,11 @@ class GameCore:
                         logger.info(f"[ZMAP] 地图损坏({_mf})，已回退默认地图")
             logger.info(f"世界创建完成，地图: {self.map_config['name']}")
 
-            self.player = Player(0, 0, start_weapon=self.selected_weapon, start_weapon_level=self.selected_weapon_level)
+            # v2.4.0 有限地图：出生点左下角安全区（无限随机模式保持 0,0）
+            _sx, _sy = 0, 0
+            if getattr(self.world, 'limited', False):
+                _sx, _sy = 400.0, float(self.world.map_size - 400)
+            self.player = Player(_sx, _sy, start_weapon=self.selected_weapon, start_weapon_level=self.selected_weapon_level)
             # v2.0.14：加载 .zmap 时玩家出生对齐地图出生点（默认 0,0）
             _psp = getattr(self.world, "spawn_points", {}).get("player", [])
             if _psp:
@@ -666,7 +674,7 @@ class GameCore:
             # 双人模式：P1 实际武器/角色来自第一轮选择
             if self.multiplayer_mode in ("same_screen", "network"):
                 if getattr(self, 'selected_weapon_p1', None):
-                    self.player = Player(0, 0, start_weapon=self.selected_weapon_p1,
+                    self.player = Player(_sx, _sy, start_weapon=self.selected_weapon_p1,
                                          start_weapon_level=self.selected_weapon_level)
                     if _psp:
                         self.player.x, self.player.y = float(_psp[0][0]), float(_psp[0][1])
@@ -1158,6 +1166,15 @@ class GameCore:
         # 双人救援：每帧结算倒地/救援（全倒地时在此结束游戏）
         if self.is_multiplayer_active() and self._update_rescue(dt):
             self._trigger_multiplayer_game_over()
+        else:
+            # v2.4.0 阵营胜负判定：只剩一阵营/计时耗尽 → 阵营胜利结算
+            try:
+                if self.is_multiplayer_active():
+                    _wt = self._check_round_end(dt)
+                    if _wt is not None:
+                        self._trigger_team_victory(_wt)
+            except Exception:
+                pass
 
     def draw(self):
         # v2.2.8 错误弹窗优先绘制（游戏画面不覆盖弹窗，弹窗持续停留可操作）

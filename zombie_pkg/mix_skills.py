@@ -1279,7 +1279,8 @@ class SkillsMixin:
         if locked is not None and getattr(locked, "alive", False) and not getattr(locked, "is_boss", False):
             success = rg.use_grapple(locked.x, locked.y, self.player.x, self.player.y, locked, scythe=scythe)
             _locked_name = "锁定直飞"
-        elif force_self_pull:
+        elif getattr(rg, 'grapple_direct_pull', False):
+            # v2.4.0 修复：force_self_pull 残留未定义引用 → 改用钩爪直拉标志
             success = rg.use_grapple(target_x, target_y, self.player.x, self.player.y, None, scythe=scythe,
                                      direct_pull=True)
             _locked_name = "拉拽自身"

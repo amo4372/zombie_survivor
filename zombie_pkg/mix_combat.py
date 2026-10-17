@@ -494,6 +494,7 @@ class CombatMixin:
                     knockback = getattr(self.melee_attack_weapon, "knockback", 15)
                     enemy.x += math.cos(self.melee_attack_angle) * knockback
                     enemy.y += math.sin(self.melee_attack_angle) * knockback
+                enemy._last_hit_team = getattr(self.player, 'team_id', 0)  # v2.4.0 击杀归属阵营
                 enemy.take_damage(damage)
                 self.damage_numbers.append(DamageNumber(enemy.x, enemy.y, int(damage)))
                 self.melee_hit_enemies.add(id(enemy))

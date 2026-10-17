@@ -1172,7 +1172,11 @@ class EffectsMixin:
             if _hm is not None and hasattr(_hm, 'race_kill_bonus_for'):
                 _gain = _hm.race_kill_bonus_for(enemy)
                 if _gain > 0:
-                    _hm.add_race_time(_gain)
+                    # v2.4.0 争分夺秒分阵营：PvP 时加时计入击杀者阵营，合作/单人走全局计时
+                    if getattr(self.config, 'pvp_enabled', False) and getattr(self, 'team_race', None):
+                        self._team_race_add_time(getattr(enemy, '_last_hit_team', 0), _gain)
+                    else:
+                        _hm.add_race_time(_gain)
                     self.race_last_gain = getattr(self, 'race_last_gain', 0) + _gain
                     self.race_gain_timer = 1.4
                     # 击杀位置也飘字反馈（双人各自可见）

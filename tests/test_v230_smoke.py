@@ -55,8 +55,9 @@ src_gear = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__f
 check("use_grapple 支持 direct_pull", "direct_pull=False" in src_gear and "grapple_direct_pull" in src_gear)
 src_sk = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                            "zombie_pkg", "mix_skills.py"), encoding="utf-8").read()
-check("钩爪决策：force_self_pull 优先于路径勾取",
-      'elif force_self_pull:' in src_sk and "direct_pull=True" in src_sk)
+# v2.4.0 修复：force_self_pull 残留未定义引用 → 改用 grapple_direct_pull 标志
+check("钩爪决策：未锁定长按→grapple_direct_pull 直拉",
+      "getattr(rg, 'grapple_direct_pull', False)" in src_sk and "direct_pull=True" in src_sk)
 src_pl2 = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                             "zombie_pkg", "mix_playing.py"), encoding="utf-8").read()
 check("碰撞检测直拉模式跳过", "grapple_direct_pull" in src_pl2 and "return" in src_pl2.split("grapple_direct_pull")[1][:80])

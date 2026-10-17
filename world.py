@@ -209,9 +209,23 @@ class TextItem:
             pygame.draw.line(screen, (120, 100, 50), (px - int(s * 0.6), line_y), (px - int(s * 0.6) + line_w, line_y), max(1, int(scale * 0.8)))
 
 class GameWorld:
-    def __init__(self, chunk_size=2000, map_type=MapType.SCHOOL):
+    # v2.4.0 有限大地图边界（12000² 正方形，四周厚墙；全模式不再使用无限地图）
+    LIMITED_SIZE = 12000
+    LIMITED_WALL = 240
+
+    def __init__(self, chunk_size=2000, map_type=MapType.SCHOOL, limited=False, map_size=LIMITED_SIZE):
         self.chunk_size = chunk_size
         self.map_type = map_type
+        # v2.4.0 有限地图：limited=True 时一次性生成整张正方形大地图 + 边界墙
+        self.limited = bool(limited)
+        self.map_size = int(map_size or self.LIMITED_SIZE)
+        self._n_chunks = max(1, self.map_size // self.chunk_size)
+        self.bounds = (self.LIMITED_WALL + 40,
+                       self.map_size - self.LIMITED_WALL - 40) if self.limited else None
+        # 惰性空间网格（障碍只增不删，构建一次即可；有限大地图碰撞 O(1) 附近格）
+        self._grid = {}
+        self._grid_cell = 220
+        self._grid_built = False
         self.map_config = MAP_CONFIGS.get(map_type, MAP_CONFIGS[MapType.SCHOOL])
         # 地图专属地面瓷砖颜色
         self.ground_colors = {
@@ -234,6 +248,19 @@ class GameWorld:
         self._generate_initial_area()
 
     def _generate_initial_area(self):
+        if self.limited:
+            # v2.4.0 一次性生成全部 chunk（6×6 @12000），四边加厚墙
+            for _cx in range(self._n_chunks):
+                for _cy in range(self._n_chunks):
+                    self._generate_chunk(_cx, _cy)
+            _w = self.LIMITED_WALL
+            _sz = self.map_size
+            # 四周边界墙（世界之外不可通行）
+            self._add_obs('wall', 0, 0, _w, _sz, color=(70, 66, 60))
+            self._add_obs('wall', _sz - _w, 0, _w, _sz, color=(70, 66, 60))
+            self._add_obs('wall', 0, 0, _sz, _w, color=(70, 66, 60))
+            self._add_obs('wall', 0, _sz - _w, _sz, _w, color=(70, 66, 60))
+            return
         self._generate_chunk(0, 0)
 
     def _get_chunk_key(self, x, y):
@@ -243,6 +270,8 @@ class GameWorld:
 
     def _generate_chunk(self, cx, cy):
         if (cx, cy) in self.generated_chunks:
+            return
+        if self.limited and (cx < 0 or cy < 0 or cx >= self._n_chunks or cy >= self._n_chunks):
             return
         self.generated_chunks.add((cx, cy))
         self._cx, self._cy = cx, cy
@@ -523,6 +552,8 @@ class GameWorld:
         self._add_wall_run('fence', x0, y0 + H - 40, W, 12, True, (0.1,0.9))
 
     def ensure_chunks_around(self, x, y, radius=1500):
+        if self.limited:
+            return  # v2.4.0 整张地图已生成
         min_cx = math.floor((x - radius) / self.chunk_size)
         max_cx = math.floor((x + radius) / self.chunk_size)
         min_cy = math.floor((y - radius) / self.chunk_size)
@@ -537,6 +568,10 @@ class GameWorld:
         dist = random.uniform(min_dist, max_dist)
         x = player_x + math.cos(angle) * dist
         y = player_y + math.sin(angle) * dist
+        if self.limited and self.bounds:
+            _lo, _hi = self.bounds
+            x = max(_lo, min(_hi, x))
+            y = max(_lo, min(_hi, y))
 
         weights = [0.04, 0.18, 0.18, 0.12, 0.10, 0.07, 0.06, 0.04, 0.04, 0.03,
                    0.05, 0.04, 0.03, 0.02, 0.06]
@@ -565,7 +600,31 @@ class GameWorld:
             if len(self.items) < 8:
                 self.spawn_item(player_x, player_y)
 
+    def _ensure_grid(self):
+        """v2.4.0 惰性构建障碍空间网格（障碍只增不删，构建一次）"""
+        if self._grid_built:
+            return
+        self._grid_built = True
+        _c = self._grid_cell
+        for _obs in self.obstacles:
+            _r = _obs['rect']
+            for _gx in range(_r.left // _c, _r.right // _c + 1):
+                for _gy in range(_r.top // _c, _r.bottom // _c + 1):
+                    self._grid.setdefault((_gx, _gy), []).append(_obs)
+
     def check_collision(self, rect):
+        # v2.4.0 空间网格：只查矩形覆盖的格子（有限大地图 obstacles 上千个也不卡）
+        if len(self.obstacles) > 60:
+            self._ensure_grid()
+            _c = self._grid_cell
+            _gx0, _gx1 = rect.left // _c, rect.right // _c
+            _gy0, _gy1 = rect.top // _c, rect.bottom // _c
+            for _gx in range(_gx0, _gx1 + 1):
+                for _gy in range(_gy0, _gy1 + 1):
+                    for _obs in self._grid.get((_gx, _gy), ()):
+                        if rect.colliderect(_obs['rect']):
+                            return True
+            return False
         for obs in self.obstacles:
             if rect.colliderect(obs['rect']):
                 return True
@@ -594,6 +653,10 @@ class GameWorld:
 
     def clamp_position(self, x, y, size):
         self.ensure_chunks_around(x, y)
+        if self.limited and self.bounds:
+            _lo, _hi = self.bounds
+            x = max(_lo, min(_hi, x))
+            y = max(_lo, min(_hi, y))
         return x, y
 
     def draw(self, screen, camera_x, camera_y, scale=1.0, assets=None):
