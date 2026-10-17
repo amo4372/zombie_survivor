@@ -243,19 +243,32 @@ class Buff:
         return val * self.stacks
 
 
+# v2.5.0 控制类 debuff（连续硬控免疫窗口 2 秒）
+CONTROL_DEBUFFS = frozenset((BuffType.STUN, BuffType.FREEZE, BuffType.FEAR))
+
+
 class BuffManager:
     """Buff管理器 - 玩家和僵尸共用"""
     def __init__(self):
         self.buffs = {}  # {BuffType: Buff}
+        # v2.5.0 debuff 免疫窗口：控制类 debuff 结束后 2 秒内免疫同种
+        self._clock = 0.0
+        self._ctrl_end = {}
 
     def add_buff(self, buff_type, duration=None, stacks=1):
-        """添加buff，已存在则刷新时间+叠加层数"""
+        """添加buff，已存在则刷新时间+叠加层数。
+        返回 True=成功添加/刷新；False=免疫窗口内被拒绝（防连续硬控）"""
+        if buff_type in CONTROL_DEBUFFS:
+            _cd = self._clock - self._ctrl_end.get(buff_type, -999.0)
+            if _cd < 2.0:
+                return False  # 免疫窗口：同种控制 debuff 刚结束，短暂免疫
         if buff_type in self.buffs:
             self.buffs[buff_type].refresh(duration)
             self.buffs[buff_type].stacks = min(
                 self.buffs[buff_type].stacks + stacks, 5)
         else:
             self.buffs[buff_type] = Buff(buff_type, duration, stacks)
+        return True
 
     def remove_buff(self, buff_type):
         if buff_type in self.buffs:
@@ -273,6 +286,7 @@ class BuffManager:
         entity需要有 hp, max_hp, take_damage(), heal() 方法
         返回：(damage_dealt, damage_events) 其中 damage_events 是 [(damage, type_name), ...]
         """
+        self._clock += dt  # v2.5.0 免疫窗口时钟
         damage_dealt = 0
         damage_events = []  # [(damage, type_name), ...]
         expired = []
@@ -315,6 +329,9 @@ class BuffManager:
                 expired.append(btype)
         for btype in expired:
             del self.buffs[btype]
+            # v2.5.0 控制类 debuff 到期：记录免疫窗口起点
+            if btype in CONTROL_DEBUFFS:
+                self._ctrl_end[btype] = self._clock
         return damage_dealt, damage_events
 
     # === 效果计算（所有乘区相乘）===

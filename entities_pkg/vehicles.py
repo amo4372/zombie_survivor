@@ -75,6 +75,24 @@ def load_vehicle_images():
                     surf = surf.convert_alpha()
                 except Exception:
                     pass  # 无显示环境（测试/无头）直接使用原 surface
+                # v2.5.0 修复底图黑背景：按四角背景色抠除同色区域（保留车身/轮胎细节）
+                try:
+                    _w, _h = surf.get_size()
+                    _corners = [surf.get_at((0, 0)), surf.get_at((_w - 1, 0)),
+                                surf.get_at((0, _h - 1)), surf.get_at((_w - 1, _h - 1))]
+                    _bgrs = [(c.r, c.g, c.b) for c in _corners]
+                    def _near_bg(c):
+                        return any(abs(c.r - br) <= 12 and abs(c.g - bg) <= 12 and abs(c.b - bb) <= 12
+                                   for br, bg, bb in _bgrs)
+                    _pa = pygame.PixelArray(surf)
+                    for _y in range(_h):
+                        for _x in range(_w):
+                            _c = _pa[_x, _y]
+                            if _c.a > 0 and _near_bg(_c):
+                                _pa[_x, _y] = (0, 0, 0, 0)
+                    del _pa
+                except Exception:
+                    pass
                 _VEHICLE_IMAGES[vid] = surf
         except Exception:
             _VEHICLE_IMAGES.pop(vid, None)
@@ -98,26 +116,28 @@ class Vehicle:
             "immune_melee": False, "can_shoot": False,
             "mag_size": 0, "mag_left": 0, "reload_time": 0.0,
             "fire_rate": 0.0, "fire_timer": 0.0, "rocket_cd": 0.0,
-            "armor_reduction": 0.0,
+            "armor_reduction": 0.0, "collision": 74,   # v2.5.0 碰撞箱加大
         }
         if vehicle_type == "tank":
             base.update({
                 "hp": 1800, "speed": 195, "size": 58, "ram_damage": 130,
                 "can_shoot": True, "mag_size": 4, "mag_left": 4,
                 "reload_time": 2.6, "fire_rate": 0.0, "armor_reduction": 0.35,
+                "collision": 88,   # v2.5.0 坦克碰撞箱最大
             })
         elif vehicle_type == "heli":
             base.update({
                 "hp": 1100, "speed": 340, "size": 48, "ram_damage": 95,
                 "immune_melee": True, "can_shoot": True,
                 "fire_rate": 0.14, "fire_timer": 0.0, "rocket_cd": 0.0,
-                "armor_reduction": 0.15,
+                "armor_reduction": 0.15, "collision": 66,   # v2.5.0 武直碰撞箱
             })
 
         self.max_hp = base["hp"]
         self.hp = self.max_hp
         self.speed = base["speed"]
         self.size = base["size"]
+        self.collision_radius = base.get("collision", self.size + 24)  # v2.5.0 碰撞箱（>渲染 size）
         self.ram_damage = base["ram_damage"]
         self.immune_melee = base["immune_melee"]
         self.can_shoot = base["can_shoot"]
@@ -199,7 +219,7 @@ class Vehicle:
             if not getattr(enemy, "alive", False):
                 continue
             dist = math.hypot(enemy.x - self.x, enemy.y - self.y)
-            hit_radius = self.size + getattr(enemy, "size", 20) + 6
+            hit_radius = getattr(self, 'collision_radius', self.size) + getattr(enemy, "size", 20) + 6  # v2.5.0
             if dist >= hit_radius:
                 continue
             # 方向性：只撞车头前方（侧面/后方擦过不造成撞击伤害）

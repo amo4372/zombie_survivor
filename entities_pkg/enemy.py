@@ -41,7 +41,8 @@ class Enemy:
         # 控制抗性：Boss对控制类debuff有高抗性/免疫
         self.control_resistance = 0.0  # 0=无抗性, 1=完全免疫
         self.can_throw = False  # 是否能投掷道具
-        self.throw_cd = random.uniform(3.0, 6.0)  # 投掷道具CD
+        # v2.5.0 大削投掷频率：初始 7-11s，投掷后 5-9s（原 3-6 / 2-3.5 过于密集）
+        self.throw_cd = random.uniform(7.0, 11.0)  # 投掷道具CD
         self.buff_damage_events = []
         self._setup_enemy()
         # Boss控制抗性设置（在_setup_enemy后设置is_boss）
@@ -475,7 +476,7 @@ class Enemy:
                     return None
                 if dist < 150 or dist > 450:
                     return None
-                self.throw_cd = random.uniform(2.0, 3.5)
+                self.throw_cd = random.uniform(5.0, 9.0)
                 _tt = "rock"
                 if self.enemy_type == EnemyType.ZOMBIE_SPITTER:
                     _tt = "acid"
@@ -1493,6 +1494,23 @@ class Enemy:
             # 龙某举盾特效
             shield_s = int(35 * scale)
             pygame.draw.circle(screen, BLUE, (px, py), shield_s, max(2,int(3*scale)))
+        # v2.5.0 冰冻冰块渲染：冻结时覆盖全身淡蓝冰块（多边形冰晶 + 高光点）
+        if getattr(self, 'buff_manager', None) is not None and self.buff_manager.is_frozen():
+            _ice_s = s + max(2, int(3 * scale))
+            _ice = pygame.Surface((_ice_s * 2 + 8, _ice_s * 2 + 8), pygame.SRCALPHA)
+            _cx, _cy = _ice_s + 4, _ice_s + 4
+            _pts = [(_cx - _ice_s, _cy), (_cx - int(_ice_s * 0.5), _cy - _ice_s),
+                    (_cx + int(_ice_s * 0.5), _cy - _ice_s), (_cx + _ice_s, _cy),
+                    (_cx + int(_ice_s * 0.5), _cy + _ice_s), (_cx - int(_ice_s * 0.5), _cy + _ice_s)]
+            pygame.draw.polygon(_ice, (150, 210, 255, 110), _pts)
+            pygame.draw.polygon(_ice, (220, 245, 255, 190), _pts, max(1, int(2 * scale)))
+            # 冰晶高光
+            pygame.draw.line(_ice, (230, 250, 255, 220), (_cx, _cy - _ice_s + 2), (_cx, _cy + _ice_s - 2), max(1, int(1 * scale)))
+            pygame.draw.line(_ice, (230, 250, 255, 220), (_cx - _ice_s + 2, _cy), (_cx + _ice_s - 2, _cy), max(1, int(1 * scale)))
+            screen.blit(_ice, (px - _cx, py - _cy))
+            # 雪点闪烁
+            if random.random() < 0.4:
+                pygame.draw.circle(screen, (240, 250, 255), (px + random.randint(-_ice_s, _ice_s), py + random.randint(-_ice_s, _ice_s)), max(1, int(1 * scale)))
         # ===== 王某：手持武器（枪械形态 / 死神镰刀形态，双形态可见）=====
         if getattr(self, "enemy_type", None) == EnemyType.BOSS_WANG and self.max_hp > 0:
             self._draw_wang_weapon(screen, px, py, s, scale, player_x, player_y)

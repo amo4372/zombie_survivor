@@ -20,9 +20,17 @@ class Camera:
         self.shake_intensity = intensity
         self.shake_duration = duration
 
-    def follow(self, target_x, target_y, dt, smooth=0.1):
+    def follow(self, target_x, target_y, dt, smooth=0.1, bounds=None):
         target_cam_x = target_x - self.width // 2
         target_cam_y = target_y - self.height // 2
+        # v2.5.0 摄像机钳制到地图界内（边界明显化：玩家到墙边时镜头停住露出边界墙）
+        if bounds:
+            try:
+                _lo, _hi = bounds
+                target_cam_x = max(_lo - self.width, min(_hi - self.width, target_cam_x))
+                target_cam_y = max(_lo - self.height, min(_hi - self.height, target_cam_y))
+            except Exception:
+                pass
         self.x += (target_cam_x - self.x) * smooth
         self.y += (target_cam_y - self.y) * smooth
 

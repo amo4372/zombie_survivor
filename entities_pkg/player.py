@@ -28,6 +28,10 @@ class Player:
         self.alive = True
         self.downed = False
         self.downed_timer = 0.0    # 倒地时长（救援/自动复活用）
+        # v2.5.0 PvP 钩爪勾取玩家：被勾状态 + QTE 挣脱
+        self.grappled = False          # 被敌方钩爪勾中（位置由钩爪控制，禁用输入移动）
+        self.qte_progress = 0          # QTE 挣脱进度（输入计数）
+        self.qte_window = 0.0          # QTE 剩余时间（秒）
         self.rescue_progress = 0.0  # 队友救援进度（0~2.5）
         self.level = 1
         self.exp = 0
@@ -293,6 +297,12 @@ class Player:
         if self.regen_rate > 0 and self.hp < self.max_hp:
             self.hp = min(self.max_hp, self.hp + self.regen_rate * dt)
 
+        # v2.5.0 PvP 钩爪被勾：输入位移禁用（位置由钩爪拉取控制），输入尝试计入 QTE 挣脱进度
+        if self.grappled:
+            if abs(move_x) > 0.05 or abs(move_y) > 0.05:
+                if self.qte_window > 0:
+                    self.qte_progress += 1
+            move_x, move_y = 0.0, 0.0
         new_x = self.x + move_x * self.speed * self.speed_mult * speed_mult * dt * 60
         new_y = self.y + move_y * self.speed * self.speed_mult * speed_mult * dt * 60
 
@@ -402,7 +412,7 @@ class Player:
 
         pickup_skill = skill.get_skill(SkillType.PICKUP_RANGE)
         if pickup_skill:
-            self.pickup_range = 80 + pickup_skill.current_level * 20
+            self.pickup_range = 80 + pickup_skill.current_level * 25  # v2.5.0 与词条 +25/级 对齐
 
         exp_skill = skill.get_skill(SkillType.EXP_BOOST)
         if exp_skill:

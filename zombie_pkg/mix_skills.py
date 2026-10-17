@@ -1191,6 +1191,14 @@ class SkillsMixin:
 
     def _perform_grapple_at(self, target_x, target_y):
         """在指定位置执行钩爪核心逻辑 - 新逻辑（独立技能）"""
+        # v2.5.0 锚点钳制到地图界内（修复钩爪锚点出界）
+        try:
+            _b = getattr(getattr(self, 'world', None), 'bounds', None)
+            if _b:
+                target_x = max(_b[0], min(_b[1], target_x))
+                target_y = max(_b[0], min(_b[1], target_y))
+        except Exception:
+            pass
         # v2.2.7 载具中禁用钩爪
         _v = getattr(self.player, 'vehicle', None)
         if _v is not None and getattr(_v, 'alive', False):
@@ -1235,6 +1243,30 @@ class SkillsMixin:
                 target = enemy
                 target_dist = proj
 
+        # v2.5.0 钩爪可勾敌人玩家（PvP）：异阵营玩家作为勾取目标（同敌人一样拉回+QTE 挣脱）
+        try:
+            if getattr(self.config, 'pvp_enabled', False) and self.is_multiplayer_active():
+                for _ppn in ("player", "player2", "player3", "player4"):
+                    _pp = getattr(self, _ppn, None)
+                    if _pp is None or _pp is self.player:
+                        continue
+                    if not getattr(_pp, 'alive', False) or getattr(_pp, 'downed', False):
+                        continue
+                    if getattr(_pp, 'team_id', 0) == getattr(self.player, 'team_id', 0):
+                        continue  # 同队不勾
+                    _ex = _pp.x - self.player.x
+                    _ey = _pp.y - self.player.y
+                    _pr = _ex * dir_x + _ey * dir_y
+                    if _pr < 0 or _pr > dist:
+                        continue
+                    _px = _ex - _pr * dir_x
+                    _py = _ey - _pr * dir_y
+                    _perp = math.hypot(_px, _py)
+                    if _perp < search_radius + 26 and _pr < target_dist:
+                        target = _pp
+                        target_dist = _pr
+        except Exception:
+            pass
         # 搜索经验球
         for orb in self.exp_orbs:
             if not orb.alive:

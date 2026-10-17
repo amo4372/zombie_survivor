@@ -2405,26 +2405,26 @@ class UiMixin:
                 for _te in getattr(g, 'touch_events', []):
                     if _te.get("type") == "wheel":
                         _sval = int(max(0, min(_smax, int(_sval) - int(_te.get("dy", 0)))))
-                # v2.4.0 滑动栏：滚动条滑块整体拖动（轨道比例映射滚动值），
-                # 仅滚动条列按下进入拖动；列表区按下=选择选项（不再误触滚动）
+                # v2.5.0 滑动栏灵敏度：列表区任意位置按下即可拖动（手指滑到哪列表到哪），
+                # 按下后未移动(<4px)抬起=点击选中；移动超阈值进入滚动（拖动中抬起不误选）
                 _bar_h = max(int(22 * scale), int(_list_h * _max_rows / len(_dopts))) if _smax > 0 else 0
                 _track_h = max(1.0, float(_list_h - _bar_h))
-                _bar_col = pygame.Rect(_bar_x, _drect.bottom, _bar_w + int(10 * scale), _list_h)
                 if getattr(g, 'dd_drag', None) == _dkey:
                     _last = getattr(g, 'dd_drag_y', None)
                     _start = float(getattr(g, 'dd_drag_start', _last) or _last or 0)
                     _fy = float(_mv[-1]["pos"][1]) if _mv else float(_last or 0)
-                    # 阈值：与按下点距离足够才滚动（防点按误触）
-                    if _smax > 0 and abs(_fy - _start) >= max(4.0, 6.0 * scale):
-                        _ratio = (_fy - _drect.bottom - _bar_h / 2.0) / _track_h
+                    if _smax > 0 and abs(_fy - _start) >= max(4.0, 5.0 * scale):
+                        _ratio = (_fy - _drect.bottom) / float(_list_h)
                         _sval = int(max(0, min(_smax, round(max(0.0, min(1.0, _ratio)) * _smax))))
+                        g.dd_drag_moved = True
                     if _mv:
                         g.dd_drag_y = int(_mv[-1]["pos"][1])
                 for _te in _dn:
-                    if _bar_col.inflate(0, int(4 * scale)).collidepoint(_te["pos"]):
+                    if _list_rect.collidepoint(_te["pos"]):
                         g.dd_drag = _dkey
                         g.dd_drag_y = _te["pos"][1]
                         g.dd_drag_start = _te["pos"][1]
+                        g.dd_drag_moved = False
                 # 手指抬起（任意位置）→ 结束拖动
                 if getattr(g, 'dd_drag', None) == _dkey:
                     for _te in _ups:
@@ -2443,10 +2443,12 @@ class UiMixin:
                     _opt, _val = _dopts[_gidx]
                     _or = pygame.Rect(_drect.x, _drect.bottom + _oi * (_ih + _gap_i), _list_w - _bar_w - int(4 * scale), _ih)
                     _dd_item(_or, _opt, _gidx == _dcur)
-                    if any(_or.collidepoint(te["pos"]) for te in _ups):
+                    if (not getattr(g, 'dd_drag_moved', False)
+                            and any(_or.collidepoint(te["pos"]) for te in _ups)):
                         _dset(_val)
                         g.room_dropdown = None
                         g.dd_drag = None
+                        g.dd_drag_moved = False
                 self.screen.set_clip(old_clip)
                 # 滚动条（滑块位置与拖动映射一致：value → 滑块中心）
                 if _smax > 0:
@@ -2679,7 +2681,7 @@ class UiMixin:
                 pygame.draw.rect(self.screen, (90, 100, 120), _or, 1, border_radius=6)
                 _ot = self.game.font_small.render(str(_o[0]), True, WHITE)
                 self.screen.blit(_ot, _ot.get_rect(midleft=(_or.x + int(8 * scale), _or.centery)))
-            # 滚轮/触控拖动滚动
+            # 滚轮/触控拖动滚动（v2.5.0：列表内按下即拖动，手指滑到哪到哪）
             for _ev in getattr(g, 'scroll_events', []):
                 try:
                     _dv = -int(_ev["dy"] / 20)
@@ -2687,15 +2689,39 @@ class UiMixin:
                     g.net_dd_scroll = _dd_scroll
                 except Exception:
                     pass
-            # 选项点击
-            for _oi in range(_vis):
-                _o = _options[_maxi + _oi]
-                _or = pygame.Rect(_ox + int(2 * scale), _oy + int(3 * scale) + _oi * _dd_opt_h,
-                                  _ow - int(4 * scale), _dd_opt_h - int(4 * scale))
-                if _clk is not None and _or.collidepoint(_clk):
-                    _setter(_o[1])
-                    g.net_dd_key = None
-                    _clk = None
+            _net_dn = [te for te in getattr(g, 'touch_events', [])
+                       if te.get("type") == "down" and te.get("pos") is not None]
+            _net_mv = [te for te in getattr(g, 'touch_events', [])
+                       if te.get("type") in ("move", "motion") and te.get("pos") is not None]
+            if _net_dn:
+                for _te in _net_dn:
+                    if _brect.collidepoint(_te["pos"]):
+                        g.net_dd_drag = True
+                        g.net_dd_drag_start = float(_te["pos"][1])
+                        g.net_dd_drag_moved = False
+            if getattr(g, 'net_dd_drag', False) and _net_mv:
+                _fy = float(_net_mv[-1]["pos"][1])
+                _sy = float(getattr(g, 'net_dd_drag_start', _fy) or _fy)
+                if abs(_fy - _sy) >= max(4.0, 5.0 * scale):
+                    _ratio = (_fy - _oy) / float(max(1, _box_h))
+                    _dd_scroll = max(0.0, min(float(max(0, _total - _vis)), _ratio * (max(0, _total - _vis))))
+                    g.net_dd_scroll = _dd_scroll
+                    g.net_dd_drag_moved = True
+            if _clk is not None and not getattr(g, 'net_dd_drag_moved', False):
+                for _oi in range(_vis):
+                    _o = _options[_maxi + _oi]
+                    _or = pygame.Rect(_ox + int(2 * scale), _oy + int(3 * scale) + _oi * _dd_opt_h,
+                                      _ow - int(4 * scale), _dd_opt_h - int(4 * scale))
+                    if _or.collidepoint(_clk):
+                        _setter(_o[1])
+                        g.net_dd_key = None
+                        _clk = None
+                        break
+            _net_ups = [te for te in getattr(g, 'touch_events', [])
+                        if te.get("type") == "up" and te.get("pos") is not None]
+            if _net_ups:
+                g.net_dd_drag = False
+                g.net_dd_drag_moved = False
 
         # 交互（输入框/按钮；下拉行已处理）
         if _clk:

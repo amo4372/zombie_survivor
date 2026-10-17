@@ -902,9 +902,15 @@ class PlayingMixin:
                 # 符文伤害加成
                 rune_dmg_mult = 1.0 + getattr(self, 'rune_buffs', {}).get("damage", 0)
                 trigger_hook(HOOK_PLAYER_FIRE, weapon, self.player)
+                _fire_mult = self.player.damage_mult * self.player.damage_boost_mult * self.player.buff_manager.get_damage_mult() * rune_dmg_mult * self.player.damage_multiplier
+                # v2.5.0 近战武器（死神镰刀等）吃近战 buff：MELEE_DAMAGE 技能加成
+                if getattr(weapon, "is_scythe", False) or getattr(weapon, "is_melee", False):
+                    _melee_dmg_skill = self.player.skill_tree.get_skill(SkillType.MELEE_DAMAGE) if getattr(self.player, 'skill_tree', None) else None
+                    if _melee_dmg_skill and _melee_dmg_skill.current_level > 0:
+                        _fire_mult *= (1.0 + _melee_dmg_skill.current_level * 0.25)
                 proj_list = weapon.fire(
                     self.player.x, self.player.y, mouse_angle,
-                    self.player.damage_mult * self.player.damage_boost_mult * self.player.buff_manager.get_damage_mult() * rune_dmg_mult * self.player.damage_multiplier, self.player.speed_mult,
+                    _fire_mult, self.player.speed_mult,
                     player=self.player
                 )
                 self.projectiles.extend(proj_list)
@@ -2127,11 +2133,12 @@ class PlayingMixin:
             if sr["life"] <= 0:
                 self.sweep_rings.remove(sr)
 
-        # 摄像机跟随
-        self.camera.follow(self.player.x, self.player.y, dt)
+        # 摄像机跟随（v2.5.0：钳制到有限地图界内）
+        _wbo = getattr(getattr(self, 'world', None), 'bounds', None)
+        self.camera.follow(self.player.x, self.player.y, dt, bounds=_wbo)
         if self.player2:
             if self.camera2:
-                self.camera2.follow(self.player2.x, self.player2.y, dt)
+                self.camera2.follow(self.player2.x, self.player2.y, dt, bounds=_wbo)
             # v2.1.3：P2 升级选卡时暂停 P2 游戏进程（怪物已脱锁，选卡完成后恢复）
             if not (self.is_multiplayer_active() and getattr(self, '_upgrade_pause_player', None) == "P2"):
                 self._update_player2(dt)
@@ -2140,7 +2147,7 @@ class PlayingMixin:
             _pn = getattr(self, f"player{_i}", None)
             _cam = getattr(self, f"camera{_i}", None)
             if _pn is not None and _cam is not None:
-                _cam.follow(_pn.x, _pn.y, dt)
+                _cam.follow(_pn.x, _pn.y, dt, bounds=_wbo)
                 try:
                     self._update_ai_companion(_pn, dt)
                 except Exception:

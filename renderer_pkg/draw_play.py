@@ -268,7 +268,25 @@ class PlayMixin:
         cam_y = camera.y - shake_y
 
         # 绘制世界
-        self.game.world.draw(self.screen, cam_x, cam_y, scale, self.game.assets)
+        # v2.5.0 地图边界警示：玩家接近有限地图边缘时屏幕红框+提示（摄像机已 clamp）
+        try:
+            _wb = getattr(getattr(self.game, 'world', None), 'bounds', None)
+            if _wb:
+                _lo, _hi = _wb
+                _ed = min(player.x - _lo, _hi - player.x, player.y - _lo, _hi - player.y)
+                _pd = 420.0
+                if _ed < _pd and player.alive:
+                    _a = int(150 * (1 - max(0.0, _ed) / _pd))
+                    _bvs = pygame.Surface((self.game.scaled_width, self.game.scaled_height), pygame.SRCALPHA)
+                    pygame.draw.rect(_bvs, (255, 40, 40, _a), (0, 0, self.game.scaled_width, self.game.scaled_height), max(2, int(5 * scale)))
+                    self.screen.blit(_bvs, (0, 0))
+                    if _ed < _pd * 0.6:
+                        _bt = self.game.font_small.render("⚠ 地图边界", True, (255, 90, 90))
+                        self.screen.blit(_bt, _bt.get_rect(midtop=(self.game.scaled_width // 2 + viewport_x, int(30 * scale))))
+        except Exception:
+            pass
+        # 绘制世界
+        self.world.draw(self.screen, cam_x, cam_y, scale, self.game.assets)
 
         # 绘制可拾取文本资料
         for text_item in self.game.text_items:
@@ -366,6 +384,18 @@ class PlayMixin:
                     or getattr(enemy, 'special_windup_timer', 0) > 0):
                 self._draw_skill_warning(enemy, cam_x, cam_y, scale)
 
+        # v2.5.0 PvP 被勾玩家 QTE 挣脱提示（本视口玩家被敌方钩爪勾中时）
+        try:
+            if getattr(player, 'grappled', False):
+                _qp = int(getattr(player, 'qte_progress', 0))
+                _qw = max(0.0, getattr(player, 'qte_window', 0.0))
+                _qt = self.game.font.render(f"⚠ 被勾住！快速移动挣脱  {_qp}/5", True, (255, 220, 60))
+                self.screen.blit(_qt, _qt.get_rect(center=(self.game.scaled_width // 2 + viewport_x, int(170 * scale))))
+                _qbar = pygame.Rect(self.game.scaled_width // 2 + viewport_x - 120, int(200 * scale), 240, int(8 * scale))
+                pygame.draw.rect(self.screen, (40, 40, 50), _qbar)
+                pygame.draw.rect(self.screen, (255, 200, 60), (_qbar.x, _qbar.y, int(_qbar.w * (_qp / 5.0)), _qbar.h))
+        except Exception:
+            pass
         # 绘制玩家（双人模式两个玩家都画，彼此可见）
         if self.game.player2 is not None:
             for p in (self.game.player, self.game.player2):
@@ -398,6 +428,24 @@ class PlayMixin:
                     pass
             else:
                 player.draw(self.screen, cam_x, cam_y, self.game.font, scale)
+
+        # v2.5.0 玩家冰冻冰块渲染：冻结时覆盖淡蓝冰块
+        _ice_players = [player] if self.game.player2 is None else [p for p in (self.game.player, self.game.player2) if p is not None]
+        for player in _ice_players:
+            if getattr(player, 'buff_manager', None) is not None and player.buff_manager.is_frozen() and getattr(player, 'alive', True):
+                _ppx = int((player.x - cam_x) * scale)
+                _ppy = int((player.y - cam_y) * scale)
+                _ir = max(18, int(getattr(player, 'radius', 20) * scale * 1.4))
+                _ice = pygame.Surface((_ir * 2 + 8, _ir * 2 + 8), pygame.SRCALPHA)
+                _cx = _cy = _ir + 4
+                _pts = [(_cx - _ir, _cy), (_cx - int(_ir * 0.5), _cy - _ir),
+                        (_cx + int(_ir * 0.5), _cy - _ir), (_cx + _ir, _cy),
+                        (_cx + int(_ir * 0.5), _cy + _ir), (_cx - int(_ir * 0.5), _cy + _ir)]
+                pygame.draw.polygon(_ice, (150, 210, 255, 110), _pts)
+                pygame.draw.polygon(_ice, (220, 245, 255, 190), _pts, max(1, int(2 * scale)))
+                pygame.draw.line(_ice, (230, 250, 255, 220), (_cx, _cy - _ir + 2), (_cx, _cy + _ir - 2), max(1, int(1 * scale)))
+                pygame.draw.line(_ice, (230, 250, 255, 220), (_cx - _ir + 2, _cy), (_cx + _ir - 2, _cy), max(1, int(1 * scale)))
+                self.screen.blit(_ice, (_ppx - _cx, _ppy - _cy))
 
         # 近战挥砍动画
         if hasattr(self.game, 'melee_attack_active') and self.game.melee_attack_active:

@@ -42,7 +42,8 @@ check("空间网格加速 >60 障碍", "_grid" in src_world and "check_collision
 check("新局重置阵营状态 victory_team/team_race", "victory_team = None" in src_gc and "_team_race_inited = False" in src_gc)
 
 print("== 2) 滑动栏整体拖动 ==")
-check("滚动条列拖动 _bar_col", "_bar_col" in src_draw)
+# v2.5.0 任务105：下滑栏改为"列表区任意位置按下拖动"（不再仅滚动条列）
+check("v2.5.0 列表区任意位置拖动 dd_drag_moved", "dd_drag_moved" in src_draw and "dd_drag" in src_draw)
 check("轨道比例映射 sval", "track_h" in src_draw and "sval" in src_draw)
 
 print("== 3) Boss 软性限制圈 ==")

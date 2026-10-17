@@ -276,10 +276,10 @@ class Weapon:
             },
             WeaponType.SNIPER: {
                 "name": "狙击枪", "damage": 80, "fire_rate": 1.5,
-                "range": 800, "speed": 20, "spread": 0, "pierce": 5,
+                "range": 1100, "speed": 20, "spread": 0, "pierce": 5,
                 "color": GREEN, "projectile_size": 6, "shake": 8,
-                "desc": "超远距离精准打击，穿透多个敌人",
-                "ammo": 5, "reload": 3.0
+                "desc": "超远距离精准打击，穿透多个敌人（v2.5.0 换弹大减+射程加长）",
+                "ammo": 5, "reload": 1.4
             },
             WeaponType.MACHINE_GUN: {
                 "name": "机枪", "damage": 18, "fire_rate": 0.08,
@@ -443,18 +443,18 @@ class Weapon:
             # ========== 狙击枪扩展 ==========
             WeaponType.AWP: {
                 "name": "AWP", "damage": 150, "fire_rate": 2.0,
-                "range": 1000, "speed": 25, "spread": 0, "pierce": 8,
+                "range": 1400, "speed": 25, "spread": 0, "pierce": 8,
                 "color": GREEN, "projectile_size": 8, "shake": 12,
-                "desc": "超高伤害狙击枪，一枪毙命",
-                "ammo": 5, "reload": 3.5
+                "desc": "超高伤害狙击枪，一枪毙命（v2.5.0 换弹大减+射程加长）",
+                "ammo": 5, "reload": 1.6
             },
             # ========== 霰弹枪扩展 ==========
             WeaponType.AA12: {
                 "name": "AA12", "damage": 14, "fire_rate": 0.2,
-                "range": 280, "speed": 11, "spread": 0.12, "pierce": 1,
+                "range": 360, "speed": 11, "spread": 0.12, "pierce": 1,
                 "pellets": 6, "color": BLACK, "projectile_size": 3, "shake": 4,
-                "desc": "全自动霰弹枪，近距离压制",
-                "ammo": 20, "reload": 3.0
+                "desc": "全自动霰弹枪，近距离压制（v2.5.0 换弹大减+射程加长）",
+                "ammo": 20, "reload": 1.5
             },
             # ========== 重武器扩展 ==========
             WeaponType.LMG: {

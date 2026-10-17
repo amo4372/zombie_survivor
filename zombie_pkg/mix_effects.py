@@ -635,6 +635,9 @@ class EffectsMixin:
                 scaled_radius = 200
             explosion_radius = int(scaled_radius * 1.5 if has_nuke else scaled_radius)
             base_damage = int(scaled_damage * 1.6 if has_nuke else scaled_damage)
+            # v2.5.0 燃烧弹机制：直接爆炸伤害低（转地面持续高伤，"踩上才持续受高伤"）
+            if gtype in ("incendiary", "frag_fire"):
+                base_damage = max(30, int(base_damage * 0.22))
             
             self.assets.play_sound("explosion")
             self.particles.spawn_explosion(x, y, ORANGE, 120)
@@ -907,19 +910,19 @@ class EffectsMixin:
                 fy = zone["y"] + math.sin(angle) * dist
                 self.particles.spawn(fx, fy, FIRE_ORANGE, 1, (8, 16), (-3, 3), (0.8, 1.5))
                 self.particles.spawn(fx, fy, FIRE_YELLOW, 1, (5, 10), (-2, 2), (0.5, 1.0))
-            # 伤害
+            # 伤害（v2.5.0：踩上持续高伤害——区域内单位每 0.5s 高额伤害）
             if zone["damage_timer"] <= 0:
                 zone["damage_timer"] = 0.5
                 for enemy in self.enemies:
                     dist = math.hypot(enemy.x - zone["x"], enemy.y - zone["y"])
                     if dist < zone["radius"]:
-                        enemy.take_damage(15)
+                        enemy.take_damage(35)
                         enemy.apply_buff(BuffType.BURN, duration=3.0)
                 # 玩家也会被烧（敌方火区对玩家造成伤害，P1/P2 双判定）
                 for _p in self._alive_players():
                     pdist = math.hypot(_p.x - zone["x"], _p.y - zone["y"])
                     if pdist < zone["radius"]:
-                        _p.take_damage(5, damage_type="fire")
+                        _p.take_damage(12, damage_type="fire")
             if zone["timer"] <= 0:
                 self.fire_zones.remove(zone)
 

@@ -811,6 +811,28 @@ class GameCore:
                             _pp.team_id = _idx % _nteams
                             if _pvpm:
                                 _pp.hp = _pp.max_hp
+                        # v2.5.0 阵营出生点分离：PvP 时不同阵营出生在地图不同方位（四角分布）
+                        if _pvpm:
+                            try:
+                                _ms = getattr(getattr(self, 'world', None), 'map_size', 12000) or 12000
+                                _lb = 400 + 240  # 有限地图左下角基准（避开边界墙）
+                                _spawns = [
+                                    (_lb, _ms - _lb),            # 左下
+                                    (_ms - _lb, _lb),            # 右上
+                                    (_lb, _lb),                  # 左上
+                                    (_ms - _lb, _ms - _lb),      # 右下
+                                ]
+                                _sp = _spawns[int(getattr(_pp, 'team_id', 0) or 0) % len(_spawns)]
+                                # 同队玩家保持小偏移，异队玩家远隔
+                                _team_mates = sum(1 for _px in ("player", "player2", "player3", "player4")
+                                                  if getattr(self, _px, None) is not None
+                                                  and getattr(getattr(self, _px, None), 'team_id', -1) == getattr(_pp, 'team_id', 0)
+                                                  and getattr(self, _px, None) is not _pp)
+                                _dx = (_team_mates % 2) * 160
+                                _dy = (_team_mates // 2) * 160
+                                _pp.x, _pp.y = _sp[0] + _dx, _sp[1] + _dy
+                            except Exception:
+                                pass
                         # v2.2.11 逐玩家自定义名字（动态挂 nick 属性，HUD 标签显示）
                         _nm = (_rcfg.get("name") or "").strip()
                         if _nm:

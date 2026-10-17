@@ -231,6 +231,22 @@ class RiotGear:
                 dx = player_x - self.grapple_target.x
                 dy = player_y - self.grapple_target.y
                 dist = math.hypot(dx, dy)
+                # v2.5.0 PvP 勾取玩家：QTE 窗口计时 + 挣脱判定（被勾玩家输入计数达标即挣脱）
+                if hasattr(self.grapple_target, 'qte_window'):
+                    try:
+                        if self.grapple_target.qte_window > 0:
+                            self.grapple_target.qte_window -= dt
+                            if self.grapple_target.qte_progress >= 5:
+                                # QTE 挣脱成功：解除勾取，不再拉取
+                                self.grapple_target.grappled = False
+                                self.grapple_target.qte_progress = 0
+                                self.grapple_target.qte_window = 0.0
+                                self._reset_grapple()
+                                return
+                        else:
+                            self.grapple_target.qte_progress = 0
+                    except Exception:
+                        pass
 
                 # v2.2.5 词条应用：被拉回的敌人沿途撞击其他敌人（造成撞击伤害）
                 # 撞击伤害=钩爪基础伤害量级（由 mix_playing 传入，默认走 buff 判定）
@@ -269,6 +285,11 @@ class RiotGear:
                     try:
                         if hasattr(self.grapple_target, 'apply_buff'):
                             self.grapple_target.apply_buff(BuffType.STUN, duration=1.5)
+                        elif hasattr(self.grapple_target, 'buff_manager'):
+                            # v2.5.0 玩家目标：强制眩晕（无 QTE 挣脱成功）
+                            self.grapple_target.buff_manager.add_buff(BuffType.STUN, duration=1.5)
+                            self.grapple_target.grappled = False
+                            self.grapple_target.qte_window = 0.0
                         if hasattr(self.grapple_target, 'knockdown'):
                             self.grapple_target.knockdown(1.0)
                     except Exception:
@@ -306,6 +327,18 @@ class RiotGear:
             dx = tx - player.x
             dy = ty - player.y
             dist = math.hypot(dx, dy)
+            # v2.5.0 停滞断勾：0.5s 内距离未减少 ≥4px（被墙卡住）→ 断勾
+            if not hasattr(self, '_pull_stall_timer'):
+                self._pull_stall_timer = 0.0
+                self._pull_stall_dist = dist
+            if self._pull_stall_dist - dist < 4.0:
+                self._pull_stall_timer += dt
+            else:
+                self._pull_stall_timer = 0.0
+                self._pull_stall_dist = dist
+            if self._pull_stall_timer >= 0.5:
+                self._reset_grapple()
+                return
             move_dist = self.self_pull_speed * dt
             if dist <= move_dist + 2:
                 # 到达目标点：结束自我拉拽
@@ -333,6 +366,10 @@ class RiotGear:
         self.self_pull_start = (player_x, player_y)
         self.self_pull_end = self.grapple_target_pos
         self.grapple_swing_timer = 0.0
+        # v2.5.0 停滞断勾检测：被墙卡住长时间拉不动 → 断勾（防永远无敌）
+        self._pull_stall_timer = 0.0
+        self._pull_stall_dist = math.hypot(player_x - self.grapple_target_pos[0],
+                                           player_y - self.grapple_target_pos[1])
         if player is not None:
             player.invincible_timer = max(getattr(player, "invincible_timer", 0), 0.1)
 
@@ -538,6 +575,11 @@ class RiotGear:
         self.grapple_head_pos = [player_x, player_y]
         self.grapple_state = "shooting"
         self.grapple_target = target
+        # v2.5.0 PvP 勾取玩家：初始化 QTE 挣脱窗口（1.2 秒内输入 5 次挣脱）
+        if target is not None and hasattr(target, 'qte_window'):
+            target.grappled = True
+            target.qte_window = 1.2
+            target.qte_progress = 0
         self.grapple_pull_impact_hit = set()
         self.grapple_direct_pull = bool(direct_pull)
         return True
