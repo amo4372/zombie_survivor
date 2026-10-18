@@ -1069,8 +1069,8 @@ class PlayingMixin:
                             break
             angle = random.uniform(0, math.pi * 2)
             dist = random.randint(400, 700)
-            # v2.5.2 多人刷怪以最近活跃玩家为中心（修复只有 P1 附近刷僵尸）
-            _sc = self._spawn_center_player()
+            # v2.5.3 多人刷怪：随机一个活跃玩家为中心（每个玩家周围都会刷新，不再只围最近者）
+            _sc = self._random_spawn_center()
             spawn_x = _sc.x + math.cos(angle) * dist
             spawn_y = _sc.y + math.sin(angle) * dist
             spawn_x, spawn_y = self.world.clamp_position(spawn_x, spawn_y, 20)
@@ -1127,7 +1127,7 @@ class PlayingMixin:
                         _extra, _dv = _extra
                     _ang2 = random.uniform(0, math.pi * 2)
                     _dist2 = random.randint(400, 700)
-                    _sc2 = self._spawn_center_player()
+                    _sc2 = self._next_spawn_center()
                     _sx, _sy = self.world.clamp_position(
                         _sc2.x + math.cos(_ang2) * _dist2,
                         _sc2.y + math.sin(_ang2) * _dist2, 20)

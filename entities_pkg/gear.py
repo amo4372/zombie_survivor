@@ -236,14 +236,18 @@ class RiotGear:
                     try:
                         if self.grapple_target.qte_window > 0:
                             self.grapple_target.qte_window -= dt
-                            if self.grapple_target.qte_progress >= 5:
-                                # QTE 挣脱成功：解除勾取，不再拉取
+                            if self.grapple_target.qte_progress >= getattr(self.grapple_target, 'qte_need', 5):
+                                # QTE 挣脱成功：解除勾取，不再拉取 + 成功反馈与短暂免疫
                                 self.grapple_target.grappled = False
                                 self.grapple_target.qte_progress = 0
                                 self.grapple_target.qte_window = 0.0
+                                self.grapple_target.qte_success_timer = 1.2
+                                self.grapple_target.qte_immune_timer = 0.6
                                 self._reset_grapple()
                                 return
                         else:
+                            if self.grapple_target.qte_progress < getattr(self.grapple_target, 'qte_need', 5):
+                                self.grapple_target.qte_fail_timer = 1.0
                             self.grapple_target.qte_progress = 0
                     except Exception:
                         pass
@@ -286,10 +290,11 @@ class RiotGear:
                         if hasattr(self.grapple_target, 'apply_buff'):
                             self.grapple_target.apply_buff(BuffType.STUN, duration=1.5)
                         elif hasattr(self.grapple_target, 'buff_manager'):
-                            # v2.5.0 玩家目标：强制眩晕（无 QTE 挣脱成功）
+                            # v2.5.0/v2.5.3 玩家目标：强制眩晕（无 QTE 挣脱成功）+ 失败反馈
                             self.grapple_target.buff_manager.add_buff(BuffType.STUN, duration=1.5)
                             self.grapple_target.grappled = False
                             self.grapple_target.qte_window = 0.0
+                            self.grapple_target.qte_fail_timer = 1.2
                         if hasattr(self.grapple_target, 'knockdown'):
                             self.grapple_target.knockdown(1.0)
                     except Exception:
@@ -599,11 +604,16 @@ class RiotGear:
         self.grapple_head_pos = [player_x, player_y]
         self.grapple_state = "shooting"
         self.grapple_target = target
-        # v2.5.0 PvP 勾取玩家：初始化 QTE 挣脱窗口（1.2 秒内输入 5 次挣脱）
+        # v2.5.0/v2.5.3 PvP 勾取玩家：初始化 QTE 挣脱窗口（1.6 秒内输入 5 次挣脱；成功挣脱后短暂免疫）
         if target is not None and hasattr(target, 'qte_window'):
+            if getattr(target, 'qte_immune_timer', 0) > 0:
+                return False
             target.grappled = True
-            target.qte_window = 1.2
+            target.qte_window = 1.6
             target.qte_progress = 0
+            target.qte_hit_flash = 0.0
+            target.qte_success_timer = 0.0
+            target.qte_fail_timer = 0.0
         self.grapple_pull_impact_hit = set()
         self.grapple_direct_pull = bool(direct_pull)
         return True

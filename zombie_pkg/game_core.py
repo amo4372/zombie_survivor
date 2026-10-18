@@ -1088,6 +1088,39 @@ class GameCore:
         except Exception:
             return self.player
 
+    def _random_spawn_center(self):
+        """v2.5.3 多人刷怪中心：随机一个活跃玩家（每个玩家周围都会刷怪，避免只围最近者）"""
+        try:
+            if not self.is_multiplayer_active():
+                return self.player
+            _avail = [p for p in self._all_players()
+                      if getattr(p, 'downed', False) is False and not getattr(p, 'upgrade_paused', False)]
+            if not _avail:
+                _avail = [p for p in self._all_players() if getattr(p, 'downed', False) is False]
+            if not _avail:
+                return self.player
+            return random.choice(_avail)
+        except Exception:
+            return self.player
+
+    def _next_spawn_center(self):
+        """v2.5.3 多人额外刷怪：轮转活跃玩家，保证每个玩家周围都会被轮到"""
+        try:
+            if not self.is_multiplayer_active():
+                return self.player
+            _avail = [p for p in self._all_players()
+                      if getattr(p, 'downed', False) is False and not getattr(p, 'upgrade_paused', False)]
+            if not _avail:
+                _avail = [p for p in self._all_players() if getattr(p, 'downed', False) is False]
+            if not _avail:
+                return self.player
+            self._mp_spawn_idx = getattr(self, '_mp_spawn_idx', 0)
+            _c = _avail[self._mp_spawn_idx % len(_avail)]
+            self._mp_spawn_idx += 1
+            return _c
+        except Exception:
+            return self.player
+
     # ==================== v2.5.2 钩爪玩家锁定辅助 ====================
     def _downed_teammates_of(self, player):
         """同阵营倒地玩家（可被钩爪勾取救援，优先级最高）"""

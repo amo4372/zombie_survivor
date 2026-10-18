@@ -386,16 +386,77 @@ class PlayMixin:
                     or getattr(enemy, 'special_windup_timer', 0) > 0):
                 self._draw_skill_warning(enemy, cam_x, cam_y, scale)
 
-        # v2.5.0 PvP 被勾玩家 QTE 挣脱提示（本视口玩家被敌方钩爪勾中时）
+        # v2.5.3 PvP 被勾玩家 QTE 挣脱（增强版：环形倒计时 + 进度点 + 命中闪光 + 成败反馈）
         try:
-            if getattr(player, 'grappled', False):
+            _is_grappled = bool(getattr(player, 'grappled', False))
+            _q_succ = getattr(player, 'qte_success_timer', 0.0)
+            _q_fail = getattr(player, 'qte_fail_timer', 0.0)
+            _q_flash = getattr(player, 'qte_hit_flash', 0.0)
+            _cx = self.game.scaled_width // 2 + viewport_x
+            # 被勾住：屏幕边缘红色脉冲（紧迫感）
+            if _is_grappled:
+                _pulse = 0.5 + 0.5 * math.sin(pygame.time.get_ticks() * 0.02)
+                _ew = int(10 * scale * (0.6 + 0.4 * _pulse))
+                _vw2 = self.game.scaled_width // (2 if viewport_x > 0 else 1)  # 分屏：边缘框限本视口
+                _vh2 = self.game.scaled_height
+                _edge = pygame.Surface((_vw2, _vh2), pygame.SRCALPHA)
+                _ea = int(70 + 50 * _pulse)
+                pygame.draw.rect(_edge, (220, 30, 30, _ea), (0, 0, _edge.get_width(), _ew))
+                pygame.draw.rect(_edge, (220, 30, 30, _ea), (0, _edge.get_height() - _ew, _edge.get_width(), _ew))
+                pygame.draw.rect(_edge, (220, 30, 30, _ea), (0, 0, _ew, _edge.get_height()))
+                pygame.draw.rect(_edge, (220, 30, 30, _ea), (_edge.get_width() - _ew, 0, _ew, _edge.get_height()))
+                self.screen.blit(_edge, (viewport_x, 0))
+            # 成功/失败提示
+            if _q_succ > 0:
+                _st = self.game.font.render("挣脱成功！", True, (80, 255, 120))
+                self.screen.blit(_st, _st.get_rect(center=(_cx, int(150 * scale))))
+            elif _q_fail > 0 and not _is_grappled:
+                _ft = self.game.font.render("被捕获！", True, (255, 90, 90))
+                self.screen.blit(_ft, _ft.get_rect(center=(_cx, int(150 * scale))))
+            # 主 QTE 指示器
+            if _is_grappled:
                 _qp = int(getattr(player, 'qte_progress', 0))
                 _qw = max(0.0, getattr(player, 'qte_window', 0.0))
-                _qt = self.game.font.render(f"⚠ 被勾住！快速移动挣脱  {_qp}/5", True, (255, 220, 60))
-                self.screen.blit(_qt, _qt.get_rect(center=(self.game.scaled_width // 2 + viewport_x, int(170 * scale))))
-                _qbar = pygame.Rect(self.game.scaled_width // 2 + viewport_x - 120, int(200 * scale), 240, int(8 * scale))
-                pygame.draw.rect(self.screen, (40, 40, 50), _qbar)
-                pygame.draw.rect(self.screen, (255, 200, 60), (_qbar.x, _qbar.y, int(_qbar.w * (_qp / 5.0)), _qbar.h))
+                _need = getattr(player, 'qte_need', 5)
+                _ratio = min(1.0, _qw / 1.6)
+                _cy = int(190 * scale)
+                _R = int(46 * scale)
+                # 环形倒计时（剩余窗口，红色越少越急）
+                _ring_c = (255, 200, 60) if _ratio > 0.35 else (255, 70, 70)
+                _seg = int((1.0 - _ratio) * 360)
+                for _a in range(_seg):
+                    _rad = math.radians(-90 + _a)
+                    _px = _cx + int(math.cos(_rad) * _R)
+                    _py = _cy + int(math.sin(_rad) * _R)
+                    pygame.draw.circle(self.screen, _ring_c, (_px, _py), max(2, int(3 * scale)))
+                pygame.draw.circle(self.screen, (50, 50, 60), (_cx, _cy), _R, max(1, int(scale)))
+                # 进度点（need 个，弧形排列，命中点亮）
+                for _i in range(_need):
+                    _a2 = math.radians(-90 + (_i * 360.0 / _need))
+                    _px2 = _cx + int(math.cos(_a2) * (_R + int(14 * scale)))
+                    _py2 = _cy + int(math.sin(_a2) * (_R + int(14 * scale)))
+                    _lit = _i < _qp
+                    pygame.draw.circle(self.screen,
+                                       (255, 230, 80) if _lit else (60, 60, 70),
+                                       (_px2, _py2), max(4, int(6 * scale)))
+                    if _lit:
+                        pygame.draw.circle(self.screen, (255, 255, 200),
+                                           (_px2, _py2), max(2, int(3 * scale)), 1)
+                # 命中闪光（输入成功瞬间扩散环）
+                if _q_flash > 0.12:
+                    _frad = _R + int((0.18 - _q_flash) / 0.18 * 60 * scale)
+                    pygame.draw.circle(self.screen, (255, 255, 255),
+                                       (_cx, _cy), _frad, max(1, int(2 * scale)))
+                    try:
+                        self.game.assets.play_sound("ui_click")
+                    except Exception:
+                        pass
+                # 提示文字
+                _hl = "触控/方向键连打挣脱！" if self.game.config.control_mode == ControlMode.TOUCH else "狂按方向键挣脱！"
+                _qt = self.game.font.render(_hl, True, (255, 220, 60))
+                self.screen.blit(_qt, _qt.get_rect(center=(_cx, _cy + _R + int(30 * scale))))
+                _qc = self.game.font_small.render(f"{_qp}/{_need}", True, (230, 230, 230))
+                self.screen.blit(_qc, _qc.get_rect(center=(_cx, _cy)))
         except Exception:
             pass
         # 绘制玩家（双人模式两个玩家都画，彼此可见）

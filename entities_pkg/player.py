@@ -32,6 +32,11 @@ class Player:
         self.grappled = False          # 被敌方钩爪勾中（位置由钩爪控制，禁用输入移动）
         self.qte_progress = 0          # QTE 挣脱进度（输入计数）
         self.qte_window = 0.0          # QTE 剩余时间（秒）
+        self.qte_need = 5              # v2.5.3 QTE 所需输入次数
+        self.qte_hit_flash = 0.0       # v2.5.3 QTE 命中闪光计时（画面反馈）
+        self.qte_success_timer = 0.0   # v2.5.3 挣脱成功提示计时
+        self.qte_fail_timer = 0.0      # v2.5.3 挣脱失败提示计时
+        self.qte_immune_timer = 0.0    # v2.5.3 挣脱成功后短暂免疫被勾
         self.rescue_progress = 0.0  # 队友救援进度（0~2.5）
         self.level = 1
         self.exp = 0
@@ -299,12 +304,22 @@ class Player:
         if self.regen_rate > 0 and self.hp < self.max_hp:
             self.hp = min(self.max_hp, self.hp + self.regen_rate * dt)
 
-        # v2.5.0 PvP 钩爪被勾：输入位移禁用（位置由钩爪拉取控制），输入尝试计入 QTE 挣脱进度
+        # v2.5.0/v2.5.3 PvP 钩爪被勾：输入位移禁用（位置由钩爪拉取控制），输入尝试计入 QTE 挣脱进度
         if self.grappled:
             if abs(move_x) > 0.05 or abs(move_y) > 0.05:
                 if self.qte_window > 0:
                     self.qte_progress += 1
+                    self.qte_hit_flash = 0.18   # v2.5.3 命中画面闪光
             move_x, move_y = 0.0, 0.0
+        # v2.5.3 QTE 反馈计时衰减
+        if self.qte_hit_flash > 0:
+            self.qte_hit_flash = max(0.0, self.qte_hit_flash - dt)
+        if self.qte_success_timer > 0:
+            self.qte_success_timer = max(0.0, self.qte_success_timer - dt)
+        if self.qte_fail_timer > 0:
+            self.qte_fail_timer = max(0.0, self.qte_fail_timer - dt)
+        if self.qte_immune_timer > 0:
+            self.qte_immune_timer = max(0.0, self.qte_immune_timer - dt)
         new_x = self.x + move_x * self.speed * self.speed_mult * speed_mult * dt * 60
         new_y = self.y + move_y * self.speed * self.speed_mult * speed_mult * dt * 60
 

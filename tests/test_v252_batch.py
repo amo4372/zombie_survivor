@@ -63,7 +63,7 @@ check("卡片结算逐级重弹", "_left = getattr(player, 'pending_levels', 0) 
 
 print("== #122 多人刷怪以最近玩家为中心 ==")
 check("新增 _spawn_center_player", "def _spawn_center_player" in src_gc)
-check("主刷怪与额外刷怪共用中心点", src_mp.count("self._spawn_center_player()") >= 2)
+check("刷怪中心方法存在（v2.5.3 起改用随机/轮转中心）", "self._random_spawn_center()" in src_mp and "self._next_spawn_center()" in src_mp)
 
 print("== #123 选卡结束眩晕+击退 ==")
 check("选卡后 260px 范围眩晕击退", "_sr = 260" in src_sk and "STUN" in src_sk and "230" in src_sk)
