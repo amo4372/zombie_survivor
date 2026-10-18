@@ -60,6 +60,8 @@ class ZombieTreeAI:
             "pid": pid, "pz": pz,
             "vx": 0.0, "vy": 0.0, "skill": 0,
             "_tree": "unknown",
+            # v2.5.4 强化：玩家状态感知（血量比/残血）
+            "player_hp_ratio": max(0.0, min(1.0, getattr(player, 'hp', 100) / max(1, getattr(player, 'max_hp', 100)))),
         }
 
     # ==================== 决策入口（与 RLEnemyAI.decide 同构） ====================
@@ -186,6 +188,38 @@ class ZombieTreeAI:
                     return True
         return False
 
+    def _c_hunt(self, ctx, ratio=0.35):
+        """v2.5.4 狩猎：玩家残血（血量<35%）→ 僵尸进入追击/围杀模式"""
+        return ctx["player_hp_ratio"] < ratio
+
+    def _c_packed(self, ctx, n=3):
+        """v2.5.4 成堆：存活队友≥n（群体协同，围堵更紧）"""
+        return len([t for t in ctx["teammates"] if getattr(t, "alive", True)]) >= n
+
+    def _c_lone(self, ctx, n=2):
+        """v2.5.4 孤立：存活队友<n（落单僵尸更凶，直接贴脸）"""
+        return len([t for t in ctx["teammates"] if getattr(t, "alive", True)]) < n
+
+    def _c_ally_near(self, ctx, r=140):
+        """v2.5.4 队友在身边（治疗/协同用）"""
+        e = ctx["enemy"]
+        for t in ctx["teammates"]:
+            if getattr(t, "alive", True):
+                if math.hypot(t.x - e.x, t.y - e.y) < r:
+                    return True
+        return False
+
+    def _c_self_hurt(self, ctx, ratio=0.4):
+        """v2.5.4 治疗僵尸自保：自己残血且无伤队友可奶"""
+        e = ctx["enemy"]
+        if (e.hp / max(getattr(e, "max_hp", 50), 1)) < ratio:
+            for t in ctx["teammates"]:
+                if getattr(t, "alive", True) and not getattr(t, "is_boss", False):
+                    if getattr(t, "hp", 0) < getattr(t, "max_hp", 1) * 0.7:
+                        return False
+            return True
+        return False
+
     def _c_dodge(self, ctx, r=150):
         """v2.2.5 弹幕规避：玩家弹在 r 内且朝自己飞来 → 触发横向闪避"""
         e = ctx["enemy"]
@@ -233,15 +267,26 @@ class ZombieTreeAI:
             "root": Selector("melee", [
                 Sequence("dodge", [
                     Condition("bullet", self._c_dodge),
-                    Action("strafe_dodge", lambda c: self._move_strafe(c, 1.0)),
+                    Action("strafe_dodge", lambda c: self._move_strafe(c, 1.25)),
+                ]),
+                # v2.5.4 狩猎：玩家残血 → 全力冲杀
+                Sequence("hunt", [
+                    Condition("hunt", self._c_hunt),
+                    Action("hunt_charge", lambda c: self._move_toward(c, 1.35)),
                 ]),
                 Sequence("attack", [
                     Condition("near", lambda c, r=melee_r: self._c_near(c, r)),
                     Action("stand_fight", lambda c: self._stay(c)),
                 ]),
+                # v2.5.4 孤立：落单僵尸直接贴脸，攻击半径放宽
+                Sequence("lone_rush", [
+                    Condition("lone", self._c_lone),
+                    Condition("mid", lambda c, r=melee_r: c["dist"] < max(r * 1.5, 160)),
+                    Action("rush_in", lambda c: self._move_toward(c, 1.2)),
+                ]),
                 Sequence("flank", [
                     Condition("mid", lambda c: 0 < c["dist"] < 170),
-                    Action("flank_in", lambda c: self._move_flank(c, 1.1)),
+                    Action("flank_in", lambda c: self._move_flank(c, 1.1 if not self._c_packed(c, 3) else 1.3)),
                 ]),
                 Action("chase", lambda c: self._move_toward(c)),
             ]),
@@ -265,7 +310,8 @@ class ZombieTreeAI:
             ]))
         if r > 0:
             children.append(Sequence("retreat", [
-                Condition("too_close", lambda c, rr=r: c["dist"] < rr * 0.45),
+                # v2.5.4 狩猎时更敢贴脸输出（后撤阈值从 0.45 降到 0.35）
+                Condition("too_close", lambda c, rr=r: c["dist"] < rr * (0.35 if self._c_hunt(c) else 0.45)),
                 Action("fallback", lambda c: self._move_away(c, 0.85)),
             ]))
             children.append(Sequence("fire", [
@@ -286,27 +332,36 @@ class ZombieTreeAI:
             "root": Selector("exploder", [
                 Sequence("rush", [
                     Condition("nearish", lambda c: c["dist"] < 180),
-                    Action("charge", lambda c: self._move_toward(c, 1.25)),
+                    Action("charge", lambda c: self._move_toward(c, 1.25 if not self._c_hunt(c) else 1.5)),
                 ]),
                 Action("chase", lambda c: self._move_toward(c)),
             ]),
         }
 
     def _build_healer_tree(self, enemy):
-        """治疗僵尸：队友受伤时靠拢，否则随众追击"""
-        melee_r = getattr(enemy, "size", 20) + 22
+        """v2.5.4 治疗僵尸：队友受伤→靠到治疗半径内停住持续奶（不贴脸送死）；
+        自己残血且无伤队友→后撤自保；否则随众追击"""
+        heal_r = max(getattr(enemy, "heal_radius", 100), 100)
         return {
             "name": "healer",
             "root": Selector("healer", [
+                # 自己残血且没有可奶的队友 → 后撤保命（活着才能奶）
+                Sequence("flee", [
+                    Condition("self_hurt", self._c_self_hurt),
+                    Action("fallback", lambda c: self._move_away(c, 1.0)),
+                ]),
+                # 有伤队友：靠到治疗圈内停住（保持 80%~圈内），持续光环回血
                 Sequence("heal_ally", [
                     Condition("injured", self._c_injured_teammate),
-                    Action("approach_ally", lambda c: self._move_toward(c, 0.9)),
+                    Condition("far", lambda c, r=heal_r: c["dist"] > r * 0.8),
+                    Action("approach_ally", lambda c: self._move_toward(c, 1.0)),
                 ]),
-                Sequence("attack", [
-                    Condition("near", lambda c, r=melee_r: self._c_near(c, r)),
-                    Action("stand_fight", lambda c: self._stay(c)),
+                Sequence("heal_stay", [
+                    Condition("injured", self._c_injured_teammate),
+                    Condition("near", lambda c, r=heal_r: c["dist"] <= r * 0.8),
+                    Action("stand_heal", lambda c: self._stay(c)),
                 ]),
-                Action("chase", lambda c: self._move_toward(c)),
+                Action("chase", lambda c: self._move_toward(c, 0.8)),
             ]),
         }
 

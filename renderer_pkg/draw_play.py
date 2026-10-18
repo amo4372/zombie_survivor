@@ -96,6 +96,16 @@ class PlayMixin:
                 wv = getattr(g, 'wave_count', 0)
                 w_txt = g.font.render(f"波次 {wv}", True, (150, 220, 255))
             self.screen.blit(w_txt, w_txt.get_rect(midtop=(rect.x + half_w // 2, rect.y + int(4 * scale))))
+        # ===== 阵营角标（多人） =====
+        try:
+            if g.is_multiplayer_active():
+                _tid2 = getattr(player, 'team_id', 0)
+                _tname2 = "合作" if not getattr(g.config, 'pvp_enabled', False) else (("A队" if _tid2 % 2 == 1 else "B队") if _tid2 else "自由")
+                _tcol2 = (120, 220, 120) if not getattr(g.config, 'pvp_enabled', False) else ((240, 90, 90) if _tid2 % 2 == 1 else (90, 200, 250))
+                _tag_txt = g.font_small.render(f"{label} · {_tname2}", True, _tcol2)
+                self.screen.blit(_tag_txt, (rect.x + int(6 * scale), rect.y + int(24 * scale)))
+        except Exception:
+            pass
         # ===== 血条 =====
         hp_pct = max(0, player.hp) / max(1, player.max_hp)
         bar_h = int(14 * scale)
@@ -124,6 +134,20 @@ class PlayMixin:
             pygame.draw.rect(self.screen, st_color, (stb.x, stb.y, int(stb.w * st_ratio), stb.h))
             st_txt = g.font_small.render(f"体力 {int(player.stamina)}/{int(player.max_stamina)}", True, st_color)
             self.screen.blit(st_txt, (bx, rect.y + int(57 * scale)))
+        # ===== 载具状态（乘坐中：载具血条 + 下车提示） =====
+        try:
+            _vh2 = getattr(player, 'riding_vehicle', None)
+            if _vh2 is not None and getattr(_vh2, 'alive', False):
+                _vh2_hp = max(0, getattr(_vh2, 'hp', 0))
+                _vh2_max = max(1, getattr(_vh2, 'max_hp', 1))
+                _vbar = pygame.Rect(bx, rect.y + int(66 * scale), bar_w, int(8 * scale))
+                pygame.draw.rect(self.screen, (30, 30, 40), _vbar)
+                pygame.draw.rect(self.screen, (255, 160, 60), (_vbar.x, _vbar.y, int(_vbar.w * _vh2_hp / _vh2_max), _vbar.h))
+                pygame.draw.rect(self.screen, (220, 220, 220), _vbar, 1)
+                _vt = g.font_small.render(f"载具 {_vh2_hp}/{_vh2_max} · 长按技能下车", True, (255, 200, 120))
+                self.screen.blit(_vt, (bx, rect.y + int(76 * scale)))
+        except Exception:
+            pass
         # ===== 武器 + 弹药 =====
         w = player.get_current_weapon() if hasattr(player, 'get_current_weapon') else None
         if w:
@@ -459,15 +483,30 @@ class PlayMixin:
                 self.screen.blit(_qc, _qc.get_rect(center=(_cx, _cy)))
         except Exception:
             pass
-        # 绘制玩家（双人模式两个玩家都画，彼此可见）
-        if self.game.player2 is not None:
-            for p in (self.game.player, self.game.player2):
+        # 绘制玩家（v2.5.4 多人：N 人全部绘制，彼此可见 + 头顶血条/阵营/倒地倒计时）
+        if self.game.is_multiplayer_active():
+            try:
+                _mp_players = [pp for pp in self.game._all_players() if pp is not None]
+            except Exception:
+                _mp_players = [pp for pp in (self.game.player, self.game.player2) if pp is not None]
+            for p in _mp_players:
                 if p is None:
                     continue
                 # v2.2.0 载具：优先绘制载具（玩家在载具内）
                 _veh = getattr(p, 'vehicle', None)
                 if _veh is not None and getattr(_veh, 'alive', False):
                     _veh.draw(self.screen, cam_x, cam_y, scale)
+                    # v2.5.4 载具头顶血条
+                    try:
+                        _vh = getattr(_veh, 'hp', 0)
+                        _vmax = max(1, getattr(_veh, 'max_hp', 1))
+                        _vpx = int((_veh.x - cam_x) * scale)
+                        _vpy = int((_veh.y - cam_y) * scale) - int(26 * scale)
+                        _vwid = max(30, int(46 * scale))
+                        pygame.draw.rect(self.screen, (30, 30, 40), (_vpx - _vwid // 2, _vpy, _vwid, int(5 * scale)))
+                        pygame.draw.rect(self.screen, (255, 160, 60), (_vpx - _vwid // 2, _vpy, int(_vwid * max(0, _vh) / _vmax), int(5 * scale)))
+                    except Exception:
+                        pass
                     # v2.2.3 载具期间仍渲染钩爪线（riot_gear.draw 独立于玩家绘制）
                     try:
                         p.riot_gear.draw(self.screen, p.x, p.y, cam_x, cam_y, scale)
@@ -475,11 +514,38 @@ class PlayMixin:
                         pass
                 else:
                     p.draw(self.screen, cam_x, cam_y, self.game.font, scale)
-                if getattr(p, 'downed', False):
-                    dtag = self.game.font_small.render("倒地", True, (240, 230, 120))
-                    dx = int((p.x - cam_x) * scale)
-                    dy = int((p.y - cam_y) * scale)
-                    self.screen.blit(dtag, (dx - dtag.get_width() // 2, dy - int(24 * scale)))
+                # v2.5.4 头顶状态：血条 + 名字/阵营色（PvP 敌方红、队友绿）
+                try:
+                    _px = int((p.x - cam_x) * scale)
+                    _py = int((p.y - cam_y) * scale)
+                    _tname = getattr(p, 'name', None) or getattr(p, 'nickname', None) or ""
+                    _tid = getattr(p, 'team_id', 0)
+                    _same = (_tid == getattr(player, 'team_id', 0)) or (not getattr(self.game.config, 'pvp_enabled', False))
+                    _tcol = (120, 240, 120) if _same else (250, 90, 90)
+                    _hp = max(0, getattr(p, 'hp', 0))
+                    _hpm = max(1, getattr(p, 'max_hp', 1))
+                    _wid = max(28, int(42 * scale))
+                    _ty = _py - int(26 * scale)
+                    # 名字（同阵营绿 / 敌对红）
+                    if _tname:
+                        _nt = self.game.font_small.render(_tname[:8], True, _tcol)
+                        self.screen.blit(_nt, (_px - _nt.get_width() // 2, _ty - int(13 * scale)))
+                    # 血条
+                    pygame.draw.rect(self.screen, (30, 30, 40), (_px - _wid // 2, _ty, _wid, int(4 * scale)))
+                    pygame.draw.rect(self.screen, (80, 220, 100) if _same else (240, 70, 70),
+                                    (_px - _wid // 2, _ty, int(_wid * _hp / _hpm), int(4 * scale)))
+                    # 倒地：黄色倒计时 + 救援进度
+                    if getattr(p, 'downed', False):
+                        dtag = self.game.font_small.render("倒地", True, (240, 230, 120))
+                        self.screen.blit(dtag, (_px - dtag.get_width() // 2, _ty - int(22 * scale)))
+                        _dleft = max(0, getattr(p, 'downed_timer', 0))
+                        _dtt = self.game.font_small.render(f"{_dleft:.0f}s", True, (240, 200, 90))
+                        self.screen.blit(_dtt, (_px + _wid // 2 + 2, _ty - int(22 * scale)))
+                        _rp = max(0.0, min(1.0, getattr(p, 'rescue_progress', 0) / 2.5))
+                        pygame.draw.rect(self.screen, (90, 80, 30), (_px - _wid // 2, _ty + int(5 * scale), _wid, int(4 * scale)))
+                        pygame.draw.rect(self.screen, (240, 220, 80), (_px - _wid // 2, _ty + int(5 * scale), int(_wid * _rp), int(4 * scale)))
+                except Exception:
+                    pass
         else:
             _veh = getattr(player, 'vehicle', None)
             if _veh is not None and getattr(_veh, 'alive', False):
@@ -492,8 +558,8 @@ class PlayMixin:
             else:
                 player.draw(self.screen, cam_x, cam_y, self.game.font, scale)
 
-        # v2.5.0 玩家冰冻冰块渲染：冻结时覆盖淡蓝冰块
-        _ice_players = [player] if self.game.player2 is None else [p for p in (self.game.player, self.game.player2) if p is not None]
+        # v2.5.0/v2.5.4 玩家冰冻冰块渲染：冻结时覆盖淡蓝冰块（多人 N 人全覆盖）
+        _ice_players = [player] if self.game.player2 is None else [p for p in (self.game.player, self.game.player2, getattr(self.game, 'player3', None), getattr(self.game, 'player4', None)) if p is not None]
         for player in _ice_players:
             if getattr(player, 'buff_manager', None) is not None and player.buff_manager.is_frozen() and getattr(player, 'alive', True):
                 _ppx = int((player.x - cam_x) * scale)

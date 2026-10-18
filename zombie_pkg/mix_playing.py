@@ -1144,8 +1144,11 @@ class PlayingMixin:
                 if _pf:
                     continue
                 _d = (enemy.x - _pp.x) ** 2 + (enemy.y - _pp.y) ** 2
-                if _d < _best_d:
-                    _best_d = _d
+                # v2.5.4 低血玩家优先（狩猎残血）：血量越低权重越小 → 越优先成为目标
+                _hp_r = max(0.0, min(1.0, getattr(_pp, 'hp', 100) / max(1, getattr(_pp, 'max_hp', 100))))
+                _score = _d * (0.6 + 0.8 * _hp_r)
+                if _score < _best_d:
+                    _best_d = _score
                     target_x, target_y, target_obj = _pp.x, _pp.y, _pp
             if target_obj is None:
                 target_x, target_y, target_obj = self.player.x, self.player.y, self.player
