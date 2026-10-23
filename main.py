@@ -29,6 +29,10 @@ try:
     except Exception:
         pass
     game = Game()
+    if os.environ.get("ZOMBIE_SMOKE") == "1":
+        # v2.5.5 运行时错误优先冒烟：跑帧+开局后退出（异常→退出码非0，供测试捕获）
+        game._smoke_run()
+        sys.exit(0)
     game.run()
 except Exception as e:
     logger.log_exception(e)

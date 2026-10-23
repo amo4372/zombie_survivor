@@ -150,6 +150,8 @@ class Vehicle:
         self.speed = base["speed"]
         self.size = base["size"]
         self.collision_radius = base.get("collision", self.size + 24)  # v2.5.0 碰撞箱（>渲染 size）
+        # v2.5.5 贴合车体的多圆碰撞箱：沿车身轴向多圆近似长方形，替代单一圆形
+        self._build_collision_hull()
         self.ram_damage = base["ram_damage"]
         self.immune_melee = base["immune_melee"]
         self.can_shoot = base["can_shoot"]
@@ -167,6 +169,46 @@ class Vehicle:
         self.image = _VEHICLE_IMAGES.get(vehicle_type)
 
     # ==================== 状态 ====================
+    def _build_collision_hull(self):
+        """v2.5.5 构建贴合车体的多圆碰撞箱（沿车身长轴分布，近似长方形/多边形）"""
+        # 长条车身：车头方向为 +X，车身沿 X 分布、横向收窄
+        _half = self.size * 0.52        # 车身半长
+        _r = max(6.0, self.size * 0.30) # 单个圆半径（贴合车身宽度）
+        _fr = max(7.0, self.size * 0.34) # 车头圆稍大（撞击/碰撞优先面）
+        self.collision_hull_rel = [
+            (-_half, _r * 0.95),
+            (0.0, _r),
+            (_half * 0.6, _r),
+            (_half, _fr),
+        ]
+        self.collision_hull_rot = math.radians(getattr(self, 'facing_angle', 0.0))
+
+    def _hull_circles(self):
+        """返回世界坐标下的碰撞圆列表 [(wx, wy, r), ...]（随 facing 旋转）"""
+        try:
+            _rot = math.radians(getattr(self, 'facing_angle', 0.0))
+            _cos = math.cos(_rot)
+            _sin = math.sin(_rot)
+            _out = []
+            for _dx, _r in self.collision_hull_rel:
+                _wx = self.x + _dx * _cos
+                _wy = self.y + _dx * _sin
+                _out.append((_wx, _wy, _r))
+            return _out
+        except Exception:
+            return [(self.x, self.y, max(6, self.size * 0.3))]
+
+    def hull_overlap(self, other_x, other_y, other_r=0.0):
+        """v2.5.5 贴合车体碰撞检测：任意车身碰撞圆与目标圆重叠即视为碰撞"""
+        try:
+            for _cx, _cy, _cr in self._hull_circles():
+                _d = math.hypot(other_x - _cx, other_y - _cy)
+                if _d < _cr + other_r:
+                    return True
+            return False
+        except Exception:
+            return math.hypot(other_x - self.x, other_y - self.y) < self.collision_radius + other_r
+
     @property
     def alive(self):
         return not self.dead
@@ -265,10 +307,9 @@ class Vehicle:
         for enemy in enemies:
             if not getattr(enemy, "alive", False):
                 continue
-            dist = math.hypot(enemy.x - self.x, enemy.y - self.y)
-            hit_radius = getattr(self, 'collision_radius', self.size) + getattr(enemy, "size", 20) + 6  # v2.5.0
-            if dist >= hit_radius:
+            if not self.hull_overlap(enemy.x, enemy.y, getattr(enemy, "size", 20)):
                 continue
+            dist = math.hypot(enemy.x - self.x, enemy.y - self.y)
             # 方向性：只撞车头前方（侧面/后方擦过不造成撞击伤害）
             if dist > 1:
                 ang_to = math.degrees(math.atan2(enemy.y - self.y, enemy.x - self.x))

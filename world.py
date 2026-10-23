@@ -690,6 +690,23 @@ class GameWorld:
         for item in self.items:
             item.draw(screen, camera_x, camera_y, scale, assets)
 
+        # v2.5.5 空气墙边界线：有限地图四周明确红色警示线（可通行边界清晰化）
+        if self.limited and self.bounds:
+            try:
+                _b0, _b1 = self.bounds[0], self.bounds[1]
+                _edge_pts = [(_b0, _b0, _b1, _b0), (_b0, _b1, _b1, _b1),
+                             (_b0, _b0, _b0, _b1), (_b1, _b0, _b1, _b1)]
+                for _x1, _y1, _x2, _y2 in _edge_pts:
+                    if _x2 < visible_left or _x1 > visible_right or _y2 < visible_top or _y1 > visible_bottom:
+                        continue
+                    _sx1, _sy1 = int((_x1 - camera_x) * scale), int((_y1 - camera_y) * scale)
+                    _sx2, _sy2 = int((_x2 - camera_x) * scale), int((_y2 - camera_y) * scale)
+                    _lw = max(2, int(4 * scale))
+                    pygame.draw.line(screen, (235, 70, 60), (_sx1, _sy1), (_sx2, _sy2), _lw)
+                    pygame.draw.line(screen, (255, 220, 120), (_sx1, _sy1), (_sx2, _sy2), max(1, _lw - 2))
+            except Exception:
+                pass
+
         # 预分配一个SRCALPHA阴影surface供所有障碍物复用（性能优化）
         shadow_surf = pygame.Surface((8, 8), pygame.SRCALPHA)
 

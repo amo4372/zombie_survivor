@@ -69,7 +69,7 @@ check("客户端应用房间配置", "_net_room_cfg_applied" in _mn)
 # ============ 6. P2 角色词条 ============
 print("\n[6] P2 角色词条")
 check("P2 暴击率应用（crit_chance += crit_bonus_add）",
-      "p.crit_chance += p.crit_bonus_add" in _gc)
+      "_pp.crit_chance += _pp.crit_bonus_add" in _gc)
 
 # ============ 7. 运行时集成：房间配置开始游戏 ============
 print("\n[7] 运行时集成：房间配置开始游戏")

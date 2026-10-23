@@ -435,12 +435,12 @@ WEAPON_CODEX = {
         "lore": "一枪爆头的快感，只有狙击手才能体会。",
     },
     "AWP": {
-        "name": "AWP",
+        "name": "AWM",
         "category": "狙击枪",
-        "description": "传奇狙击枪，伤害极高，能够一枪毙命。",
-        "stats": {"damage": "150", "fire_rate": "极慢", "range": "极远", "ammo": "5"},
+        "description": "传奇狙击枪 AWM：射速更快、弹夹扩容至10发，射程与穿透大幅提升，拖动蓄力显示弹道、松开开火。",
+        "stats": {"damage": "420", "fire_rate": "快", "range": "极远", "ammo": "10"},
         "rarity": "史诗",
-        "lore": "狙击枪中的王者，每一发子弹都是一次审判。",
+        "lore": "狙击枪中的王者，每一发子弹都是一次审判；握紧枪身，弹道已为你标定。",
     },
     # === 霰弹枪 ===
     "SHOTGUN": {

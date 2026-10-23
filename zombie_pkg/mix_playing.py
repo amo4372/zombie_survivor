@@ -511,6 +511,18 @@ class PlayingMixin:
             if self.is_multiplayer_active() and self.state == GameState.PLAYING:
                 _half_px = self.scaled_width // 2
                 _tev = [e for e in _tev if e["type"] != "down" or e.get("pos", (0, 0))[0] < _half_px]
+            # v2.5.5 打断绳索 QTE：被勾期间任意"按下"即登记为待判定单击点（世界坐标，P1 视口 x 偏移 0）
+            try:
+                if self.player.grappled and self.player.qte_window > 0 and self.player.qte_break_tap is None:
+                    for _e2 in _tev:
+                        if _e2.get("type") == "down":
+                            _sx, _sy = _e2.get("pos", (0, 0))
+                            self.player.qte_break_tap = (
+                                self.camera.x + _sx / self.scale,
+                                self.camera.y + _sy / self.scale)
+                            break
+            except Exception:
+                pass
             self.joystick.handle_touch(_tev, self.scale, self._active_touch_ids)
             # Windows 触控一体机（班班通等）的触摸以鼠标事件合成为主，up 可能被系统手势/驱动吞掉：
             # 用 mouse.get_pressed 兜底释放"鼠标手指(id=-1)"，防止摇杆/攻击按钮卡在按下态
@@ -922,6 +934,17 @@ class PlayingMixin:
             weapon = None  # 防御：weapon_type 为 None（异常存档/联机同步兜底）
             if _veh is None or not _veh.alive:
                 weapon = self.player.get_current_weapon()
+            # v2.5.5 AWM 蓄力开火：按住不发射（显示弹道预览），松开才开火一次
+            if weapon is not None and getattr(weapon, "hold_charge", False):
+                _awm_saved = getattr(self.player, "_awm_saved", None)
+                if auto_shoot:
+                    if _awm_saved is None:
+                        self.player._awm_saved = mouse_angle   # 开始蓄力：记录瞄准角，本次不发射
+                    auto_shoot = False                          # 蓄力中抑制开火
+                elif _awm_saved is not None:
+                    mouse_angle = _awm_saved                    # 松开：按蓄力角开火一次
+                    self.player._awm_saved = None
+                    auto_shoot = True
             # v2.1.3：防御 weapon/weapon_type 为 None（异常存档/联机同步兜底，不再崩溃）
             if weapon is not None and getattr(weapon, "weapon_type", None) is not None and weapon.can_fire():
                 # 过热倾泻buff：无限弹药
@@ -1828,8 +1851,9 @@ class PlayingMixin:
                         _d = math.hypot(_pp.x - proj.x, _pp.y - proj.y)
                         if _d < proj.explosion_radius:
                             _dmg = proj.damage * (1 - _d / proj.explosion_radius)
-                            _pp.take_damage(max(1, int(_dmg)), damage_type='ranged', attack_x=proj.x, attack_y=proj.y)
-                            self.damage_numbers.append(DamageNumber(_pp.x, _pp.y, int(_dmg), color=RED))
+                            _pvp_d = self._pvp_dmg_to_player(_dmg, proj)
+                            _pp.take_damage(_pvp_d, damage_type='ranged', attack_x=proj.x, attack_y=proj.y, bypass_dodge=True)
+                            self.damage_numbers.append(DamageNumber(_pp.x, _pp.y, _pvp_d, color=RED))
 
             if not proj.alive:
                 self.projectiles.remove(proj)
@@ -1846,8 +1870,9 @@ class PlayingMixin:
                     if _pr.colliderect(_pp.get_rect()):
                         proj.alive = False
                         proj.hits.append(_pp)
-                        _pp.take_damage(proj.damage, damage_type='ranged', attack_x=proj.x, attack_y=proj.y)
-                        self.damage_numbers.append(DamageNumber(_pp.x, _pp.y, proj.damage, color=RED))
+                        _pvp_d = self._pvp_dmg_to_player(proj.damage, proj)
+                        _pp.take_damage(_pvp_d, damage_type='ranged', attack_x=proj.x, attack_y=proj.y, bypass_dodge=True)
+                        self.damage_numbers.append(DamageNumber(_pp.x, _pp.y, _pvp_d, color=RED))
                         self._on_player_hit_by_projectile(_pp, proj)
 
             # 激光束碰撞检测
@@ -1879,6 +1904,27 @@ class PlayingMixin:
                         self.particles.spawn(enemy.x, enemy.y, PURPLE, 5, (2, 5), (-3, 3), (0.2, 0.5))
                         if not enemy.alive:
                             self._on_enemy_death(enemy)
+                # v2.5.5 激光武器 PvP：粗激光对敌对玩家同样造成伤害（轨道炮修复"激光不打玩家"）
+                if getattr(self.config, 'pvp_enabled', False):
+                    _lo = getattr(proj, 'owner', None)
+                    if _lo is not None:
+                        _lldx = proj.laser_end_x - proj.x
+                        _lldy = proj.laser_end_y - proj.y
+                        _lll = _lldx * _lldx + _lldy * _lldy
+                        for _pp in self._all_players():
+                            if _pp is _lo or not getattr(_pp, 'alive', True) or getattr(_pp, 'downed', False):
+                                continue
+                            if getattr(_pp, 'team_id', 1) == getattr(_lo, 'team_id', 0):
+                                continue
+                            _t2 = 0.0
+                            if _lll > 0:
+                                _t2 = max(0.0, min(1.0, ((_pp.x - proj.x) * _lldx + (_pp.y - proj.y) * _lldy) / _lll))
+                            _clx = proj.x + _t2 * _lldx
+                            _cly = proj.y + _t2 * _lldy
+                            if math.hypot(_pp.x - _clx, _pp.y - _cly) < getattr(_pp, 'size', 20) + proj.laser_width:
+                                _pvp_d = self._pvp_dmg_to_player(proj.damage, proj)
+                                _pp.take_damage(_pvp_d, damage_type='ranged', attack_x=proj.x, attack_y=proj.y, bypass_dodge=True)
+                                self.damage_numbers.append(DamageNumber(_pp.x, _pp.y, _pvp_d, color=RED))
                 continue
 
             proj_rect = proj.get_rect()

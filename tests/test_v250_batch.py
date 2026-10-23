@@ -41,7 +41,7 @@ src_wp   = read("weapons.py")
 
 print("== 1) 阵营出生点分离 ==")
 check("按 team_id 四角出生点", "team_id" in src_gc and "出生点" in src_gc)
-check("出生点避开边界墙 _lb", "_lb" in src_gc and "640" in src_gc)
+check("出生点随机化避墙+间距3000", "_margin = 640" in src_gc and "3000" in src_gc and "_pvp_spawn_pool" in src_gc)
 
 print("== 2) 钩爪锚点 clamp + 卡墙断勾 ==")
 check("锚点 clamp 到世界边界", "bounds" in src_sk and "clamp" in src_sk)
@@ -49,8 +49,8 @@ check("卡墙停滞检测 _pull_stall", "_pull_stall_dist" in src_gear and "_pul
 check("停滞断勾 _reset_grapple", "_reset_grapple" in src_gear)
 
 print("== 3) 钩爪勾敌人玩家 + QTE 挣脱 ==")
-check("玩家被勾状态 grappled/qte", "grappled" in src_ply and "qte_progress" in src_ply and "qte_window" in src_ply)
-check("QTE 5 次挣脱", "qte_progress" in src_gear and "5" in src_gear)
+check("玩家被勾状态 grappled/qte", "grappled" in src_ply and "qte_break_tap" in src_ply and "qte_window" in src_ply)
+check("QTE 打断扇形判定", "def _qte_tap_in_sector" in src_gear and "qte_window = 0.8" in src_gear)
 check("被勾拉回后眩晕 STUN", "BuffType.STUN" in src_gear)
 check("路径目标含异阵营玩家 pvp_enabled", "pvp_enabled" in src_sk and "team_id" in src_sk)
 check("被勾 HUD 提示", "被勾住" in src_dpl and "qte" in src_dpl)
@@ -89,8 +89,8 @@ check("撞击判定用 collision_radius", "collision_radius" in src_vh and "enem
 check("底图黑背景抠透明", "near_bg" in src_vh and "PixelArray" in src_vh)
 
 print("== 11) 武器加强 + 镰刀近战buff ==")
-check("AWP 换弹 1.6", '"reload": 1.6' in src_wp)
-check("AWP 射程 1400", '"range": 1400' in src_wp)
+check("AWM 换弹 1.8", '"reload": 1.8' in src_wp)
+check("AWM 射程 2600", '"range": 2600' in src_wp)
 check("狙击枪 换弹 1.4", '"reload": 1.4' in src_wp)
 check("狙击枪 射程 1100", '"range": 1100' in src_wp)
 check("AA12 换弹 1.5", '"reload": 1.5' in src_wp)

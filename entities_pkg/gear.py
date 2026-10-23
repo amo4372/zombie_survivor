@@ -231,24 +231,33 @@ class RiotGear:
                 dx = player_x - self.grapple_target.x
                 dy = player_y - self.grapple_target.y
                 dist = math.hypot(dx, dy)
-                # v2.5.0 PvP 勾取玩家：QTE 窗口计时 + 挣脱判定（被勾玩家输入计数达标即挣脱）
+                # v2.5.0/v2.5.5 PvP 勾取玩家：打断绳索 QTE（记录绳索几何，0.8s 内单击绳索对称轴扇形即打断）
                 if hasattr(self.grapple_target, 'qte_window'):
                     try:
+                        self.grapple_target.qte_rope_from = (player_x, player_y)
+                        self.grapple_target.qte_rope_to = (self.grapple_target.x, self.grapple_target.y)
                         if self.grapple_target.qte_window > 0:
                             self.grapple_target.qte_window -= dt
-                            if self.grapple_target.qte_progress >= getattr(self.grapple_target, 'qte_need', 5):
-                                # QTE 挣脱成功：解除勾取，不再拉取 + 成功反馈与短暂免疫
-                                self.grapple_target.grappled = False
-                                self.grapple_target.qte_progress = 0
-                                self.grapple_target.qte_window = 0.0
-                                self.grapple_target.qte_success_timer = 1.2
-                                self.grapple_target.qte_immune_timer = 0.6
-                                self._reset_grapple()
-                                return
-                        else:
-                            if self.grapple_target.qte_progress < getattr(self.grapple_target, 'qte_need', 5):
+                            self.grapple_target.qte_break_hint = 1.0
+                            _tap = self.grapple_target.qte_break_tap
+                            if _tap is not None:
+                                self.grapple_target.qte_break_tap = None
+                                if self._qte_tap_in_sector(self.grapple_target, _tap):
+                                    # 打断成功：解除勾取，不再拉取 + 成功反馈与短暂免疫
+                                    self.grapple_target.grappled = False
+                                    self.grapple_target.qte_window = 0.0
+                                    self.grapple_target.qte_break_hint = 0.0
+                                    self.grapple_target.qte_success_timer = 1.2
+                                    self.grapple_target.qte_immune_timer = 0.6
+                                    self.grapple_target.qte_hit_flash = 0.18
+                                    self._reset_grapple()
+                                    return
+                            if self.grapple_target.qte_window <= 0:
+                                # 超时未打断 → 失败反馈，继续被拉（到达后眩晕）
+                                self.grapple_target.qte_break_hint = 0.0
                                 self.grapple_target.qte_fail_timer = 1.0
-                            self.grapple_target.qte_progress = 0
+                        else:
+                            self.grapple_target.qte_break_tap = None
                     except Exception:
                         pass
 
@@ -357,6 +366,24 @@ class RiotGear:
                 player.invincible_timer = max(getattr(player, "invincible_timer", 0), 0.1)
             # 钩爪线跟随玩家
             self.grapple_head_pos = [player.x, player.y]
+
+    def _qte_tap_in_sector(self, target, tap):
+        """v2.5.5 打断绳索：单击点是否落在以绳索为对称轴的扇形内
+        扇形：顶点在被勾玩家，以绳索方向为对称轴，半角80°，半径160 世界单位
+        """
+        try:
+            fx, fy = getattr(target, 'qte_rope_from', (0, 0))
+            tx, ty = getattr(target, 'qte_rope_to', (target.x, target.y))
+            base = math.atan2(fy - ty, fx - tx)          # 绳索方向（指向钩爪源）
+            dx, dy = tap[0] - tx, tap[1] - ty
+            dist = math.hypot(dx, dy)
+            if dist > 160:
+                return False
+            ang = math.atan2(dy, dx)
+            diff = (ang - base + math.pi * 3) % (math.pi * 2) - math.pi
+            return abs(diff) <= math.radians(80)
+        except Exception:
+            return False
 
     def _begin_self_pull(self, player_x, player_y, player=None):
         """进入自我拉拽状态：钩爪头到目标点后把自己拉过去。
@@ -604,13 +631,14 @@ class RiotGear:
         self.grapple_head_pos = [player_x, player_y]
         self.grapple_state = "shooting"
         self.grapple_target = target
-        # v2.5.0/v2.5.3 PvP 勾取玩家：初始化 QTE 挣脱窗口（1.6 秒内输入 5 次挣脱；成功挣脱后短暂免疫）
+        # v2.5.0/v2.5.5 PvP 勾取玩家：初始化打断绳索 QTE（0.8s 内单击绳索附近扇形即打断；成功打断后短暂免疫）
         if target is not None and hasattr(target, 'qte_window'):
             if getattr(target, 'qte_immune_timer', 0) > 0:
                 return False
             target.grappled = True
-            target.qte_window = 1.6
-            target.qte_progress = 0
+            target.qte_window = 0.8
+            target.qte_break_tap = None
+            target.qte_break_hint = 1.0
             target.qte_hit_flash = 0.0
             target.qte_success_timer = 0.0
             target.qte_fail_timer = 0.0

@@ -328,13 +328,14 @@ class Weapon:
                 "dot_damage": 12, "dot_duration": 3.0
             },
             WeaponType.RAILGUN: {
-                "name": "轨道炮", "damage": 500, "fire_rate": 4.0,
-                "range": 1500, "speed": 0, "spread": 0, "pierce": 99,
+                "name": "轨道炮", "damage": 560, "fire_rate": 1.6,
+                "range": 1800, "speed": 0, "spread": 0, "pierce": 99,
                 "is_laser": True, "laser_width": 25, "laser_duration": 0.8,
                 "color": PURPLE, "projectile_size": 15, "shake": 25,
-                "desc": "充能武器，发射极粗激光束，穿透一切",
-                "ammo": 3, "reload": 4.0,
-                "charge_time": 1.0
+                "desc": "充能武器：射速大增/弹夹5发/换弹稍长，粗激光穿透一切（v2.5.5 加强）",
+                "ammo": 5, "reload": 5.5,
+                "charge_time": 1.0,
+                "pvp_no_atten": True
             },
             WeaponType.MINIGUN: {
                 "name": "加特林", "damage": 12, "fire_rate": 0.018,
@@ -442,11 +443,12 @@ class Weapon:
             },
             # ========== 狙击枪扩展 ==========
             WeaponType.AWP: {
-                "name": "AWP", "damage": 150, "fire_rate": 2.0,
-                "range": 1400, "speed": 25, "spread": 0, "pierce": 8,
+                "name": "AWM", "damage": 420, "fire_rate": 1.1,
+                "range": 2600, "speed": 34, "spread": 0, "pierce": 30,
                 "color": GREEN, "projectile_size": 8, "shake": 12,
-                "desc": "超高伤害狙击枪，一枪毙命（v2.5.0 换弹大减+射程加长）",
-                "ammo": 5, "reload": 1.6
+                "desc": "传奇狙击枪：射速更快/弹夹10发/射程与穿透大幅提升/拖动蓄力显示弹道，松开开火（v2.5.5 大加强）",
+                "ammo": 10, "reload": 1.8,
+                "pvp_no_atten": True, "hold_charge": True
             },
             # ========== 霰弹枪扩展 ==========
             WeaponType.AA12: {
@@ -607,6 +609,8 @@ class Weapon:
                 bool(getattr(self, "is_scythe", False))
             )
             proj.owner = player  # v2.2.7 PvPvE 归属
+            # v2.5.5 单发特高伤武器（AWM/轨道炮）标志：PvP 互伤不作衰减反而加强
+            proj.pvp_no_atten = bool(getattr(self, "pvp_no_atten", False))
             projectiles.append(proj)
         return projectiles
 

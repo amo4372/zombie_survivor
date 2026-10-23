@@ -410,7 +410,7 @@ class PlayMixin:
                     or getattr(enemy, 'special_windup_timer', 0) > 0):
                 self._draw_skill_warning(enemy, cam_x, cam_y, scale)
 
-        # v2.5.3 PvP 被勾玩家 QTE 挣脱（增强版：环形倒计时 + 进度点 + 命中闪光 + 成败反馈）
+        # v2.5.5 PvP 被勾玩家 打断绳索 QTE（0.8s：单击绳索对称轴扇形即打断；绳索线 + 扇形提示 + 倒计时 + 成败反馈）
         try:
             _is_grappled = bool(getattr(player, 'grappled', False))
             _q_succ = getattr(player, 'qte_success_timer', 0.0)
@@ -430,43 +430,58 @@ class PlayMixin:
                 pygame.draw.rect(_edge, (220, 30, 30, _ea), (0, 0, _ew, _edge.get_height()))
                 pygame.draw.rect(_edge, (220, 30, 30, _ea), (_edge.get_width() - _ew, 0, _ew, _edge.get_height()))
                 self.screen.blit(_edge, (viewport_x, 0))
+                # 绳索线（从钩爪源画到被勾玩家）
+                try:
+                    _rf = getattr(player, 'qte_rope_from', None)
+                    _rt = getattr(player, 'qte_rope_to', None)
+                    if _rf and _rt:
+                        _l1 = (int((_rf[0] - cam_x) * scale), int((_rf[1] - cam_y) * scale))
+                        _l2 = (int((_rt[0] - cam_x) * scale), int((_rt[1] - cam_y) * scale))
+                        pygame.draw.line(self.screen, (200, 200, 210), _l1, _l2, max(2, int(2 * scale)))
+                except Exception:
+                    pass
             # 成功/失败提示
             if _q_succ > 0:
-                _st = self.game.font.render("挣脱成功！", True, (80, 255, 120))
+                _st = self.game.font.render("绳索已打断！", True, (80, 255, 120))
                 self.screen.blit(_st, _st.get_rect(center=(_cx, int(150 * scale))))
             elif _q_fail > 0 and not _is_grappled:
                 _ft = self.game.font.render("被捕获！", True, (255, 90, 90))
                 self.screen.blit(_ft, _ft.get_rect(center=(_cx, int(150 * scale))))
             # 主 QTE 指示器
             if _is_grappled:
-                _qp = int(getattr(player, 'qte_progress', 0))
                 _qw = max(0.0, getattr(player, 'qte_window', 0.0))
-                _need = getattr(player, 'qte_need', 5)
-                _ratio = min(1.0, _qw / 1.6)
+                _ratio = min(1.0, _qw / 0.8)
                 _cy = int(190 * scale)
                 _R = int(46 * scale)
-                # 环形倒计时（剩余窗口，红色越少越急）
+                # 环形倒计时（剩余 0.8s，红色越少越急）
                 _ring_c = (255, 200, 60) if _ratio > 0.35 else (255, 70, 70)
-                _seg = int((1.0 - _ratio) * 360)
+                _seg = max(0, min(360, int((1.0 - _ratio) * 360)))
                 for _a in range(_seg):
                     _rad = math.radians(-90 + _a)
                     _px = _cx + int(math.cos(_rad) * _R)
                     _py = _cy + int(math.sin(_rad) * _R)
                     pygame.draw.circle(self.screen, _ring_c, (_px, _py), max(2, int(3 * scale)))
                 pygame.draw.circle(self.screen, (50, 50, 60), (_cx, _cy), _R, max(1, int(scale)))
-                # 进度点（need 个，弧形排列，命中点亮）
-                for _i in range(_need):
-                    _a2 = math.radians(-90 + (_i * 360.0 / _need))
-                    _px2 = _cx + int(math.cos(_a2) * (_R + int(14 * scale)))
-                    _py2 = _cy + int(math.sin(_a2) * (_R + int(14 * scale)))
-                    _lit = _i < _qp
-                    pygame.draw.circle(self.screen,
-                                       (255, 230, 80) if _lit else (60, 60, 70),
-                                       (_px2, _py2), max(4, int(6 * scale)))
-                    if _lit:
-                        pygame.draw.circle(self.screen, (255, 255, 200),
-                                           (_px2, _py2), max(2, int(3 * scale)), 1)
-                # 命中闪光（输入成功瞬间扩散环）
+                # 扇形提示：顶点在被勾玩家屏幕位，以绳索方向为对称轴，半角80°、半径160（世界→屏幕）
+                try:
+                    _rf = getattr(player, 'qte_rope_from', None)
+                    if _rf:
+                        _base = math.atan2(_rf[1] - player.y, _rf[0] - player.x)
+                        _apex = (int((player.x - cam_x) * scale), int((player.y - cam_y) * scale))
+                        _rpx = 160 * scale
+                        _p1 = (_apex[0] + int(math.cos(_base - math.radians(80)) * _rpx),
+                               _apex[1] + int(math.sin(_base - math.radians(80)) * _rpx))
+                        _p2 = (_apex[0] + int(math.cos(_base + math.radians(80)) * _rpx),
+                               _apex[1] + int(math.sin(_base + math.radians(80)) * _rpx))
+                        _fan = pygame.Surface((self.game.scaled_width, self.game.scaled_height), pygame.SRCALPHA)
+                        _alpha = int(50 + 30 * _pulse)
+                        pygame.draw.polygon(_fan, (120, 230, 255, _alpha), [_apex, _p1, _p2])
+                        pygame.draw.line(_fan, (160, 240, 255), _apex, _p1, max(1, int(scale)))
+                        pygame.draw.line(_fan, (160, 240, 255), _apex, _p2, max(1, int(scale)))
+                        self.screen.blit(_fan, (0, 0))
+                except Exception:
+                    pass
+                # 命中/打断闪光（单击瞬间扩散环）
                 if _q_flash > 0.12:
                     _frad = _R + int((0.18 - _q_flash) / 0.18 * 60 * scale)
                     pygame.draw.circle(self.screen, (255, 255, 255),
@@ -476,11 +491,24 @@ class PlayMixin:
                     except Exception:
                         pass
                 # 提示文字
-                _hl = "触控/方向键连打挣脱！" if self.game.config.control_mode == ControlMode.TOUCH else "狂按方向键挣脱！"
-                _qt = self.game.font.render(_hl, True, (255, 220, 60))
+                _qt = self.game.font.render("被钩爪命中！点击绳索打断", True, (255, 220, 60))
                 self.screen.blit(_qt, _qt.get_rect(center=(_cx, _cy + _R + int(30 * scale))))
-                _qc = self.game.font_small.render(f"{_qp}/{_need}", True, (230, 230, 230))
+                _qc = self.game.font_small.render(f"{(0.8 if getattr(player, 'qte_break_hint', 0) > 0 else _qw):.1f}s", True, (230, 230, 230))
                 self.screen.blit(_qc, _qc.get_rect(center=(_cx, _cy)))
+        except Exception:
+            pass
+        # v2.5.5 AWM 蓄力弹道预览：蓄力期间画瞄准线（从玩家指向蓄力角，长度=武器射程 clamp）
+        try:
+            _awm_saved = getattr(player, "_awm_saved", None)
+            if _awm_saved is not None:
+                _awm_w = player.get_current_weapon() if hasattr(player, 'get_current_weapon') else None
+                _awm_rng = int(getattr(_awm_w, 'range', 800) if _awm_w else 800)
+                _awm_ex = player.x + math.cos(_awm_saved) * _awm_rng
+                _awm_ey = player.y + math.sin(_awm_saved) * _awm_rng
+                _p1 = (int((player.x - cam_x) * scale), int((player.y - cam_y) * scale))
+                _p2 = (int((_awm_ex - cam_x) * scale), int((_awm_ey - cam_y) * scale))
+                pygame.draw.line(self.screen, (140, 255, 140), _p1, _p2, max(1, int(2 * scale)))
+                pygame.draw.circle(self.screen, (140, 255, 140), _p2, max(3, int(5 * scale)))
         except Exception:
             pass
         # 绘制玩家（v2.5.4 多人：N 人全部绘制，彼此可见 + 头顶血条/阵营/倒地倒计时）

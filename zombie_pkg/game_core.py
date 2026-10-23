@@ -538,25 +538,34 @@ class GameCore:
         logger.debug(f"缩放更新: scale={self.scale:.3f}, {sw}x{sh}")
 
     def _apply_character_bonuses2(self):
-        """应用玩家2的局外角色加成"""
-        cfg = CHARACTERS.get(getattr(self, 'selected_character2', None))
-        if not cfg or not self.player2:
-            return
-        p = self.player2
-        lvl = self.records.get_character_level(getattr(self, 'selected_character2'))
-        scale_lvl = 1 + (lvl - 1) * 0.2
-        hb = int(cfg.get("hp_bonus", 0) * scale_lvl)
-        if hb:
-            p.max_hp += hb
-            p.hp = min(p.hp + hb, p.max_hp)
-        p.base_speed += cfg.get("speed_bonus", 0) * scale_lvl
-        p.speed = p.base_speed
-        p.damage_multiplier *= (1 + cfg.get("damage_bonus", 0))
-        p.crit_bonus_add += cfg.get("crit_bonus", 0)
-        p.crit_chance += p.crit_bonus_add  # v2.2.9 修复：P2 角色暴击率词条此前未生效
-        p.health_regen += cfg.get("regen", 0) * scale_lvl
-        p.dmg_reduce += cfg.get("dmg_reduce", 0)
-        p.char_name = getattr(self, 'selected_character2')
+        """应用玩家2及 N 人（player3/player4）的局外角色加成（v2.5.5 支持 N 人角色效果）"""
+        for _idx, _attr, _sel in ((2, 'player2', 'selected_character2'),
+                                  (3, 'player3', 'selected_character3'),
+                                  (4, 'player4', 'selected_character4')):
+            _pp = getattr(self, _attr, None)
+            _sc = getattr(self, _sel, None)
+            if not _pp:
+                continue
+            cfg = CHARACTERS.get(_sc)
+            if not cfg:
+                continue
+            try:
+                lvl = self.records.get_character_level(_sc)
+                scale_lvl = 1 + (lvl - 1) * 0.2
+                hb = int(cfg.get("hp_bonus", 0) * scale_lvl)
+                if hb:
+                    _pp.max_hp += hb
+                    _pp.hp = min(_pp.hp + hb, _pp.max_hp)
+                _pp.base_speed += cfg.get("speed_bonus", 0) * scale_lvl
+                _pp.speed = _pp.base_speed
+                _pp.damage_multiplier *= (1 + cfg.get("damage_bonus", 0))
+                _pp.crit_bonus_add += cfg.get("crit_bonus", 0)
+                _pp.crit_chance += _pp.crit_bonus_add
+                _pp.health_regen += cfg.get("regen", 0) * scale_lvl
+                _pp.dmg_reduce += cfg.get("dmg_reduce", 0)
+                _pp.char_name = _sc
+            except Exception:
+                continue
 
     def is_multiplayer_active(self):
         """是否处于双人/联机游玩中"""
@@ -811,26 +820,41 @@ class GameCore:
                             _pp.team_id = _idx % _nteams
                             if _pvpm:
                                 _pp.hp = _pp.max_hp
-                        # v2.5.0 阵营出生点分离：PvP 时不同阵营出生在地图不同方位（四角分布）
+                        # v2.5.0/v2.5.5 阵营出生点：v2.5.5 改为随机化（不再固定左下/右上），
+                        # 异阵营间距≥3000m（有限地图 12000²，避开边界墙 640）
                         if _pvpm:
                             try:
                                 _ms = getattr(getattr(self, 'world', None), 'map_size', 12000) or 12000
-                                _lb = 400 + 240  # 有限地图左下角基准（避开边界墙）
-                                _spawns = [
-                                    (_lb, _ms - _lb),            # 左下
-                                    (_ms - _lb, _lb),            # 右上
-                                    (_lb, _lb),                  # 左上
-                                    (_ms - _lb, _ms - _lb),      # 右下
-                                ]
-                                _sp = _spawns[int(getattr(_pp, 'team_id', 0) or 0) % len(_spawns)]
-                                # 同队玩家保持小偏移，异队玩家远隔
-                                _team_mates = sum(1 for _px in ("player", "player2", "player3", "player4")
-                                                  if getattr(self, _px, None) is not None
-                                                  and getattr(getattr(self, _px, None), 'team_id', -1) == getattr(_pp, 'team_id', 0)
-                                                  and getattr(self, _px, None) is not _pp)
-                                _dx = (_team_mates % 2) * 160
-                                _dy = (_team_mates // 2) * 160
-                                _pp.x, _pp.y = _sp[0] + _dx, _sp[1] + _dy
+                                _margin = 640
+                                if not hasattr(self, '_pvp_spawn_pool'):
+                                    self._pvp_spawn_pool = []
+                                    _trials = 600
+                                    for _ in range(_trials):
+                                        self._pvp_spawn_pool.append(
+                                            (random.uniform(_margin, _ms - _margin),
+                                             random.uniform(_margin, _ms - _margin)))
+                                _assigned = [(getattr(getattr(self, _pxn, None), 'team_id', 0) if getattr(self, _pxn, None) else None,
+                                              getattr(getattr(self, _pxn, None), 'x', None),
+                                              getattr(getattr(self, _pxn, None), 'y', None))
+                                             for _pxn in ("player", "player2", "player3", "player4")
+                                             if getattr(self, _pxn, None) is not None]
+                                _pteam = getattr(_pp, 'team_id', 0)
+                                _chosen = None
+                                for _c in self._pvp_spawn_pool:
+                                    _ok = True
+                                    for _at, _ax, _ay in _assigned:
+                                        if _at == _pteam:
+                                            continue  # 同阵营可近，异阵营必须远
+                                        if _ax is not None and math.hypot(_c[0] - _ax, _c[1] - _ay) < 3000:
+                                            _ok = False
+                                            break
+                                    if _ok:
+                                        _chosen = _c
+                                        break
+                                if _chosen is None and self._pvp_spawn_pool:
+                                    _chosen = random.choice(self._pvp_spawn_pool)
+                                if _chosen is not None:
+                                    _pp.x, _pp.y = float(_chosen[0]), float(_chosen[1])
                             except Exception:
                                 pass
                         # v2.2.11 逐玩家自定义名字（动态挂 nick 属性，HUD 标签显示）
@@ -1122,6 +1146,15 @@ class GameCore:
             return self.player
 
     # ==================== v2.5.2 钩爪玩家锁定辅助 ====================
+    def _pvp_dmg_to_player(self, base, owner_proj=None):
+        """v2.5.5 PvP 玩家互伤：默认大幅削减（×0.2 防止死太快）；
+        单发特高伤武器（AWM/轨道炮，pvp_no_atten）不作衰减反而小幅加强（×1.2）"""
+        try:
+            _no = bool(getattr(owner_proj, 'pvp_no_atten', False))
+            return int(base * (1.2 if _no else 0.2))
+        except Exception:
+            return int(base * 0.2)
+
     def _downed_teammates_of(self, player):
         """同阵营倒地玩家（可被钩爪勾取救援，优先级最高）"""
         try:
@@ -1455,6 +1488,31 @@ class GameCore:
             sys.exit(0)
         except:
             pass
+
+    # ==================== v2.5.5 运行时冒烟（ZOMBIE_SMOKE=1 时由 main.py 调用） ====================
+    def _smoke_run(self):
+        """运行时错误优先的冒烟：真实实例化游戏并跑多帧 update/draw + 一局开局，
+        任何 RuntimeError/异常都会向上抛出（main.py 捕获后退出码非 0），供测试子进程判定。"""
+        try:
+            # 菜单态跑帧（handle_events/update/draw 全链路）
+            for _i in range(20):
+                self.update(0.05)
+                self.draw()
+            # 开局并跑帧（含世界/实体/渲染/碰撞/刷怪等全部子系统）
+            try:
+                self.start_game()
+            except Exception as _e:
+                raise RuntimeError(f"[SMOKE] start_game 异常: {_e!r}") from _e
+            for _i in range(90):
+                self.update(0.05)
+                self.draw()
+            # 触发一次渲染刷新，确保 surface 有效
+            pygame.display.flip()
+            print("[SMOKE] 运行时冒烟通过（20 菜单帧 + 90 对局帧）", flush=True)
+        except Exception:
+            import traceback
+            traceback.print_exc()
+            raise
 
     # ==================== 错误可忽略询问框（v2.2.0 / v2.2.8 三按钮+复制） ====================
     def _error_ask_hit(self, mx, my):

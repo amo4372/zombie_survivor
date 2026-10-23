@@ -28,15 +28,18 @@ class Player:
         self.alive = True
         self.downed = False
         self.downed_timer = 0.0    # 倒地时长（救援/自动复活用）
-        # v2.5.0 PvP 钩爪勾取玩家：被勾状态 + QTE 挣脱
+        # v2.5.0/v2.5.5 PvP 钩爪勾取玩家：被勾状态 + 打断绳索 QTE（0.8s 内单击绳索附近扇形即打断）
         self.grappled = False          # 被敌方钩爪勾中（位置由钩爪控制，禁用输入移动）
-        self.qte_progress = 0          # QTE 挣脱进度（输入计数）
-        self.qte_window = 0.0          # QTE 剩余时间（秒）
-        self.qte_need = 5              # v2.5.3 QTE 所需输入次数
-        self.qte_hit_flash = 0.0       # v2.5.3 QTE 命中闪光计时（画面反馈）
-        self.qte_success_timer = 0.0   # v2.5.3 挣脱成功提示计时
-        self.qte_fail_timer = 0.0      # v2.5.3 挣脱失败提示计时
-        self.qte_immune_timer = 0.0    # v2.5.3 挣脱成功后短暂免疫被勾
+        self.qte_window = 0.0          # QTE 剩余时间（秒，0.8s）
+        self.qte_hit_flash = 0.0       # QTE 命中/打断闪光计时（画面反馈）
+        self.qte_success_timer = 0.0   # 打断成功提示计时
+        self.qte_fail_timer = 0.0      # 打断失败提示计时
+        self.qte_immune_timer = 0.0    # 打断成功后短暂免疫被勾
+        # v2.5.5 打断绳索：绳索几何 + 待判定单击点 + 提示显示
+        self.qte_break_tap = None      # 被勾期间玩家单击的世界坐标（待 gear 判定扇形）
+        self.qte_rope_from = (0.0, 0.0)  # 绳索起点（钩爪源）
+        self.qte_rope_to = (0.0, 0.0)    # 绳索终点（被勾玩家）
+        self.qte_break_hint = 0.0        # 打断提示显示计时
         self.rescue_progress = 0.0  # 队友救援进度（0~2.5）
         self.level = 1
         self.exp = 0
@@ -304,12 +307,8 @@ class Player:
         if self.regen_rate > 0 and self.hp < self.max_hp:
             self.hp = min(self.max_hp, self.hp + self.regen_rate * dt)
 
-        # v2.5.0/v2.5.3 PvP 钩爪被勾：输入位移禁用（位置由钩爪拉取控制），输入尝试计入 QTE 挣脱进度
+        # v2.5.0/v2.5.5 PvP 钩爪被勾：输入位移禁用（位置由钩爪拉取控制），打断改为单击绳索扇形判定
         if self.grappled:
-            if abs(move_x) > 0.05 or abs(move_y) > 0.05:
-                if self.qte_window > 0:
-                    self.qte_progress += 1
-                    self.qte_hit_flash = 0.18   # v2.5.3 命中画面闪光
             move_x, move_y = 0.0, 0.0
         # v2.5.3 QTE 反馈计时衰减
         if self.qte_hit_flash > 0:
@@ -320,6 +319,8 @@ class Player:
             self.qte_fail_timer = max(0.0, self.qte_fail_timer - dt)
         if self.qte_immune_timer > 0:
             self.qte_immune_timer = max(0.0, self.qte_immune_timer - dt)
+        if getattr(self, 'qte_break_hint', 0) > 0:
+            self.qte_break_hint = max(0.0, self.qte_break_hint - dt)
         new_x = self.x + move_x * self.speed * self.speed_mult * speed_mult * dt * 60
         new_y = self.y + move_y * self.speed * self.speed_mult * speed_mult * dt * 60
 
@@ -484,7 +485,7 @@ class Player:
         except Exception:
             pass
 
-    def take_damage(self, damage, damage_type="melee", from_front=False, attack_x=None, attack_y=None):
+    def take_damage(self, damage, damage_type="melee", from_front=False, attack_x=None, attack_y=None, bypass_dodge=False):
         # 开发者模式：无敌
         if getattr(self, 'dev_god', False):
             return 0
@@ -535,8 +536,8 @@ class Player:
             _veh.take_damage(damage, damage_type)
             return
 
-        # 闪避检测
-        if random.random() < self.dodge_chance:
+        # 闪避检测（PvP 弹道/爆炸/激光命中时 bypass_dodge=True，命中必然扣血，修复"数字有但没扣血"）
+        if not bypass_dodge and random.random() < self.dodge_chance:
             return  # 完全闪避
 
         # 钢铁意志减伤

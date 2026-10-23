@@ -108,13 +108,15 @@ def draw_enemy_player_indicators(renderer, game, viewports, vp):
     """v2.2.9 PvP 敌方玩家位置揭示：开局 8s + 每 45s 闪 3s 时，
     在各玩家视口显示异阵营玩家位置（红点+边缘箭头）"""
     try:
-        if not getattr(game, "pvp_reveal_active", False):
-            return
         if not getattr(game.config, "pvp_enabled", False):
             return
         sw = vp.rect.width
         sh = vp.rect.height
         me = vp.player
+        _periodic = bool(getattr(game, "pvp_reveal_active", False))
+        # v2.5.5 主动探测：近距离（<400 世界单位）敌方玩家常驻暴露（小菱形标记），
+        # 不受周期揭示窗口限制——满足"持续暴露一定范围内所有敌人玩家位置"
+        _scan_r = 400.0
         for other in viewports:
             if other is vp or other.player is None:
                 continue
@@ -122,7 +124,23 @@ def draw_enemy_player_indicators(renderer, game, viewports, vp):
             if getattr(me, "team_id", 0) == getattr(op, "team_id", 1):
                 continue  # 队友不标红
             sx, sy = _screen_pos_of(op.x, op.y, vp.camera, game.scale)
-            if 0 <= sx <= sw and 0 <= sy <= sh:
+            _in_view = (0 <= sx <= sw and 0 <= sy <= sh)
+            _wdist = math.hypot(op.x - me.x, op.y - me.y)
+            if _wdist <= _scan_r:
+                # 近距离常驻暴露：红菱形 + 距离
+                _mx, _my = int(sx), int(sy)
+                if _in_view:
+                    _mr = max(6, int(7 * game.scale))
+                    pygame.draw.polygon(renderer.screen, (255, 60, 60),
+                                        [(_mx, _my - _mr), (_mx + _mr, _my), (_mx, _my + _mr), (_mx - _mr, _my)])
+                    pygame.draw.polygon(renderer.screen, (255, 200, 200),
+                                        [(_mx, _my - _mr + 2), (_mx + _mr - 2, _my), (_mx, _my + _mr - 2), (_mx - _mr + 2, _my)], 1)
+                    _dt = game.font_small.render(f"{int(_wdist)}", True, (255, 120, 120))
+                    renderer.screen.blit(_dt, (_mx - _dt.get_width() // 2, _my + _mr + 2))
+                continue
+            if not _periodic:
+                continue
+            if _in_view:
                 # v2.5.2 视口内敌人本身可见，不再画常驻红圈（位置揭示只针对屏幕外）
                 pass
             else:

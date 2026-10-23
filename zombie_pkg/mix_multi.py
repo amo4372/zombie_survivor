@@ -273,6 +273,17 @@ class MultiplayerMixin:
                             self._p2_finger_ids.add(_tev["id"])
                     elif _tev["type"] == "up":
                         self._p2_finger_ids.discard(_tev["id"])
+                # v2.5.5 打断绳索 QTE：P2 被勾期间右半屏任意"按下"登记为待判定单击点（世界坐标）
+                try:
+                    if p2.grappled and p2.qte_window > 0 and p2.qte_break_tap is None:
+                        for _e2 in self.touch_events:
+                            if _e2.get("type") == "down" and _e2.get("pos", (0, 0))[0] >= self.scaled_width // 2:
+                                _sx, _sy = _e2["pos"]
+                                p2.qte_break_tap = (self.camera2.x + (_sx - self.scaled_width // 2) / self.scale,
+                                                    self.camera2.y + _sy / self.scale)
+                                break
+                except Exception:
+                    pass
                 self.p2_controls["joystick"].handle_touch(self.touch_events, self.scale, self._p2_finger_ids)
                 self.p2_controls["aim"].handle_touch(self.touch_events, self.scale)
                 for name in ("shoot", "sprint", "skill_selector", "skill_caster", "throwable_switch", "throwable_caster"):
@@ -737,11 +748,42 @@ class MultiplayerMixin:
                 tx, ty = p2.x + math.cos(angle) * actual_dist, p2.y + math.sin(angle) * actual_dist
                 _direct_pull = True
             else:
-                # 短按直发：路径搜索（方向上的最近非 Boss 敌人）
+                # 短按直发：路径搜索（优先级：同阵营倒地队友 > 敌对玩家 > 普通僵尸）
                 _dx = math.cos(angle)
                 _dy = math.sin(angle)
                 best = None
                 best_proj = actual_dist
+                # v2.5.5 P2 短按勾取同阵营倒地队友（救援拉回，优先级最高）
+                try:
+                    for _pd in self._downed_teammates_of(p2):
+                        _ex = _pd.x - p2.x
+                        _ey = _pd.y - p2.y
+                        _pr = _ex * _dx + _ey * _dy
+                        if _pr < 0 or _pr > actual_dist:
+                            continue
+                        _px = _ex - _pr * _dx
+                        _py = _ey - _pr * _dy
+                        if math.hypot(_px, _py) < 30 + 26 and _pr < best_proj:
+                            best = _pd
+                            best_proj = _pr
+                except Exception:
+                    pass
+                # v2.5.5 P2 短按勾取敌对玩家（PvP，与 P1 对齐）
+                try:
+                    if getattr(self.config, 'pvp_enabled', False):
+                        for _pp in self._enemy_players_of(p2):
+                            _ex = _pp.x - p2.x
+                            _ey = _pp.y - p2.y
+                            _pr = _ex * _dx + _ey * _dy
+                            if _pr < 0 or _pr > actual_dist:
+                                continue
+                            _px = _ex - _pr * _dx
+                            _py = _ey - _pr * _dy
+                            if math.hypot(_px, _py) < 30 + 26 and _pr < best_proj:
+                                best = _pp
+                                best_proj = _pr
+                except Exception:
+                    pass
                 for e in self.enemies:
                     if not getattr(e, "alive", False):
                         continue
