@@ -411,8 +411,9 @@ class Vehicle:
     def get_image(self):
         return self.image
 
-    def draw(self, screen, cam_x=0.0, cam_y=0.0, scale=1.0):
-        """绘制载具（图片或回退图形）。cam_x/cam_y 为相机世界坐标，scale 为缩放"""
+    def draw(self, screen, cam_x=0.0, cam_y=0.0, scale=1.0, debug=False):
+        """绘制载具（图片或回退图形）。cam_x/cam_y 为相机世界坐标，scale 为缩放
+        v2.6.3：新增 debug 参数，开启时绘制碰撞箱可视化"""
         if self.dead:
             return
         sx = (self.x - cam_x) * scale
@@ -430,12 +431,32 @@ class Vehicle:
             rect = rot.get_rect(center=(int(sx + ox), int(sy + oy)))
             screen.blit(rot, rect)
         else:
-            # 回退图形
+            # v2.6.3：回退图形改为贴合碰撞箱的长方形（而非正方形）
             color = {"truck": (200, 120, 40), "tank": (60, 110, 60), "heli": (90, 150, 190)}.get(self.type_id, (150, 150, 150))
-            rect = pygame.Rect(0, 0, int(self.size * 2 * scale), int(self.size * 2 * scale))
-            rect.center = (int(sx + ox), int(sy + oy))
-            pygame.draw.rect(screen, color, rect, border_radius=8)
-            pygame.draw.rect(screen, (255, 255, 255), rect, 2, border_radius=8)
+            # 计算贴合碰撞箱的矩形尺寸
+            _half = self.size * 0.52
+            _w = int((_half * 2 + self.size * 0.34) * scale)  # 长度 = 车身 + 车头
+            _h = int(self.size * 0.6 * scale)  # 宽度 = 车身宽度
+            rect = pygame.Rect(0, 0, _w, _h)
+            # 旋转矩形
+            rot_surf = pygame.Surface((_w, _h), pygame.SRCALPHA)
+            pygame.draw.rect(rot_surf, color, (0, 0, _w, _h), border_radius=6)
+            pygame.draw.rect(rot_surf, (255, 255, 255), (0, 0, _w, _h), 2, border_radius=6)
+            rot_surf = pygame.transform.rotate(rot_surf, -self.facing_angle)
+            rot_rect = rot_surf.get_rect(center=(int(sx + ox), int(sy + oy)))
+            screen.blit(rot_surf, rot_rect)
+        
+        # v2.6.3：调试模式下绘制碰撞箱可视化
+        if debug:
+            try:
+                for _cx, _cy, _cr in self._hull_circles():
+                    _sx = int((_cx - cam_x) * scale)
+                    _sy = int((_cy - cam_y) * scale)
+                    _sr = int(_cr * scale)
+                    pygame.draw.circle(screen, (255, 0, 0, 100), (_sx, _sy), _sr, 2)
+            except Exception:
+                pass
+        
         # 专属血条（载具上方）
         bar_w = int(90 * scale)
         bar_h = int(8 * scale)
