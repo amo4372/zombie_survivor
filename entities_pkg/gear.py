@@ -209,6 +209,36 @@ class RiotGear:
         elif self.grapple_state == "hit":
             # 僵直阶段 - 钩爪绷紧
             self.grapple_hit_stun_timer -= dt
+            # v2.6.3 修复：QTE 判定从 hit 状态开始（而非 pulling 状态）
+            # 被勾玩家应在命中瞬间就能尝试打断，而非等到拉回阶段
+            if self.grapple_target and hasattr(self.grapple_target, 'qte_window'):
+                try:
+                    self.grapple_target.qte_rope_from = (player_x, player_y)
+                    self.grapple_target.qte_rope_to = (self.grapple_target.x, self.grapple_target.y)
+                    if self.grapple_target.qte_window > 0:
+                        self.grapple_target.qte_window -= dt
+                        self.grapple_target.qte_break_hint = 1.0
+                        _tap = self.grapple_target.qte_break_tap
+                        if _tap is not None:
+                            self.grapple_target.qte_break_tap = None
+                            if self._qte_tap_in_sector(self.grapple_target, _tap):
+                                # 打断成功：解除勾取
+                                self.grapple_target.grappled = False
+                                self.grapple_target.qte_window = 0.0
+                                self.grapple_target.qte_break_hint = 0.0
+                                self.grapple_target.qte_success_timer = 1.2
+                                self.grapple_target.qte_immune_timer = 0.6
+                                self.grapple_target.qte_hit_flash = 0.18
+                                self._reset_grapple()
+                                return
+                        if self.grapple_target.qte_window <= 0:
+                            # 超时未打断
+                            self.grapple_target.qte_break_hint = 0.0
+                            self.grapple_target.qte_fail_timer = 1.0
+                    else:
+                        self.grapple_target.qte_break_tap = None
+                except Exception:
+                    pass
             if self.grapple_hit_stun_timer <= 0:
                 self.grapple_state = "pulling"
                 self._pulling_timer = 0.0
@@ -653,12 +683,13 @@ class RiotGear:
         self.grapple_head_pos = [player_x, player_y]
         self.grapple_state = "shooting"
         self.grapple_target = target
-        # v2.5.0/v2.5.5 PvP 勾取玩家：初始化打断绳索 QTE（0.8s 内单击绳索附近扇形即打断；成功打断后短暂免疫）
+        # v2.5.0/v2.5.5 PvP 勾取玩家：初始化打断绳索 QTE（1.5s 内单击绳索对称轴扇形即打断）
+        # v2.6.3 修复：增加反应时间从 0.8s 到 1.5s，给玩家更多反应时间
         if target is not None and hasattr(target, 'qte_window'):
             if getattr(target, 'qte_immune_timer', 0) > 0:
                 return False
             target.grappled = True
-            target.qte_window = 0.8
+            target.qte_window = 1.5  # v2.6.3: 从 0.8s 增加到 1.5s
             target.qte_break_tap = None
             target.qte_break_hint = 1.0
             target.qte_hit_flash = 0.0

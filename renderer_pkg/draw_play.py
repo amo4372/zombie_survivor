@@ -545,10 +545,12 @@ class PlayMixin:
             # 主 QTE 指示器
             if _is_grappled:
                 _qw = max(0.0, getattr(player, 'qte_window', 0.0))
-                _ratio = min(1.0, _qw / 0.8)
+                # v2.6.3 修复：环形倒计时基于实际的 QTE 窗口时间（1.5s）而非固定的 0.8s
+                _qte_max_time = 1.5  # 与 gear.py 中的 qte_window 初始值一致
+                _ratio = min(1.0, _qw / _qte_max_time)
                 _cy = int(190 * scale)
                 _R = int(46 * scale)
-                # 环形倒计时（剩余 0.8s，红色越少越急）
+                # 环形倒计时（剩余 1.5s，红色越少越急）
                 _ring_c = (255, 200, 60) if _ratio > 0.35 else (255, 70, 70)
                 _seg = max(0, min(360, int((1.0 - _ratio) * 360)))
                 for _a in range(_seg):
@@ -588,7 +590,8 @@ class PlayMixin:
                 # 提示文字
                 _qt = self.game.font.render("被钩爪命中！点击绳索打断", True, (255, 220, 60))
                 self.screen.blit(_qt, _qt.get_rect(center=(_cx, _cy + _R + int(30 * scale))))
-                _qc = self.game.font_small.render(f"{(0.8 if getattr(player, 'qte_break_hint', 0) > 0 else _qw):.1f}s", True, (230, 230, 230))
+                # v2.6.3 修复：显示实际的 QTE 剩余时间（而非固定的 0.8s）
+                _qc = self.game.font_small.render(f"{_qw:.1f}s", True, (230, 230, 230))
                 self.screen.blit(_qc, _qc.get_rect(center=(_cx, _cy)))
         except Exception:
             pass
