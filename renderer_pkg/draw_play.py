@@ -41,21 +41,42 @@ class PlayMixin:
             if c2 and c2["skill_caster"].is_aiming:
                 c2["skill_caster"]._draw_aim_preview(self.screen, self.game.p2_selected_skill or SkillType.GRENADE, self.game.scale)
 
-    def _draw_hud_split(self, player, label, rect):
-        """双人分屏 HUD：完整迷你HUD（血条/经验/武器弹药/技能/时间/得分/键位提示/倒地救援/触控控件）"""
+    def _draw_hud_split(self, player, label, rect, content_h=None):
+        """双人分屏 HUD：完整迷你HUD（血条/经验/武器弹药/技能/时间/得分/键位提示/倒地救援/触控控件）
+
+        v2.5.6：content_h = 该视口内世界内容的高度（窗口非 16:9 时与视口高度不同），
+        底部的尸潮进度条按内容高度对齐，避免落到黑边里。
+        """
         g = self.game
         scale = g.scale
         half_w = rect.width
+        _ch = int(rect.height)
         bx = rect.x + int(half_w * 0.2)
         bar_w = int(half_w * 0.6)
         # ===== 顶部：时间/尸潮倒计时（P1）与波次（P2） =====
         hm = getattr(g, 'horde_manager', None)
-        if label == "P1":
+        # v2.5.6：故事模式双方都显示「地图倒计时(20 分钟)」，
+        # 非故事模式保持 P1 时间 / P2 波次 的旧布局
+        _is_story = (getattr(g.config, 'game_mode', None) == GameMode.STORY)
+        if _is_story:
+            try:
+                _mc = g.map_config
+                _tl = _mc.get("time_limit", 1200)
+                _rm = max(0, int(_tl - getattr(g, 'map_time_elapsed', 0)))
+                _tc = RED if _rm < 60 else WHITE
+                t_txt = g.font.render(f"{_rm // 60:02d}:{_rm % 60:02d}", True, _tc)
+                self.screen.blit(t_txt, t_txt.get_rect(midtop=(rect.x + half_w // 2, rect.y + int(4 * scale))))
+                # 地图章节名（左侧，阵营角标下方）
+                _mn = g.font_small.render(
+                    f"{_mc.get('chapter', '')} {_mc.get('name', '')}", True, GOLD)
+                self.screen.blit(_mn, (rect.x + int(6 * scale), rect.y + int(38 * scale)))
+            except Exception:
+                pass
+        elif label == "P1":
             # v2.4.0 争分夺秒分阵营计时：PvP 时显示本阵营独立计时器（阵营内共享）
             _tr = getattr(g, 'team_race', None)
             _my_team = getattr(player, 'team_id', 0)
-            if (_tr and getattr(g.config, 'pvp_enabled', False)
-                    and g.config.game_mode == GameMode.TIMED and _my_team in _tr):
+            if (_tr and g.config.game_mode == GameMode.TIMED and _my_team in _tr):
                 try:
                     _tt = _tr[_my_team]
                     if _tt["out"]:
@@ -96,6 +117,30 @@ class PlayMixin:
                 wv = getattr(g, 'wave_count', 0)
                 w_txt = g.font.render(f"波次 {wv}", True, (150, 220, 255))
             self.screen.blit(w_txt, w_txt.get_rect(midtop=(rect.x + half_w // 2, rect.y + int(4 * scale))))
+        # ===== v2.5.6 尸潮进度条（P1/P2 双方都显示） =====
+        try:
+            if hm is not None:
+                if getattr(hm, 'is_horde_active', lambda: False)():
+                    _hw = g.font_small.render("尸潮来袭", True, RED)
+                    self.screen.blit(_hw, _hw.get_rect(midbottom=(
+                        rect.x + half_w // 2, rect.y + _ch - int(6 * scale))))
+                else:
+                    _hp = hm.get_horde_progress()
+                    if _hp > 0:
+                        _bw = int(150 * scale)
+                        _bh = max(3, int(7 * scale))
+                        _bx = rect.x + half_w // 2 - _bw // 2
+                        _by = rect.y + _ch - int(14 * scale)
+                        pygame.draw.rect(self.screen, DARK_GRAY, (_bx, _by, _bw, _bh), border_radius=2)
+                        pygame.draw.rect(self.screen, (*RED[:3], 180), (_bx, _by, int(_bw * _hp), _bh), border_radius=2)
+                        pygame.draw.rect(self.screen, GRAY, (_bx, _by, _bw, _bh), max(1, int(scale)), border_radius=2)
+                        _tt2 = int(getattr(hm, "timer", 0))
+                        if _tt2 > 0:
+                            _ct = g.font_small.render(f"尸潮 {_tt2}s", True, (*RED[:3], 170))
+                            self.screen.blit(_ct, _ct.get_rect(midbottom=(
+                                rect.x + half_w // 2, _by - int(2 * scale))))
+        except Exception:
+            pass
         # ===== 阵营角标（多人） =====
         try:
             if g.is_multiplayer_active():
@@ -498,17 +543,23 @@ class PlayMixin:
         except Exception:
             pass
         # v2.5.5 AWM 蓄力弹道预览：蓄力期间画瞄准线（从玩家指向蓄力角，长度=武器射程 clamp）
+        # v2.5.6：角度随摇杆/鼠标实时更新（不再卡死在按下瞬间的角度），轨道炮同样适用
         try:
             _awm_saved = getattr(player, "_awm_saved", None)
             if _awm_saved is not None:
                 _awm_w = player.get_current_weapon() if hasattr(player, 'get_current_weapon') else None
                 _awm_rng = int(getattr(_awm_w, 'range', 800) if _awm_w else 800)
+                _awm_col = getattr(_awm_w, 'color', (140, 255, 140)) if _awm_w else (140, 255, 140)
                 _awm_ex = player.x + math.cos(_awm_saved) * _awm_rng
                 _awm_ey = player.y + math.sin(_awm_saved) * _awm_rng
                 _p1 = (int((player.x - cam_x) * scale), int((player.y - cam_y) * scale))
                 _p2 = (int((_awm_ex - cam_x) * scale), int((_awm_ey - cam_y) * scale))
-                pygame.draw.line(self.screen, (140, 255, 140), _p1, _p2, max(1, int(2 * scale)))
-                pygame.draw.circle(self.screen, (140, 255, 140), _p2, max(3, int(5 * scale)))
+                _lw = max(1, int(2 * scale))
+                # 外发光 + 实线 + 端点（激光类武器用亮紫色，其余绿色）
+                pygame.draw.line(self.screen, (*_awm_col[:3], 90), _p1, _p2, _lw * 3)
+                pygame.draw.line(self.screen, _awm_col[:3], _p1, _p2, _lw)
+                pygame.draw.circle(self.screen, _awm_col[:3], _p2, max(3, int(5 * scale)))
+                pygame.draw.circle(self.screen, WHITE, _p2, max(2, int(3 * scale)))
         except Exception:
             pass
         # 绘制玩家（v2.5.4 多人：N 人全部绘制，彼此可见 + 头顶血条/阵营/倒地倒计时）
@@ -979,7 +1030,14 @@ class PlayMixin:
 
     def _draw_hud(self):
         scale = self.game.scale
+        # v2.5.6：世界按窗口铺满（可视区域 = 窗口/scale），
+        # 因此 HUD 依旧按窗口尺寸定位；窗口比例变化时由 _sync_camera_viewports
+        # 调整摄像机视口，保证玩家始终在可视区域中心。
         sw = self.game.scaled_width
+        sh = self.game.scaled_height
+        ox = 0
+        oy = 0
+        _cx = sw // 2
         player = self.game.player
 
         # === Buff状态栏（右上角）===
@@ -999,16 +1057,16 @@ class PlayMixin:
             # 地图名称（上移避免与时间重叠）
             map_name_text = self.game.font_small.render(
                 f"{map_config['chapter']} - {map_config['name']}", True, GOLD)
-            map_name_rect = map_name_text.get_rect(center=(sw // 2, int(14 * scale)))
+            map_name_rect = map_name_text.get_rect(center=(_cx, int(14 * scale)))
             self.screen.blit(map_name_text, map_name_rect)
 
             time_surf = self.game.font_large.render(time_text, True, time_color)
-            time_rect = time_surf.get_rect(center=(sw // 2, int(40 * scale)))
+            time_rect = time_surf.get_rect(center=(_cx, int(40 * scale)))
 
             # 特殊事件激活提示
             if self.game.special_event_active:
                 event_text = self.game.font_small.render("[!] 特殊事件进行中", True, RED)
-                event_rect = event_text.get_rect(center=(sw // 2, int(65 * scale)))
+                event_rect = event_text.get_rect(center=(_cx, int(65 * scale)))
                 if int(pygame.time.get_ticks() / 300) % 2 == 0:
                     self.screen.blit(event_text, event_rect)
         else:
@@ -1023,9 +1081,9 @@ class PlayMixin:
                 else:
                     time_color = DARK_RED
                 time_surf = self.game.font_large.render(f"TIME: {time_text}", True, time_color)
-                time_rect = time_surf.get_rect(center=(sw // 2, int(30 * scale)))
+                time_rect = time_surf.get_rect(center=(_cx, int(30 * scale)))
                 glitch_text_surf = self.game.font_small.render("SYSTEM ERROR: TIME_OVERFLOW", True, RED)
-                glitch_rect = glitch_text_surf.get_rect(center=(sw // 2, int(52 * scale)))
+                glitch_rect = glitch_text_surf.get_rect(center=(_cx, int(52 * scale)))
             else:
                 if is_countdown:
                     parts = time_text.split(":")
@@ -1034,7 +1092,7 @@ class PlayMixin:
                 else:
                     time_color = GOLD
                 time_surf = self.game.font_large.render(time_text, True, time_color)
-                time_rect = time_surf.get_rect(center=(sw // 2, int(30 * scale)))
+                time_rect = time_surf.get_rect(center=(_cx, int(30 * scale)))
 
         # 时间背景
         time_bg = pygame.Rect(time_rect.x - 10, time_rect.y - 5, time_rect.width + 20, time_rect.height + 10)
@@ -1051,7 +1109,7 @@ class PlayMixin:
                     _gp = int(255 * _alpha)
                     _gtxt = self.game.font_small.render(f"+{int(_gain)} 秒", True, (255, int(200 * _alpha), 40))
                     _gtxt.set_alpha(_gp)
-                    self.screen.blit(_gtxt, _gtxt.get_rect(midtop=(sw // 2, time_rect.bottom + int(6 * scale))))
+                    self.screen.blit(_gtxt, _gtxt.get_rect(midtop=(_cx, time_rect.bottom + int(6 * scale))))
         except Exception:
             pass
 
@@ -1065,10 +1123,10 @@ class PlayMixin:
                 pass
 
         # === 尸潮警告【全部向下偏移，避开glitch文字】 ===
-        horde_base_y = int(85 * scale)
+        horde_base_y = oy + int(85 * scale)
         if self.game.horde_manager.is_horde_active():
             horde_text = self.game.font.render("!!! 尸潮来袭 !!!", True, RED)
-            horde_rect = horde_text.get_rect(center=(sw // 2, horde_base_y))
+            horde_rect = horde_text.get_rect(center=(_cx, horde_base_y))
             # 闪烁效果 + 背景
             if int(pygame.time.get_ticks() / 200) % 2 == 0:
                 bg_pad = 10
@@ -1083,7 +1141,7 @@ class PlayMixin:
             if horde_progress > 0:
                 bar_w = int(200 * scale)
                 bar_h = max(3, int(8 * scale))
-                bar_x = sw // 2 - bar_w // 2
+                bar_x = _cx - bar_w // 2
                 bar_y = horde_base_y
                 pygame.draw.rect(self.screen, DARK_GRAY, (bar_x, bar_y, bar_w, bar_h), border_radius=2)
                 pygame.draw.rect(self.screen, (*RED[:3], 180), (bar_x, bar_y, int(bar_w * horde_progress), bar_h), border_radius=2)
@@ -1163,20 +1221,20 @@ class PlayMixin:
         weapon = player.get_current_weapon()
         info_y = int(12 * scale)
         weapon_text = self.game.font_small.render(f"{weapon.name} Lv.{weapon.level}", True, WHITE)
-        self.screen.blit(weapon_text, (int(12*scale), info_y))
+        self.screen.blit(weapon_text, (ox + int(12*scale), oy + info_y))
         info_y += int(20 * scale)
         if hasattr(weapon, 'get_ammo_text'):
             ammo_text = self.game.font_small.render(weapon.get_ammo_text(), True, (180, 180, 180))
-            self.screen.blit(ammo_text, (int(12*scale), info_y))
+            self.screen.blit(ammo_text, (ox + int(12*scale), oy + info_y))
             info_y += int(18 * scale)
         if len(player.weapons) > 1:
             switch_text = self.game.font_small.render(f"R切换({len(player.weapons)})", True, (120, 120, 120))
-            self.screen.blit(switch_text, (int(12*scale), info_y))
+            self.screen.blit(switch_text, (ox + int(12*scale), oy + info_y))
             info_y += int(18 * scale)
         skill = player.skill_tree.get_skill(self.game.selected_skill)
         if skill:
             skill_text = self.game.font_small.render(f"技能:{skill.name}(G)", True, GOLD)
-            self.screen.blit(skill_text, (int(12*scale), info_y))
+            self.screen.blit(skill_text, (ox + int(12*scale), oy + info_y))
             info_y += int(18 * scale)
         t_type = self.game.selected_throwable
         t_name = self.game.throwable_names.get(t_type, "?")
@@ -1187,7 +1245,7 @@ class PlayMixin:
             throw_text = self.game.font_small.render(f"投掷:{t_name}x{t_count}(Q/E)", True, t_color)
         else:
             throw_text = self.game.font_small.render("投掷:无", True, (100, 100, 100))
-        self.screen.blit(throw_text, (int(12*scale), info_y))
+        self.screen.blit(throw_text, (ox + int(12*scale), oy + info_y))
 
         # ========== 键控模式：下一个技能/武器提示 ==========
         if self.game.config.control_mode == ControlMode.KEYBOARD:
@@ -1273,11 +1331,10 @@ class PlayMixin:
             return
 
         scale = self.game.scale
-        sw = self.game.scaled_width
         icon_size = int(36 * scale)
         gap = int(4 * scale)
         padding = int(8 * scale)
-        start_x = sw - padding
+        start_x = self.game.scaled_width - padding
         start_y = padding
 
         # 获取鼠标/触摸位置

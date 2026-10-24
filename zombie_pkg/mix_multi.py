@@ -290,8 +290,10 @@ class MultiplayerMixin:
                     self.p2_controls[name].handle_touch(self.touch_events, self.scale)
             mx, my, shoot, skill, throw, sprint = self._get_p2_local_input()
             # P2 键控技能 U 长按：预瞄瞄准（照 G 键模板）
-            if self.config.control_mode != ControlMode.TOUCH and self.key_u_held and self.p2_controls:
-                hold_t = time.time() - self.key_u_press_start
+            # v2.5.6：key_u_* 用 getattr 兜底（P2 控件未初始化时不应崩溃）
+            if (self.config.control_mode != ControlMode.TOUCH
+                    and getattr(self, 'key_u_held', False) and self.p2_controls):
+                hold_t = time.time() - getattr(self, 'key_u_press_start', 0)
                 c2 = self.p2_controls
                 c2["skill_caster"].set_player_pos(p2.x, p2.y, self.camera2.x, self.camera2.y)
                 c2["skill_caster"].set_max_distance(self._get_skill_max_distance(self.p2_selected_skill or SkillType.GRENADE))
@@ -301,12 +303,12 @@ class MultiplayerMixin:
                     c2["throwable_caster"].set_max_distance(getattr(self, 'throwable_max_dist', 450))
                 except Exception:
                     pass
-                if not self.u_aim_started and hold_t >= self.key_u_long_threshold:
+                if not getattr(self, 'u_aim_started', False) and hold_t >= getattr(self, 'key_u_long_threshold', 0.4):
                     self.u_aim_started = True
                     c2["skill_caster"].is_aiming = True
                 # v2.2.6：P2 钩爪瞄准锁定圈更新（键控 U 长按）
                 self._update_p2_grapple_lock(p2, bool(self.u_aim_started))
-                if self.u_aim_started:
+                if getattr(self, 'u_aim_started', False):
                     aim_ang = math.radians(self._p2_auto_aim_angle(p2))
                     c2["skill_caster"].set_aim_angle(aim_ang)
                     c2["skill_caster"].set_distance_ratio(1.0)
@@ -408,11 +410,31 @@ class MultiplayerMixin:
             p2.update(dt, 0, 0, angle, self.world, sprinting=sprint)
         p2.facing_angle = angle
         # ===== 射击 =====
-        if shoot and p2.can_act():
+        # v2.5.6：P2 蓄力预瞄武器（AWM/轨道炮）——按住蓄力（显示预瞄线，角度随摇杆实时更新），
+        # 松开才开火一次（与 P1 完全一致；修掉"按下即开火"与"预瞄线卡死"）
+        _p2_saved = getattr(p2, "_awm_saved", None)
+        _p2_fire_angle = None
+        _p2_charge_blocked = False
+        try:
+            _p2_w_charge = p2.get_current_weapon() if (_veh2 is None or not _veh2.alive) else None
+        except Exception:
+            _p2_w_charge = None
+        if _p2_w_charge is not None and getattr(_p2_w_charge, "hold_charge", False):
+            if shoot:
+                p2._awm_saved = math.radians(angle)   # 蓄力中：记录（实时更新）预瞄角
+                _p2_charge_blocked = True
+            elif _p2_saved is not None:
+                _p2_fire_angle = _p2_saved             # 松开：按蓄力角开火一次
+                p2._awm_saved = None
+        elif _p2_saved is not None:
+            p2._awm_saved = None                       # 已切换到非蓄力武器 → 清理残留预瞄
+        _p2_shoot_now = bool(shoot) and not _p2_charge_blocked
+        if (_p2_shoot_now or _p2_fire_angle is not None) and p2.can_act():
+            _p2_angle = _p2_fire_angle if _p2_fire_angle is not None else math.radians(angle)
             if _veh2 is not None and _veh2.alive and _veh2.can_shoot:
                 # v2.2.0 P2 载具开火
                 _projs = _veh2.fire(
-                    p2.x, p2.y, math.radians(angle),
+                    p2.x, p2.y, _p2_angle,
                     p2.damage_mult * p2.buff_manager.get_damage_mult() * p2.damage_multiplier)
                 self.projectiles.extend(_projs)
                 if _projs:
@@ -421,7 +443,7 @@ class MultiplayerMixin:
                 weapon = p2.get_current_weapon()
                 if weapon.can_fire():
                     projs = weapon.fire(
-                        p2.x, p2.y, math.radians(angle),
+                        p2.x, p2.y, _p2_angle,
                         p2.damage_mult * p2.buff_manager.get_damage_mult() * p2.damage_multiplier,
                         p2.speed_mult, player=p2)
                     self.projectiles.extend(projs)

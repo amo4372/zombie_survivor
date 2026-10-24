@@ -108,7 +108,9 @@ check("mix_playing 统计钩子", "add_mp_stat(\"mp_wins\")" in src_mp and "add_
 print("== #132 成就详细文本 ==")
 check("成就页 detail 渲染", 'ach_data.get("detail") or ""' in src_du and "detail_start" in src_du)
 check("成就分组含新组", '"争分夺秒", "地狱", "多人"' in src_du)
-check("旧存档兼容补 detail", '"group","hidden","coef_threshold","detail"' in src_r)
+check("旧存档兼容补 detail",
+      all(_k in src_r for _k in ('"group"', '"hidden"', '"coef_threshold"', '"detail"'))
+      and "fill_k" in src_r)
 
 print(f"\n结果: {ok} 通过, {fail} 失败")
 sys.exit(1 if fail else 0)

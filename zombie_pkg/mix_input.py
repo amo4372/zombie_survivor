@@ -294,10 +294,8 @@ class InputMixin:
                     self.running = False
                 elif event.type == pygame.VIDEORESIZE:
                     if not self.is_android:
-                        self.screen = pygame.display.set_mode(
-                            (event.w, event.h), pygame.RESIZABLE | pygame.DOUBLEBUF
-                        )
-                        self._update_scale()
+                        # v2.5.6：统一走 _apply_resize（最小尺寸钳制 + 0 尺寸保护）
+                        self._apply_resize(event.w, event.h)
                 elif event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_1 and len(_up_pl.skill_cards) > 0:
                         self._select_skill_card(0)
@@ -329,10 +327,8 @@ class InputMixin:
                     self.running = False
                 elif event.type == pygame.VIDEORESIZE:
                     if not self.is_android:
-                        self.screen = pygame.display.set_mode(
-                            (event.w, event.h), pygame.RESIZABLE | pygame.DOUBLEBUF
-                        )
-                        self._update_scale()
+                        # v2.5.6：统一走 _apply_resize（最小尺寸钳制 + 0 尺寸保护）
+                        self._apply_resize(event.w, event.h)
                         logger.info(f"窗口调整: {event.w}x{event.h}")
                 elif event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_SPACE or event.key == pygame.K_RETURN:
@@ -358,6 +354,17 @@ class InputMixin:
                         self._apply_choice_effect(effect)
                         self.dialogue.select_choice(3)
                         logger.info("对话：选择选项4")
+                    elif event.key == pygame.K_5 and len(self.dialogue.choices) > 4:
+                        # v2.5.6：故事结局选项增加到 6 个，扩展到 5/6
+                        effect = self.dialogue.choices[4].get("effect")
+                        self._apply_choice_effect(effect)
+                        self.dialogue.select_choice(4)
+                        logger.info("对话：选择选项5")
+                    elif event.key == pygame.K_6 and len(self.dialogue.choices) > 5:
+                        effect = self.dialogue.choices[5].get("effect")
+                        self._apply_choice_effect(effect)
+                        self.dialogue.select_choice(5)
+                        logger.info("对话：选择选项6")
                 elif event.type == pygame.MOUSEBUTTONDOWN:
                     if event.button == 1:
                         mouse_pos = event.pos
@@ -401,10 +408,8 @@ class InputMixin:
                     self.running = False
                 elif event.type == pygame.VIDEORESIZE:
                     if not self.is_android:
-                        self.screen = pygame.display.set_mode(
-                            (event.w, event.h), pygame.RESIZABLE | pygame.DOUBLEBUF
-                        )
-                        self._update_scale()
+                        # v2.5.6：统一走 _apply_resize（最小尺寸钳制 + 0 尺寸保护）
+                        self._apply_resize(event.w, event.h)
                         logger.info(f"窗口调整: {event.w}x{event.h}")
                 elif event.type == pygame.MOUSEWHEEL:
                     if self.state == GameState.SKILL_TREE and hasattr(self, 'skill_tree_renderer'):
@@ -534,10 +539,8 @@ class InputMixin:
                     self.running = False
                 elif event.type == pygame.VIDEORESIZE:
                     if not self.is_android:
-                        self.screen = pygame.display.set_mode(
-                            (event.w, event.h), pygame.RESIZABLE | pygame.DOUBLEBUF
-                        )
-                        self._update_scale()
+                        # v2.5.6：统一走 _apply_resize（最小尺寸钳制 + 0 尺寸保护）
+                        self._apply_resize(event.w, event.h)
                 elif event.type == pygame.MOUSEWHEEL:
                     self.ach_scroll_offset -= event.y * 32
                     self.ach_scroll_offset = max(0, self.ach_scroll_offset)
@@ -579,11 +582,8 @@ class InputMixin:
 
             elif event.type == pygame.VIDEORESIZE:
                 if not self.is_android:
-                    self.screen = pygame.display.set_mode(
-                        (event.w, event.h), pygame.RESIZABLE | pygame.DOUBLEBUF
-                    )
-                    self._update_scale()
-                    logger.info(f"窗口调整: {event.w}x{event.h}")
+                    # v2.5.6：统一走 _apply_resize（最小尺寸钳制 + 0 尺寸保护）
+                    self._apply_resize(event.w, event.h)
 
             elif event.type == pygame.KEYDOWN:
                 self._handle_keydown(event.key)
@@ -908,6 +908,15 @@ class InputMixin:
                     if self.p2_controls:
                         self.p2_controls["skill_caster"].is_aiming = False
             elif key == pygame.K_f:
+                    pass
+            elif key == pygame.K_v:
+                # v2.5.6 V：PvP 主动探测（脉冲式扫描敌对玩家位置，非持续暴露）
+                try:
+                    if not self._trigger_pvp_scan(auto=False):
+                        self.floating_texts.append(FloatingText(
+                            self.player.x, self.player.y - 60, "扫描冷却中",
+                            color=(160, 160, 160), lifetime=1.0))
+                except Exception:
                     pass
             elif key == pygame.K_ESCAPE:
                 self.state = GameState.PAUSED

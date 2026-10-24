@@ -105,8 +105,11 @@ def draw_teammate_indicators(renderer, game, viewports, vp):
 
 
 def draw_enemy_player_indicators(renderer, game, viewports, vp):
-    """v2.2.9 PvP 敌方玩家位置揭示：开局 8s + 每 45s 闪 3s 时，
-    在各玩家视口显示异阵营玩家位置（红点+边缘箭头）"""
+    """v2.2.9 PvP 敌方玩家位置揭示：
+    - 周期揭示：开局 3s + 每 45s 闪 3s（只给方位，不给距离）
+    - v2.5.6 主动探测：脉冲式扫描（每 30s 自动 3s / V 键手动），扫描窗口内才显示
+      近距离敌人的方位与距离。**不再常驻暴露**（v2.5.5 的 400 半径常驻标记已移除）
+    """
     try:
         if not getattr(game.config, "pvp_enabled", False):
             return
@@ -114,9 +117,9 @@ def draw_enemy_player_indicators(renderer, game, viewports, vp):
         sh = vp.rect.height
         me = vp.player
         _periodic = bool(getattr(game, "pvp_reveal_active", False))
-        # v2.5.5 主动探测：近距离（<400 世界单位）敌方玩家常驻暴露（小菱形标记），
-        # 不受周期揭示窗口限制——满足"持续暴露一定范围内所有敌人玩家位置"
-        _scan_r = 400.0
+        # v2.5.6：探测脉冲窗口（非常驻）
+        _scan_on = getattr(game, "pvp_scan_active", 0) > 0
+        _scan_r = float(getattr(game, "PVP_SCAN_RADIUS", 500.0))
         for other in viewports:
             if other is vp or other.player is None:
                 continue
@@ -126,8 +129,8 @@ def draw_enemy_player_indicators(renderer, game, viewports, vp):
             sx, sy = _screen_pos_of(op.x, op.y, vp.camera, game.scale)
             _in_view = (0 <= sx <= sw and 0 <= sy <= sh)
             _wdist = math.hypot(op.x - me.x, op.y - me.y)
-            if _wdist <= _scan_r:
-                # 近距离常驻暴露：红菱形 + 距离
+            if _scan_on and _wdist <= _scan_r:
+                # 探测脉冲内：近距离敌人显示方位 + 距离
                 _mx, _my = int(sx), int(sy)
                 if _in_view:
                     _mr = max(6, int(7 * game.scale))
@@ -141,10 +144,10 @@ def draw_enemy_player_indicators(renderer, game, viewports, vp):
             if not _periodic:
                 continue
             if _in_view:
-                # v2.5.2 视口内敌人本身可见，不再画常驻红圈（位置揭示只针对屏幕外）
+                # 视口内敌人本身可见，不再画常驻红圈（位置揭示只针对屏幕外）
                 pass
             else:
-                # 屏幕外：边缘红色箭头
+                # 屏幕外：边缘红色箭头（只给方位，不给距离）
                 cx, cy = sw // 2, sh // 2
                 ang = math.atan2(op.y - me.y, op.x - me.x)
                 ex = max(16, min(sw - 16, cx + math.cos(ang) * (sw * 0.42)))

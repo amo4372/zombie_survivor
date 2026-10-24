@@ -13,8 +13,13 @@ import os, sys, shutil, tempfile, zipfile
 os.environ["SDL_VIDEODRIVER"] = "dummy"
 os.environ["SDL_AUDIODRIVER"] = "dummy"
 
-SRC = "/home/user/zombie_survivor"
+SRC = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PKG_ZIP = os.path.join(SRC, "releases", "zombie_survivor_v2.1.4_update.zip")
+
+# v2.5.6：该用例依赖发布包 artifacts（releases/*.zip），仓库里没有时跳过而不是报错
+if not os.path.exists(PKG_ZIP):
+    print("[SKIP] 未找到发布包 %s（该用例需要发布产物，跳过）" % PKG_ZIP)
+    sys.exit(0)
 
 ok = 0
 def check(name, cond, detail=""):

@@ -15,7 +15,7 @@ import sys
 import math
 import time
 
-sys.path.insert(0, "/home/user/zombie_survivor")
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
 

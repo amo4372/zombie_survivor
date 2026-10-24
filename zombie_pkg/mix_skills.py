@@ -1369,6 +1369,9 @@ class SkillsMixin:
         _upw = getattr(self, '_upgrade_pause_player', None)
         player = self.player2 if (_upw == "P2" or getattr(self, 'pending_upgrade_for', None) == "P2") and self.player2 else self.player
         tag = _upw or getattr(self, 'pending_upgrade_for', "P1") or "P1"
+        # v2.5.6：防重复应用（超时自动选卡与玩家点击可能同帧发生 → 同一技能被升两级）
+        if not (getattr(player, 'pending_level_up', False) or getattr(player, 'skill_cards', None)):
+            return
         if player.skill_tree.upgrade_skill(skill.skill_type):
             self.floating_texts.append(FloatingText(
                 player.x, player.y - 40, 
@@ -1410,11 +1413,16 @@ class SkillsMixin:
         if getattr(self, '_upgrade_pause_player', None):
             self._upgrade_pause_player = None
             player.upgrade_paused = False
+            # v2.5.6：清除限时免伤保护
+            player.upgrade_grace_timer = 0.0
         if _left > 0:
             # 还有下一级：多人 per-player 立即重新进入暂停选卡（恢复会在下一级确认后再执行）
             _tag = "P1" if player is self.player else ("P2" if player is getattr(self, 'player2', None) else "P3")
             self._upgrade_pause_player = _tag
             player.upgrade_paused = True
+            # v2.5.6：新一轮选卡重新计时（保护限时 + 超时自动选）
+            player.upgrade_grace_timer = self.UPGRADE_GRACE_TIME
+            self._upgrade_pause_timer = self.UPGRADE_AUTO_PICK_TIME
         # v2.5.2 每次技能卡选择完毕：对玩家周围一定范围僵尸眩晕+击退（选卡保底防围死）
         try:
             _sr = 260.0

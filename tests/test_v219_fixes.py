@@ -6,7 +6,7 @@
 import os, sys
 os.environ["SDL_VIDEODRIVER"] = "dummy"
 os.environ["SDL_AUDIODRIVER"] = "dummy"
-sys.path.insert(0, "/home/user/zombie_survivor")
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import datetime
 from records import GameRecords, GameSession
 

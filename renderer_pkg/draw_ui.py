@@ -3169,7 +3169,13 @@ class UiMixin:
             _vc = (230, 90, 90) if _vteam == 1 else (90, 200, 250)
             title = self.game.font_title.render(f"{'AB'[_vteam % 2]} 阵营胜利！", True, _vc)
         else:
-            title = self.game.font_title.render("游戏结束", True, RED)
+            # v2.5.6：结算标题可由玩法指定（争分夺秒：挑战完成 / 挑战失败！时间耗尽）
+            _rt = getattr(self.game, 'result_title', None)
+            if _rt:
+                _rcol = GOLD if ("完成" in _rt or "胜利" in _rt) else RED
+                title = self.game.font_title.render(_rt, True, _rcol)
+            else:
+                title = self.game.font_title.render("游戏结束", True, RED)
         title_rect = title.get_rect(center=(sw // 2, int(200 * scale)))
         self.screen.blit(title, title_rect)
 
@@ -3248,13 +3254,23 @@ class UiMixin:
         subtitle_rect = subtitle.get_rect(center=(sw // 2, int(240 * scale)))
         self.screen.blit(subtitle, subtitle_rect)
 
-        # 统计信息
+        # 统计信息（v2.5.6：空值保护 + 剧情收集总数修正为真实总数）
         if self.game.session:
+            try:
+                _frag_total = 100
+                try:
+                    from config import STORY_FRAGMENTS as _SF
+                    _frag_total = sum(len(v) for v in _SF.values())
+                except Exception:
+                    pass
+                _frag = len(getattr(self.game, "story_collected_fragments", []) or [])
+            except Exception:
+                _frag, _frag_total = 0, 100
             stats = [
                 f"存活时间: {int(self.game.session.total_time // 60)}分{int(self.game.session.total_time % 60)}秒",
                 f"击杀数: {self.game.session.total_kills}",
                 f"达到等级: {self.game.session.max_level}",
-                f"收集剧情: {len(self.game.story_collected_fragments)} / 20",
+                f"收集剧情: {_frag} / {_frag_total}",
             ]
             for i, stat in enumerate(stats):
                 stat_text = self.game.font.render(stat, True, LIGHT_GRAY)
@@ -3277,27 +3293,41 @@ class UiMixin:
         self.screen.fill(VOID_BLACK)
         scale = self.game.scale
 
+        # v2.5.6：结局文本重写——把王某（夜枭计划签字人/同为实验受害者）纳入抉择，
+        # 并交代龙某、向某、王某三人的去向（剧情补完）
         endings = {
             "perfect": {
-                "title": "完美结局 - 重逢",
+                "title": "完美结局 - 三人重逢",
                 "text": [
-                    "你使用疫苗拯救了龙某和向某。",
-                    "他们恢复了意识，虽然身体还很虚弱。",
-                    "谢谢你...朋友...龙某虚弱地说道。",
-                    "我们...我们还能回去吗?向某问道。",
-                    "你们三人相互搀扶着，走向未知的未来...",
-                    "但无论如何，你们还在一起。"
+                    "你用自己（0号实验体）的血，扩增出了三份疫苗。",
+                    "王某、龙某、向某——三个人都活了下来。",
+                    "王某颤抖着交出实验数据：夜枭计划的全部资料，拿去赎罪吧。",
+                    "龙某扶着向某，笑骂你：叫你别逞能。",
+                    "你们四个人背着行囊走出校门，身后是燃烧的核电站。",
+                    "这一次，谁都没有被留下。"
                 ],
                 "color": GREEN
+            },
+            "save_friends": {
+                "title": "结局 - 两个朋友",
+                "text": [
+                    "你把疫苗分成两份，救回了龙某和向某。",
+                    "王某没有说话，只是隔着舱门的玻璃看着你。",
+                    "然后，他自己拔掉了培养舱的电源。",
+                    "龙某哑着嗓子：他...也是被逼的。",
+                    "你点了点头，但你没有回头。",
+                    "三个人里，你救下了你的两个朋友。"
+                ],
+                "color": BLUE
             },
             "save_long": {
                 "title": "结局 - 选择",
                 "text": [
                     "你选择了拯救龙某。",
-                    "向某在你眼前倒下，眼中似乎闪过一丝清明。",
+                    "向某在你眼前停下，笑容比哭还难看。",
                     "对不起...你低声说道。",
-                    "龙某抱着向某的尸体，泪如雨下。",
-                    "为什么...为什么只能救一个...",
+                    "龙某抱着向某的遗体，泪如雨下。",
+                    "王某在舱里低声说：他们本来...可以不用这样的。",
                     "你们活下来了，但代价是什么?"
                 ],
                 "color": BLUE
@@ -3314,15 +3344,26 @@ class UiMixin:
                 ],
                 "color": ORANGE
             },
+            "save_wang": {
+                "title": "结局 - 理智",
+                "text": [
+                    "你把疫苗给了王某——夜枭计划的签字人，也是唯一握有全部数据的人。",
+                    "龙某和向某没有挣扎，只是让你去吧。",
+                    "王某咳着血说：我会把解药做出来...我欠他们的。",
+                    "他真的做到了——三年后，疫苗量产，病毒被终结。",
+                    "只是那两个名字，再也没有出现在任何新闻里。"
+                ],
+                "color": ORANGE
+            },
             "tragic": {
                 "title": "悲剧结局 - 孤独",
                 "text": [
                     "你拥有疫苗，但你选择了不使用它。",
-                    "龙某和向某都倒下了。",
+                    "龙某、向某、王某，三个人都倒下了。",
                     "为什么...他们的眼神中充满不解。",
-                    "你独自站在废墟中，周围是死寂。",
-                    "你活下来了，但你失去了所有。",
-                    "这真的是你想要的吗?"
+                    "你把疫苗装进防水箱，决定带出学校。",
+                    "也许有一天，它能救更多的人。",
+                    "你活下来了，但你失去了所有。"
                 ],
                 "color": GRAY
             },
@@ -3365,18 +3406,74 @@ class UiMixin:
             self.screen.blit(text_surf, text_rect)
             y += int(35 * scale)
 
-        # 显示记录摘要
-        summary = self.game.records.get_summary()
-        y_end = int(180 * scale) + len(ending["text"]) * int(35 * scale)
-        record_text = self.game.font.render(f"本局得分: {self.game.player.score}  历史最高: {summary['best_score']}", True, GOLD)
-        record_rect = record_text.get_rect(center=(self.game.scaled_width // 2, int(y_end + 20 * scale)))
-        self.screen.blit(record_text, record_rect)
+        # ==================== v2.5.6 结局结算统计（技术修复）====================
+        # 旧版只显示"本局得分/成就"两行，且直接访问 records/player（多人或异常时可能崩）。
+        # 现在输出完整一局统计，并对 records/session/player 做空值保护。
+        _recs = getattr(self.game, "records", None)
+        _sess = getattr(self.game, "session", None)
+        try:
+            _summary = _recs.get_summary() if _recs else {}
+        except Exception:
+            _summary = {}
+        _best = _summary.get("best_score", 0)
+        try:
+            _scores = [getattr(p, "score", 0) for p in self.game._all_players() if p is not None]
+        except Exception:
+            _scores = []
+        if not _scores:
+            _scores = [getattr(getattr(self.game, "player", None), "score", 0)]
+        _score = max(_scores) if _scores else 0
+        _kills = 0
+        _level = 0
+        _time = 0.0
+        if _sess is not None:
+            try:
+                _kills = sum((_sess.data.get("kills_by_type", {}) or {}).values())
+            except Exception:
+                _kills = 0
+            try:
+                _level = _sess.data.get("max_level", 0)
+            except Exception:
+                _level = 0
+            try:
+                _time = _sess.data.get("time_survived", 0) or 0
+            except Exception:
+                _time = 0
+        if not _time:
+            try:
+                _time = getattr(getattr(self.game, "horde_manager", None), "total_time", 0) or 0
+            except Exception:
+                _time = 0
+        try:
+            _frag = len(getattr(self.game, "story_collected_fragments", []) or [])
+        except Exception:
+            _frag = 0
+        _frag_total = 100
+        try:
+            from config import STORY_FRAGMENTS as _SF
+            _frag_total = sum(len(v) for v in _SF.values())
+        except Exception:
+            pass
+        _stats = [
+            f"存活时间: {int(_time // 60)}分{int(_time % 60)}秒    击杀: {_kills}    等级: {_level}",
+            f"收集剧情: {_frag}/{_frag_total}    本局得分: {_score}    历史最高: {_best}",
+        ]
+        y_end = y
+        for _line in _stats:
+            _st = self.game.font.render(_line, True, GOLD)
+            _sr = _st.get_rect(center=(self.game.scaled_width // 2, int(y_end + 24 * scale)))
+            self.screen.blit(_st, _sr)
+            y_end += int(32 * scale)
 
         # 显示已解锁成就数
-        unlocked = len(self.game.records.get_unlocked_achievements())
-        total_ach = len(self.game.records.get_achievements())
+        try:
+            unlocked = len(_recs.get_unlocked_achievements()) if _recs else 0
+            total_ach = len(_recs.get_achievements()) if _recs else 0
+        except Exception:
+            unlocked = 0
+            total_ach = 0
         ach_text = self.game.font.render(f"成就: {unlocked}/{total_ach}", True, CYAN)
-        ach_rect = ach_text.get_rect(center=(self.game.scaled_width // 2, int(y_end + 50 * scale)))
+        ach_rect = ach_text.get_rect(center=(self.game.scaled_width // 2, int(y_end + 22 * scale)))
         self.screen.blit(ach_text, ach_rect)
 
         # 使用预创建的按钮

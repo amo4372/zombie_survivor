@@ -22,10 +22,12 @@ def resource_path(relative_path):
 import pygame
 from game import Game, logger
 
+_text_input_started = False
 try:
     # 开启文本输入（支持系统输入法中文候选框）
     try:
         pygame.key.start_text_input()
+        _text_input_started = True
     except Exception:
         pass
     game = Game()
@@ -37,3 +39,11 @@ try:
 except Exception as e:
     logger.log_exception(e)
     raise
+finally:
+    # v2.5.6：关闭文本输入（对应 start_text_input）——
+    # 否则退出/异常时 IME 候选框与文本输入状态残留（Windows 下会残留输入框/焦点异常）
+    if _text_input_started:
+        try:
+            pygame.key.stop_text_input()
+        except Exception:
+            pass

@@ -284,11 +284,29 @@ class NetMixin:
                     _ent.x += _mx / _n * _spd * dt
                     _ent.y += _my / _n * _spd * dt
                 # 射击（aim 为 None/缺失时用实体朝向）
-                if bool(_inp.get("shoot", False)):
-                    _w = _ent.get_current_weapon()
+                # v2.5.6：蓄力武器（AWM/轨道炮）按住蓄力，松开才开火一次（与本地一致）
+                _shoot_now = bool(_inp.get("shoot", False))
+                _w = _ent.get_current_weapon()
+                _fire_ang = None
+                if _w is not None and getattr(_w, "hold_charge", False):
+                    _saved = getattr(_ent, "_awm_saved", None)
+                    if _shoot_now:
+                        _aim0 = _inp.get("aim")
+                        _ent._awm_saved = (math.radians(float(_aim0)) if _aim0 is not None
+                                           else math.radians(getattr(_ent, 'facing_angle', 0)))
+                        _shoot_now = False
+                    elif _saved is not None:
+                        _fire_ang = _saved
+                        _ent._awm_saved = None
+                elif getattr(_ent, "_awm_saved", None) is not None:
+                    _ent._awm_saved = None
+                if _shoot_now or _fire_ang is not None:
                     if _w and _w.can_fire():
-                        _aim = _inp.get("aim")
-                        _ang = math.radians(float(_aim)) if _aim is not None else math.radians(getattr(_ent, 'facing_angle', 0))
+                        if _fire_ang is not None:
+                            _ang = _fire_ang
+                        else:
+                            _aim = _inp.get("aim")
+                            _ang = math.radians(float(_aim)) if _aim is not None else math.radians(getattr(_ent, 'facing_angle', 0))
                         try:
                             _dmg_m = getattr(getattr(_ent, 'buff_manager', None), 'get_damage_mult', lambda: 1.0)()
                         except Exception:

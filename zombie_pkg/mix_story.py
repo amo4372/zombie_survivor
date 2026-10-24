@@ -454,16 +454,22 @@ class StoryMixin:
         self.state = GameState.DIALOGUE
 
     def _story_victory(self):
-        """故事模式通关"""
+        """故事模式通关 → 结局抉择（疫苗救王某/向某/龙某）→ 结局结算页
+
+        v2.5.6：旧版通关后只进 VICTORY 页面（一张"通关！"图），
+        玩家最关心的"疫苗到底救谁"根本没有被回答，且结局从未写入存档。
+        现在通关后直接进入结局抉择对话 → 结局结算页（含完整统计）。
+        """
         logger.info("故事模式通关！")
         self.delete_saved_game()
         self.assets.play_music("victory")
         dialogues = STORY_ENDING_DIALOGUE
         def on_complete():
-            self.state = GameState.VICTORY
-            if self.session:
-                self.session.end_session(victory=True)
-                self.records.on_game_end(self.session.to_dict())
+            # v2.5.6：通关后进入结局抉择（疫苗救谁）→ 结局结算页
+            try:
+                self._final_dialogue()
+            except Exception:
+                self.state = GameState.ENDING
         self.dialogue.start_dialogue(dialogues, on_complete)
         self.state = GameState.DIALOGUE
 
@@ -569,17 +575,26 @@ class StoryMixin:
             self.state = GameState.PLAYING
 
     def _final_dialogue(self):
+        """v2.5.6 故事结局抉择：疫苗到底救谁？
+
+        剧情修正：龙某、向某是主角的同伴；王某（校长/前研究员）是「夜枭计划」的
+        签字人，但他同样是实验的受害者——三人此刻都等着主角的决定。
+        旧版本只让玩家在「救两人 / 只救一人 / 都不救」里选，王某从未被纳入抉择，
+        属于剧情漏洞；本版把王某一并纳入，并让结局文本交代三人的去向。
+        """
         choices = []
         if self.has_vaccine:
             choices = [
-                {"text": "使用疫苗拯救两人", "effect": "save_both"},
+                {"text": "三个人都救（用我的血扩增疫苗）", "effect": "save_all"},
+                {"text": "救龙某和向某（两个朋友）", "effect": "save_friends"},
                 {"text": "只救龙某", "effect": "save_long"},
                 {"text": "只救向某", "effect": "save_xiang"},
-                {"text": "两人都不救", "effect": "save_none"},
+                {"text": "救王某（他是实验的受害者）", "effect": "save_wang"},
+                {"text": "谁都不救（把疫苗带出学校）", "effect": "save_none"},
             ]
         else:
             choices = [
-                {"text": "杀死两人", "effect": "kill_both"},
+                {"text": "杀死三人", "effect": "kill_both"},
                 {"text": "放他们走", "effect": "let_go"},
             ]
 
@@ -588,23 +603,61 @@ class StoryMixin:
             {"speaker": "向某", "text": "你变强了...但我们已经无法回头了..."},
             {"speaker": "龙某", "text": "杀了我们吧...这是我们最后的请求..."},
             {"speaker": "向某", "text": "或者...如果你能找到疫苗..."},
+            {"speaker": "王某", "text": "（培养舱里，锁链还缠在他手腕上）...夜枭计划是我签的字。"},
+            {"speaker": "王某", "text": "但被关进舱里的人，不只有我。"},
+            {"speaker": "龙某", "text": "疫苗只有一剂......救不了三个人。"},
+            {"speaker": "向某", "text": "别管我们了，活下去比什么都重要。"},
             {"speaker": "你", "text": "...", "choices": choices},
         ]
 
         def on_complete():
-            # 保存结局记录
-            if self.session:
-                if not self.session.data.get("ending"):
-                    self.session.set_ending(self.ending_type or "kill_both")
-                self.session.set_died(False)
-                self.session.finalize()
-                self.session = None
+            # v2.5.6：结局记录（此时 session 可能已被结算并置空 → 直接写 records）
+            self._record_ending(self.ending_type or "kill_both")
             # 播放结局音乐
             self.assets.play_music("ending")
             self.state = GameState.ENDING
 
         self.dialogue.start_dialogue(dialogues, on_complete)
         self.state = GameState.DIALOGUE
+
+    def _record_ending(self, ending_type):
+        """v2.5.6 记录结局（session 已被结算时也能正确写入 records/结局成就）"""
+        try:
+            self.ending_type = ending_type
+            recs = getattr(self, "records", None)
+            sess = self.session
+            if sess is not None:
+                try:
+                    sess.set_ending(ending_type)
+                    sess.set_died(False)
+                    sess.end_session(victory=True)
+                    sess.finalize()          # → records.on_game_end（含结局成就判定）
+                except Exception:
+                    pass
+                self.session = None
+            elif recs is not None:
+                # session 已在游戏结束流程里结算过 → 补写结局计数与结局成就
+                try:
+                    _ends = recs.data.setdefault("endings", {})
+                    _ends[ending_type] = _ends.get(ending_type, 0) + 1
+                    recs.data["last_ending"] = ending_type
+                    _now = datetime.datetime.now().isoformat()
+                    _ach = recs.data.get("achievements", {}) or {}
+                    if ending_type == "perfect":
+                        _it = _ach.get("perfect_ending")
+                        if _it and not _it.get("unlocked", False):
+                            _it["unlocked"] = True
+                            _it["date"] = _now
+                    if _ends and all(v > 0 for v in _ends.values()):
+                        _it2 = _ach.get("all_endings")
+                        if _it2 and not _it2.get("unlocked", False):
+                            _it2["unlocked"] = True
+                            _it2["date"] = _now
+                    recs._save()
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     def _advance_dialogue(self):
         if not self.dialogue.active:
@@ -629,15 +682,14 @@ class StoryMixin:
     def _check_choice_click(self, pos):
         if not self.dialogue.choices or not self.dialogue.dialog_rect:
             return -1
-        dialog_rect = self.dialogue.dialog_rect
-        choice_y = dialog_rect.y + dialog_rect.height - 45
-        for i, choice in enumerate(self.dialogue.choices):
-            choice_x = dialog_rect.x + 20 + i * min(280, self.scaled_width // 4)
-            choice_text = f"{i+1}. {choice['text']}"
-            text_width = self.font.size(choice_text)[0]
-            text_height = self.font.get_height()
-            choice_rect = pygame.Rect(choice_x - 5, choice_y - 5, text_width + 10, text_height + 10)
-            if choice_rect.collidepoint(pos):
+        # v2.5.6：与绘制共用同一份布局（支持换行/多选项）
+        try:
+            _layout = self.dialogue.get_choice_layout(
+                self.font, self.scaled_width, self.scaled_height)
+        except Exception:
+            _layout = []
+        for i, rect, _t in _layout:
+            if rect.collidepoint(pos):
                 return i
         return -1
 
@@ -648,9 +700,13 @@ class StoryMixin:
         # 旧式结局字符串（兼容）
         if isinstance(effect, str):
             ending_map = {
-                "save_both": "perfect",
+                # v2.5.6：新增"三人全救"与"只救王某"，并修正"救两个朋友"的表述
+                "save_all": "perfect",        # 三人全救（扩增疫苗）→ 完美结局
+                "save_both": "perfect",        # 旧键（兼容旧存档/旧对话）
+                "save_friends": "save_friends",  # 救龙某+向某
                 "save_long": "save_long",
                 "save_xiang": "save_xiang",
+                "save_wang": "save_wang",
                 "save_none": "tragic",
                 "kill_both": "kill_both",
                 "let_go": "let_go"

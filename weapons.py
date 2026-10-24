@@ -7,6 +7,41 @@ import random
 import pygame
 from config import *
 
+
+def segment_aabb_hit(x1, y1, x2, y2, rect):
+    """扫掠碰撞：线段 (x1,y1)->(x2,y2) 是否与矩形 rect 相交（Liang-Barsky 裁剪法）
+
+    v2.5.6：高速弹丸（AWM/加特林等）单帧位移可达上百像素，
+    只检测"落点矩形"会直接穿过目标（碰撞事件丢失）。
+    本函数按整段飞行路径判定，保证低帧率/锁帧下也能稳定命中。
+    """
+    try:
+        dx = x2 - x1
+        dy = y2 - y1
+        tmin = 0.0
+        tmax = 1.0
+        for p, q in ((-dx, x1 - rect.left), (dx, rect.right - x1),
+                     (-dy, y1 - rect.top), (dy, rect.bottom - y1)):
+            if p == 0:
+                if q < 0:
+                    return False
+                continue
+            r = q / p
+            if p < 0:
+                if r > tmax:
+                    return False
+                if r > tmin:
+                    tmin = r
+            else:
+                if r < tmin:
+                    return False
+                if r < tmax:
+                    tmax = r
+        return True
+    except Exception:
+        return False
+
+
 class Projectile:
     def __init__(self, x, y, vx, vy, damage, max_range, color, size, 
                  pierce=1, explosive=False, explosion_radius=0, is_flame=False,
@@ -15,6 +50,9 @@ class Projectile:
                  is_scythe_throw=False, is_scythe_slash=False):
         self.x = x
         self.y = y
+        # v2.5.6：上一帧位置（扫掠碰撞用，防高速弹丸穿透目标）
+        self.prev_x = x
+        self.prev_y = y
         self.vx = vx
         self.vy = vy
         self.damage = damage
@@ -76,6 +114,9 @@ class Projectile:
         if self.gravity != 0:
             self.vy += self.gravity * dt * 60
 
+        # v2.5.6：记录上一帧位置（扫掠碰撞起点）
+        self.prev_x = self.x
+        self.prev_y = self.y
         self.x += self.vx * dt * 60
         self.y += self.vy * dt * 60
         self.traveled += math.hypot(self.vx, self.vy) * dt * 60
@@ -107,6 +148,18 @@ class Projectile:
     def get_rect(self):
         return pygame.Rect(self.x - self.size, self.y - self.size, 
                           self.size * 2, self.size * 2)
+
+    def swept_hit_rect(self, rect):
+        """扫掠命中判定：本帧飞行线段 vs 目标矩形（rect 需为敌方原始碰撞框）
+
+        与"矩形 vs 矩形"等价：把目标矩形按弹丸半径外扩后做线段-AABB 相交测试，
+        保证单帧位移再大（AWM 34/帧、加特林弹幕、低帧率 dt=0.05）也不会穿过目标。
+        """
+        try:
+            _r = rect.inflate(self.size, self.size)
+            return segment_aabb_hit(self.prev_x, self.prev_y, self.x, self.y, _r)
+        except Exception:
+            return False
 
     def draw(self, screen, camera_x, camera_y, scale=1.0):
         if self.is_laser:
@@ -332,10 +385,12 @@ class Weapon:
                 "range": 1800, "speed": 0, "spread": 0, "pierce": 99,
                 "is_laser": True, "laser_width": 25, "laser_duration": 0.8,
                 "color": PURPLE, "projectile_size": 15, "shake": 25,
-                "desc": "充能武器：射速大增/弹夹5发/换弹稍长，粗激光穿透一切（v2.5.5 加强）",
+                "desc": "充能武器：射速大增/弹夹5发/换弹稍长，粗激光穿透一切（v2.5.5 加强）；"
+                        "v2.5.6 起与 AWM 一样按住显示预瞄线、松开开火",
                 "ammo": 5, "reload": 5.5,
                 "charge_time": 1.0,
-                "pvp_no_atten": True
+                "pvp_no_atten": True,
+                "hold_charge": True
             },
             WeaponType.MINIGUN: {
                 "name": "加特林", "damage": 12, "fire_rate": 0.018,
@@ -446,7 +501,7 @@ class Weapon:
                 "name": "AWM", "damage": 420, "fire_rate": 1.1,
                 "range": 2600, "speed": 34, "spread": 0, "pierce": 30,
                 "color": GREEN, "projectile_size": 8, "shake": 12,
-                "desc": "传奇狙击枪：射速更快/弹夹10发/射程与穿透大幅提升/拖动蓄力显示弹道，松开开火（v2.5.5 大加强）",
+                "desc": "传奇狙击枪：射速更快/弹夹10发/射程与穿透大幅提升/按住拖动显示弹道预瞄线，松开开火（v2.5.6 修复蓄力开火）",
                 "ammo": 10, "reload": 1.8,
                 "pvp_no_atten": True, "hold_charge": True
             },

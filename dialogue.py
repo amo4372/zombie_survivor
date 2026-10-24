@@ -68,6 +68,54 @@ class DialogueSystem:
             return choice.get("effect", None)
         return None
 
+    # ==================== v2.5.6 选项布局（多选项自动换行）====================
+    def get_choice_layout(self, font, screen_width, screen_height):
+        """计算选项的排版（返回 [(index, rect, text)]）
+
+        v2.5.5 之前选项是固定单行横排（每项 280px），选项一多就会超出屏幕
+        （故事结局选项增加到 5~6 个后必然溢出、点不到）。
+        这里改成「按宽度自动换行 + 居中」，与 draw() / 点击判定共用同一份布局。
+        """
+        try:
+            if not self.choices:
+                return []
+            _items = []
+            for i, ch in enumerate(self.choices):
+                _t = f"{i+1}. {ch['text']}"
+                _w = font.size(_t)[0] + 16
+                _items.append((i, _t, _w))
+            _dlg_h = min(220, screen_height // 3)
+            _dlg_rect = pygame.Rect(20, screen_height - _dlg_h - 10,
+                                    screen_width - 40, _dlg_h)
+            _max_w = max(120, _dlg_rect.width - 40)
+            _rows = []
+            _cur = []
+            _cur_w = 0
+            for it in _items:
+                if _cur and (_cur_w + it[2] > _max_w):
+                    _rows.append(_cur)
+                    _cur = []
+                    _cur_w = 0
+                _cur.append(it)
+                _cur_w += it[2] + 8
+            if _cur:
+                _rows.append(_cur)
+            _line_h = 26
+            _y = _dlg_rect.y + _dlg_rect.height - 14 - _line_h * len(_rows)
+            if _y < _dlg_rect.y + 50:
+                _y = _dlg_rect.y + 50
+            _out = []
+            for _row in _rows:
+                _row_w = sum(it[2] for it in _row)
+                _x = _dlg_rect.x + 20 + max(0, (_dlg_rect.width - 40 - _row_w) // 2)
+                for (i, t, w) in _row:
+                    _out.append((i, pygame.Rect(_x, _y, w, _line_h), t))
+                    _x += w + 8
+                _y += _line_h
+            return _out
+        except Exception:
+            return []
+
     def draw(self, screen, font, large_font, screen_width, screen_height):
         if not self.active:
             return
@@ -108,13 +156,19 @@ class DialogueSystem:
             screen.blit(text_surf, (dialog_rect.x + 15, text_y + i * 24))
 
         if self.choices and len(self.displayed_text) >= len(self.text):
-            choice_y = dialog_rect.y + dialog_rect.height - 45
-            choice_bg = pygame.Rect(dialog_rect.x + 10, choice_y - 5, dialog_rect.width - 20, 40)
-            pygame.draw.rect(screen, (50, 50, 50), choice_bg, border_radius=5)
-            for i, choice in enumerate(self.choices):
+            # v2.5.6：选项自动换行（与点击判定共用 get_choice_layout）
+            _layout = self.get_choice_layout(font, screen_width, screen_height)
+            if _layout:
+                _rows = max(1, len(_layout) // max(1, len(self.choices)))
+                _bg_top = min(r.y for _, r, _ in _layout) - 6
+                choice_bg = pygame.Rect(dialog_rect.x + 10, _bg_top,
+                                        dialog_rect.width - 20,
+                                        dialog_rect.bottom - 10 - _bg_top)
+                pygame.draw.rect(screen, (50, 50, 50), choice_bg, border_radius=5)
+            for i, _rect, _txt in _layout:
                 color = YELLOW if i == self.selected_choice else WHITE
-                choice_text = font.render(f"{i+1}. {choice['text']}", True, color)
-                screen.blit(choice_text, (dialog_rect.x + 20 + i * min(280, screen_width // 4), choice_y))
+                choice_text = font.render(_txt, True, color)
+                screen.blit(choice_text, (_rect.x + 8, _rect.y + 2))
         elif len(self.displayed_text) >= len(self.text) and not self.choices:
             hint_text = "【点击屏幕或按空格键继续】"
             hint = font.render(hint_text, True, CYAN)

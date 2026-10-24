@@ -877,6 +877,10 @@ class PlayingMixin:
                         self.pending_upgrade_for = _tag
                         self._upgrade_pause_player = _tag
                         _pl.upgrade_paused = True
+                        # v2.5.6：限时免伤保护 + 超时自动选卡
+                        # （防"故意停在升级界面"吃永久无敌：保护只持续数秒，超时自动选卡）
+                        _pl.upgrade_grace_timer = self.UPGRADE_GRACE_TIME
+                        self._upgrade_pause_timer = self.UPGRADE_AUTO_PICK_TIME
                         # v2.2.6：暂停瞬间重置该玩家触控控件（per-player 不切状态，
                         # 状态切换重置不会触发，防止升级玩家射击/摇杆残留卡死）
                         try:
@@ -904,6 +908,9 @@ class PlayingMixin:
                     _pl.pending_levels = 0  # v2.5.2 无可用卡时清空待结算次数
                 break
 
+        # v2.5.6：升级选卡保护倒计时 + 超时自动选卡（防卡界面无限无敌）
+        self._update_upgrade_pause(dt)
+
         # 自动射击 / 盾肘击【修改】
         auto_shoot = False
         # v2.1.3：P1 升级选卡暂停射击/肘击（触控模式下 P1 输入也已暂停）
@@ -919,6 +926,35 @@ class PlayingMixin:
             else:
                 auto_shoot = self.aim_button.is_shooting
 
+        # ========== v2.5.6 蓄力预瞄武器（AWM / 轨道炮）============
+        # 规则：按住开火键 = 蓄力（显示弹道预瞄线，角度随摇杆/鼠标实时更新），松开 = 开火一次。
+        # v2.5.5 实现存在三处 bug，本版全部修正：
+        #   ① 蓄力中只置 auto_shoot=False，但开火分支并未检查该标记 → 「未松开就发射」；
+        #   ② 松开分支被包在「要求 auto_shoot 为真」的外层 elif 内 → 永远不可达 → 松开不开火；
+        #   ③ 蓄力角度从不清除 → 「预瞄线卡死，不消失也不改变」。
+        _fire_angle = None       # 本帧实际开火角度（松开瞬间的蓄力角）
+        _charge_blocked = False  # True=按住蓄力中，本帧禁止开火
+        _charge_weapon = None
+        try:
+            _veh_now = getattr(self.player, 'vehicle', None)
+            if _veh_now is None or not _veh_now.alive:
+                _charge_weapon = self.player.get_current_weapon()
+        except Exception:
+            _charge_weapon = None
+        if _charge_weapon is not None and getattr(_charge_weapon, "hold_charge", False):
+            _saved_aim = getattr(self.player, "_awm_saved", None)
+            if auto_shoot and not _p1_paused:
+                # 按住：实时更新蓄力角（拖拽时预瞄线跟随摇杆），本帧不开火
+                self.player._awm_saved = mouse_angle
+                _charge_blocked = True
+            elif _saved_aim is not None and not _p1_paused:
+                # 松开：按蓄力角开火一次，并立刻清空预瞄（预瞄线立即消失，不再卡死）
+                _fire_angle = _saved_aim
+                self.player._awm_saved = None
+        elif getattr(self.player, "_awm_saved", None) is not None:
+            # 当前武器不是蓄力武器（切武器/装备被卸下等）：清理残留预瞄，避免预瞄线卡死
+            self.player._awm_saved = None
+
         # v2.2.3 载具开火独立于防爆套装/装备动画条件（装备防爆套装也能发射载具武器）
         _veh = getattr(self.player, 'vehicle', None)
         if _veh is not None and _veh.alive and _veh.can_shoot:
@@ -930,23 +966,16 @@ class PlayingMixin:
                 self.projectiles.extend(_projs)
                 if _projs:
                     self.assets.play_sound_random(["shoot_pistol", "shoot_smg"])
-        elif auto_shoot and self.player.can_act() and not self.player.riot_gear.equipped and self.riot_anim_state != "equipping":
+        elif (auto_shoot or _fire_angle is not None) and self.player.can_act() and not self.player.riot_gear.equipped and self.riot_anim_state != "equipping":
             weapon = None  # 防御：weapon_type 为 None（异常存档/联机同步兜底）
             if _veh is None or not _veh.alive:
                 weapon = self.player.get_current_weapon()
-            # v2.5.5 AWM 蓄力开火：按住不发射（显示弹道预览），松开才开火一次
-            if weapon is not None and getattr(weapon, "hold_charge", False):
-                _awm_saved = getattr(self.player, "_awm_saved", None)
-                if auto_shoot:
-                    if _awm_saved is None:
-                        self.player._awm_saved = mouse_angle   # 开始蓄力：记录瞄准角，本次不发射
-                    auto_shoot = False                          # 蓄力中抑制开火
-                elif _awm_saved is not None:
-                    mouse_angle = _awm_saved                    # 松开：按蓄力角开火一次
-                    self.player._awm_saved = None
-                    auto_shoot = True
+            # v2.5.6 蓄力武器：按住期间抑制开火（仅在松开瞬间开火一次）
+            _shot_angle = _fire_angle if _fire_angle is not None else mouse_angle
+            if weapon is not None and getattr(weapon, "hold_charge", False) and _charge_blocked:
+                pass  # 蓄力中 → 本帧不开火（预瞄线由 draw 渲染）
             # v2.1.3：防御 weapon/weapon_type 为 None（异常存档/联机同步兜底，不再崩溃）
-            if weapon is not None and getattr(weapon, "weapon_type", None) is not None and weapon.can_fire():
+            elif weapon is not None and getattr(weapon, "weapon_type", None) is not None and weapon.can_fire():
                 # 过热倾泻buff：无限弹药
                 if getattr(self.player, 'overdrive_timer', 0) > 0 and hasattr(weapon, 'current_ammo') and weapon.current_ammo != "∞":
                     weapon.current_ammo = min(weapon.max_ammo, weapon.current_ammo + 1)
@@ -995,7 +1024,7 @@ class PlayingMixin:
                     weapon.range = int(weapon.range * _melee_bonus_range)
                 try:
                     proj_list = weapon.fire(
-                        self.player.x, self.player.y, mouse_angle,
+                        self.player.x, self.player.y, _shot_angle,
                         _fire_mult, self.player.speed_mult,
                         player=self.player
                     )
@@ -1012,7 +1041,7 @@ class PlayingMixin:
                 # 近战武器攻击处理
                 if getattr(weapon, "melee_attack_triggered", False):
                     weapon.melee_attack_triggered = False
-                    self._start_melee_attack(weapon, mouse_angle)
+                    self._start_melee_attack(weapon, _shot_angle)
                 
                 # 记录射击
                 if self.session:
@@ -1163,7 +1192,9 @@ class PlayingMixin:
             target_obj = None
             _best_d = 1e18
             for _pp in self._all_players():
-                _pf = getattr(_pp, 'downed', False) or getattr(_pp, 'upgrade_paused', False)
+                # v2.5.6：升级选卡保护改为限时（见 _player_is_protected），
+                # 超时后玩家会重新被怪物锁定，不再"停在升级界面永久无敌"
+                _pf = self._player_is_protected(_pp)
                 if _pf:
                     continue
                 _d = (enemy.x - _pp.x) ** 2 + (enemy.y - _pp.y) ** 2
@@ -1861,13 +1892,13 @@ class PlayingMixin:
 
             # v2.2.7 PvPvE：投射物直接命中非队友玩家
             if getattr(self.config, 'pvp_enabled', False) and proj.owner is not None and proj.is_laser is False:
-                _pr = proj.get_rect()
                 for _pp in self._all_players():
                     if _pp is proj.owner or not getattr(_pp, 'alive', True) or getattr(_pp, 'downed', False):
                         continue
                     if getattr(_pp, 'team_id', 1) == getattr(proj.owner, 'team_id', 0):
                         continue
-                    if _pr.colliderect(_pp.get_rect()):
+                    # v2.5.6：扫掠碰撞（防高速弹丸穿透玩家）
+                    if proj.swept_hit_rect(_pp.get_rect()):
                         proj.alive = False
                         proj.hits.append(_pp)
                         _pvp_d = self._pvp_dmg_to_player(proj.damage, proj)
@@ -1927,11 +1958,12 @@ class PlayingMixin:
                                 self.damage_numbers.append(DamageNumber(_pp.x, _pp.y, _pvp_d, color=RED))
                 continue
 
-            proj_rect = proj.get_rect()
+            # v2.5.6：扫掠碰撞——按整段飞行路径判定命中，
+            # 修复高速弹丸（AWM 34/帧、加特林弹幕、低帧率 dt=0.05）穿过目标导致碰撞事件丢失
             for enemy in self.enemies:
                 if enemy in proj.hits:
                     continue
-                if proj_rect.colliderect(enemy.get_rect()):
+                if proj.swept_hit_rect(enemy.get_rect()):
                     proj.hits.append(enemy)
                     proj.pierce -= 1
 
@@ -2123,7 +2155,8 @@ class PlayingMixin:
                 continue
             hit_any = False
             for _p in self._alive_players():
-                if proj.get_rect().colliderect(_p.get_rect()):
+                # v2.5.6：扫掠碰撞（敌人投射物高速时同样可能穿过玩家）
+                if proj.swept_hit_rect(_p.get_rect()):
                     hit_any = True
                     # 检测是否被盾牌阻挡
                     dx = proj.x - _p.x
@@ -2260,6 +2293,8 @@ class PlayingMixin:
                 self.sweep_rings.remove(sr)
 
         # 摄像机跟随（v2.5.0：钳制到有限地图界内）
+        # v2.5.6：先同步视口尺寸（窗口缩放后玩家仍居中）
+        self._sync_camera_viewports()
         _wbo = getattr(getattr(self, 'world', None), 'bounds', None)
         self.camera.follow(self.player.x, self.player.y, dt, bounds=_wbo)
         if self.player2:
@@ -2294,14 +2329,56 @@ class PlayingMixin:
                 pass
 
     # ==================== v2.4.0 阵营胜负判定 ====================
+    def _update_upgrade_pause(self, dt):
+        """v2.5.6 升级选卡保护：
+        1) 免伤/脱锁保护倒计时（仅开始的一小段时间）；
+        2) 选卡超时自动选卡——杜绝"故意停在升级界面"无限吃无敌。
+        """
+        try:
+            _tag = getattr(self, '_upgrade_pause_player', None)
+            if not _tag:
+                return
+            _pl = self.player if _tag == "P1" else (self.player2 if _tag == "P2" else None)
+            if _pl is None:
+                self._upgrade_pause_player = None
+                return
+            # 1) 保护倒计时
+            _g = getattr(_pl, "upgrade_grace_timer", 0.0)
+            if _g > 0:
+                _pl.upgrade_grace_timer = max(0.0, _g - dt)
+            # 2) 超时自动选卡
+            _t = getattr(self, '_upgrade_pause_timer', 0.0) - dt
+            self._upgrade_pause_timer = max(0.0, _t)
+            if _t > 0:
+                return
+            _cards = getattr(_pl, "skill_cards", None) or []
+            if not _cards or not getattr(_pl, "pending_level_up", False):
+                # 没有可选项：直接解除暂停（避免卡死）
+                self._upgrade_pause_player = None
+                _pl.upgrade_paused = False
+                _pl.upgrade_grace_timer = 0.0
+                return
+            try:
+                self.floating_texts.append(FloatingText(
+                    _pl.x, _pl.y - 50, "升级超时，自动选择", color=(200, 200, 120), lifetime=1.6))
+            except Exception:
+                pass
+            self._apply_skill_card(_cards[0])
+        except Exception:
+            pass
+
+    # v2.5.6：多人争分夺秒每阵营只给 1 分钟（旧版 race_max_time=300s 太过充裕）
+    TEAM_RACE_TIME = 60.0
+
     def _init_team_race(self):
-        """争分夺秒：为每个阵营初始化独立计时器（阵营内共享；单人=单一阵营 0）"""
+        """争分夺秒：为每个阵营初始化独立计时器（阵营内共享；单人=单一阵营 0）
+
+        v2.5.6：每阵营只给 1 分钟（击杀可加时，但最多攒到 1 分钟）"""
         if getattr(self, '_team_race_inited', False):
             return
         self._team_race_inited = True
         self.team_race = {}
-        _init = float(getattr(getattr(self, 'horde_manager', None), 'race_time_left', 60.0) or 60.0)
-        _init = max(_init, getattr(getattr(self, 'horde_manager', None), 'race_max_time', 180.0) or 180.0)
+        _init = float(self.TEAM_RACE_TIME)
         _teams = set()
         for _pp in self._all_players():
             if _pp is not None:
@@ -2310,9 +2387,9 @@ class PlayingMixin:
             self.team_race[int(_t)] = {"time": float(_init), "out": False}
 
     def _team_race_add_time(self, team, amount):
-        """分阵营加时（击杀归属阵营）"""
+        """分阵营加时（击杀归属阵营，上限 1 分钟）"""
         try:
-            _init = float(getattr(getattr(self, 'horde_manager', None), 'race_max_time', 180.0) or 180.0)
+            _init = float(self.TEAM_RACE_TIME)
             _tr = self.team_race.get(int(team))
             if _tr is not None:
                 _tr["time"] = min(_init, _tr["time"] + max(0.0, float(amount)))
@@ -2422,7 +2499,21 @@ class PlayingMixin:
             pass
 
     def _settle_race_auto(self):
-        """倒计时耗尽/主动结算：挑战结算（victory，非死亡）"""
+        """倒计时耗尽：挑战失败（游戏失败结算页）
+
+        v2.5.6：旧版把"倒计时归零"当成挑战成功（victory=True），
+        甚至会跳到结局页面——语义完全错了。倒计时归零 = 失败。
+        """
+        if self.state != GameState.PLAYING:
+            return
+        self._record_race_result(victory=False)
+        self._trigger_multiplayer_game_over(victory=False,
+                                            title="挑战失败！时间耗尽")
+
+    def _settle_race_manual(self):
+        """玩家主动结算关卡（键盘 K / HUD 按钮）→ 挑战完成（成功结算）"""
+        if self.config.game_mode != GameMode.TIMED or self.state != GameState.PLAYING:
+            return
         if self.state != GameState.PLAYING:
             return
         self._record_race_result(victory=True)
@@ -2431,22 +2522,28 @@ class PlayingMixin:
                 self.session.end_session(victory=True)
             except Exception:
                 pass
-        self._trigger_multiplayer_game_over()
+        self._trigger_multiplayer_game_over(victory=True, title="挑战完成！")
 
-    def _settle_race_manual(self):
-        """玩家主动结算关卡（键盘 K / HUD 按钮）"""
-        if self.config.game_mode != GameMode.TIMED or self.state != GameState.PLAYING:
-            return
-        self._settle_race_auto()
+    def _trigger_multiplayer_game_over(self, victory=False, title=None):
+        """触发游戏结束结算（单/双人共用）
 
-    def _trigger_multiplayer_game_over(self):
-        """触发游戏结束结算（单/双人共用）"""
+        v2.5.6：新增 victory / title 参数——争分夺秒倒计时结束 = 失败，
+        主动结算 = 完成，结局页只属于故事模式通关流程。
+        """
         if self.state != GameState.PLAYING:
             return
+        self.result_title = title
+        # v2.5.6：清理蓄力预瞄状态（避免结算页仍残留预瞄线）
+        try:
+            for _p in self._all_players():
+                if _p is not None:
+                    _p._awm_saved = None
+        except Exception:
+            pass
         # 单人模式：正常游戏结束
         if self.session:
-            # v2.2.0 争分夺秒：倒计时耗尽/主动结算视为挑战完成（非死亡）
-            if self.config.game_mode == GameMode.TIMED and self.horde_manager.is_timed_over():
+            # v2.2.0 争分夺秒：主动结算视为挑战完成；倒计时耗尽视为失败
+            if victory:
                 try:
                     self.session.end_session(victory=True)
                 except Exception:
@@ -2468,7 +2565,11 @@ class PlayingMixin:
         self.delete_saved_game()
         self.state = GameState.GAME_OVER
 
-        if self.horde_manager.is_timed_over():
+        # v2.5.6：争分夺秒倒计时结束 = 挑战失败 → 停留在「游戏失败」结算页，
+        # 不再跳到结局页面（结局抉择只属于故事模式通关流程）
+        if self.config.game_mode == GameMode.TIMED:
+            pass
+        elif self.horde_manager.is_timed_over():
             self._final_dialogue()
 
         if self.config.game_mode == GameMode.ENDLESS:

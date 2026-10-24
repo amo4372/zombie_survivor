@@ -95,7 +95,9 @@ check("有限地图边界线绘制", "空气墙边界线" in wl)
 
 print("== #144 PvP 周期暴露 + 主动探测 + 出生点随机 ==")
 check("PvP 周期暴露保留", "pvp_reveal_active = _c <= 3.0" in gc)
-check("主动探测近距离暴露", "_scan_r = 400.0" in dm)
+# v2.5.6：常驻近距离暴露已移除，改为脉冲式扫描（详见 tests/test_v256_batch.py）
+check("主动探测改为脉冲式（非常驻暴露）",
+      "_scan_r = 400.0" not in dm and "pvp_scan_active" in dm)
 check("出生点随机化(非固定角)", "_pvp_spawn_pool" in gc and "3000" in gc)
 
 print("== #145 错误静默完善 ==")

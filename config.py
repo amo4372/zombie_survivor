@@ -12,6 +12,10 @@ BASE_WIDTH = 1280
 
 BASE_HEIGHT = 720
 
+# v2.5.6：PC 窗口最小尺寸（防止用户把窗口拉到过小/最小化导致渲染异常）
+MIN_WINDOW_WIDTH = 640
+MIN_WINDOW_HEIGHT = 360
+
 # 黑暗色调配色方案
 WHITE = (220, 220, 220)
 BLACK = (10, 10, 12)

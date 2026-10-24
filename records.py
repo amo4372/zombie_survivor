@@ -129,8 +129,10 @@ class GameRecords:
             # === 结局统计 ===
             "endings": {
                 "perfect": 0,
+                "save_friends": 0,   # v2.5.6：救龙某+向某
                 "save_long": 0,
                 "save_xiang": 0,
+                "save_wang": 0,      # v2.5.6：救王某
                 "tragic": 0,
                 "kill_both": 0,
                 "let_go": 0,
@@ -355,9 +357,15 @@ class GameRecords:
                 else:
                     old = self.data["achievements"][ach_key]
                     # 只补缺失字段，保留旧存档unlocked、date、desc
-                    for fill_k in ["group","hidden","coef_threshold","detail"]:
+                    for fill_k in ["group", "hidden", "coef_threshold", "detail"]:
                         if fill_k not in old:
-                            old[fill_k] = def_data.get(fill_k, "")
+                            # v2.5.6 修复：coef_threshold 必须是数值——
+                            # 旧逻辑用 "" 兜底，导致旧存档里 coef_threshold=""，
+                            # 结算时 `coef_threshold > 0` 抛 TypeError（每局结束必崩）
+                            if fill_k == "coef_threshold":
+                                old[fill_k] = def_data.get(fill_k, 0)
+                            else:
+                                old[fill_k] = def_data.get(fill_k, "")
 
         self._save()
 
@@ -398,7 +406,7 @@ class GameRecords:
                 "survivor": 300, "veteran": 900, "legend": 1800,
                 "horde_survivor_5": 5, "horde_survivor_20": 20,
                 "shield_master": 100, "grapple_master": 50, "berserker": 10,
-                "millionaire": 1000000, "perfect_ending": 1, "all_endings": 6,
+                "millionaire": 1000000, "perfect_ending": 1, "all_endings": 8,
                 "untouchable": 1, "iron_will": 480, "speedrunner": 1,
                 "skill_master": 20, "weapon_collector": 13, "full_armory": 13,
                 "no_skill_challenge": 1, "secret_zombie": 1,
@@ -442,7 +450,7 @@ class GameRecords:
             # 结局挑战
             "millionaire": (d.get("best_score", 0), 1000000),
             "perfect_ending": (_end.get("perfect", 0), 1),
-            "all_endings": (sum(1 for v in _end.values() if v > 0), 6),
+            "all_endings": (sum(1 for v in _end.values() if v > 0), 8),
             # 争分夺秒（v2.2.0）
             "race_first_win": (self.data.get("race_wins", 0), 1),
             "race_5_wins": (self.data.get("race_wins", 0), 5),
@@ -565,8 +573,10 @@ class GameRecords:
                 self.data["skill_usage"][skill] += count
         # 更新结局
         ending = d.get("ending")
-        if ending and ending in self.data["endings"]:
-            self.data["endings"][ending] += 1
+        if ending:
+            # v2.5.6：新增结局键（save_friends/save_wang）时旧存档也能安全累加
+            _ends = self.data.setdefault("endings", {})
+            _ends[ending] = _ends.get(ending, 0) + 1
 
         # 检查成就，拿到本次新解锁列表
         new_unlock_keys = self._check_achievements(d, total_kills)
@@ -609,6 +619,11 @@ class GameRecords:
             if not item.get("unlocked", False):
                 # 问题3b: 检查成就系数阈值
                 coef_threshold = item.get("coef_threshold", 0)
+                # v2.5.6 修复：旧存档里 coef_threshold 可能是 ""（字符串）→ 比较会抛异常
+                try:
+                    coef_threshold = float(coef_threshold or 0)
+                except (TypeError, ValueError):
+                    coef_threshold = 0.0
                 if coef_threshold > 0 and game_coef < coef_threshold:
                     logger.debug(f"成就 {key} 未解锁: 系数 {game_coef} < 阈值 {coef_threshold}")
                     return

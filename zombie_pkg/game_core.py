@@ -533,9 +533,72 @@ class GameCore:
         sw = self.screen.get_width()
         sh = self.screen.get_height()
         self.scale = min(sw / BASE_WIDTH, sh / BASE_HEIGHT)
+        # v2.5.6：窗口被拉到 0 尺寸（最小化）时 scale 会变成 0 → 后续除法/绘制异常
+        if not (self.scale > 0):
+            self.scale = 0.01
         self.scaled_width = sw
         self.scaled_height = sh
-        logger.debug(f"缩放更新: scale={self.scale:.3f}, {sw}x{sh}")
+        # v2.5.6：内容区（16:9 画布）尺寸 + 黑边偏移
+        # 世界始终绘制在 [0, content_w) x [0, content_h)，HUD 也要对齐到这里，
+        # 否则窗口不是 16:9 时 HUD 会与画面错位（缩放/放大窗口后渲染错乱）。
+        self.content_w = BASE_WIDTH * self.scale
+        self.content_h = BASE_HEIGHT * self.scale
+        self.content_ox = int((sw - self.content_w) / 2)
+        self.content_oy = int((sh - self.content_h) / 2)
+        logger.debug(f"缩放更新: scale={self.scale:.3f}, {sw}x{sh}, 内容区={self.content_w:.0f}x{self.content_h:.0f}")
+
+    def _apply_resize(self, w, h):
+        """v2.5.6 处理窗口缩放：钳制最小尺寸 + 重建显示表面 + 重算缩放
+
+        旧版直接 set_mode(event.w, event.h)：窗口最小化时 (0,0) 会让 pygame 抛异常，
+        极小窗口下 scale→0 也会导致渲染异常。这里统一做保护。
+        """
+        try:
+            w = int(w)
+            h = int(h)
+        except Exception:
+            return False
+        if w <= 0 or h <= 0:
+            return False   # 最小化/非法尺寸：忽略（保持上一帧画面）
+        w = max(MIN_WINDOW_WIDTH, w)
+        h = max(MIN_WINDOW_HEIGHT, h)
+        try:
+            self.screen = pygame.display.set_mode(
+                (w, h), pygame.RESIZABLE | pygame.DOUBLEBUF)
+        except Exception as e:
+            logger.warning(f"窗口调整失败({w}x{h}): {e}")
+            return False
+        self._update_scale()
+        self._sync_camera_viewports()
+        logger.info(f"窗口调整: {w}x{h} (缩放 {self.scale:.3f})")
+        return True
+
+    def _sync_camera_viewports(self):
+        """v2.5.6 摄像机视口跟随实际窗口/分屏视口
+
+        世界按窗口铺满（可视世界区域 = 窗口尺寸 / scale），
+        而摄像机原本按固定 1280x720（或 640x720 分屏）居中玩家，
+        窗口比例一变玩家就会偏离中心、画面观感错乱。
+        这里把摄像机视口改成真实可视区域，保证任意窗口尺寸下玩家都居中。
+        """
+        try:
+            _sc = max(0.01, float(self.scale))
+            _vw = self.scaled_width / _sc
+            _vh = self.scaled_height / _sc
+            if (self.is_multiplayer_active()
+                    and getattr(self, 'multiplayer_mode', '') == 'same_screen'):
+                _n = 2
+                for _i in (3, 4):
+                    if getattr(self, f"player{_i}", None) is not None:
+                        _n += 1
+                _vw = (self.scaled_width / max(1, _n)) / _sc
+            for _cam in (getattr(self, 'camera', None), getattr(self, 'camera2', None),
+                         getattr(self, 'camera3', None), getattr(self, 'camera4', None)):
+                if _cam is not None:
+                    _cam.width = _vw
+                    _cam.height = _vh
+        except Exception:
+            pass
 
     def _apply_character_bonuses2(self):
         """应用玩家2及 N 人（player3/player4）的局外角色加成（v2.5.5 支持 N 人角色效果）"""
@@ -570,6 +633,52 @@ class GameCore:
     def is_multiplayer_active(self):
         """是否处于双人/联机游玩中"""
         return bool(self.player2 is not None)
+
+    # ==================== v2.5.6 升级选卡保护（防卡界面无限无敌）====================
+    UPGRADE_GRACE_TIME = 2.0      # 选卡开始后的免伤+脱锁保护时长（秒）
+    UPGRADE_AUTO_PICK_TIME = 10.0  # 选卡超时自动选卡（秒），防止无限等待
+
+    # ==================== v2.5.6 PvP 主动探测（防位置持续暴露）====================
+    PVP_SCAN_DURATION = 3.0        # 单次扫描持续时间（秒）
+    PVP_SCAN_RADIUS = 500.0        # 扫描半径（世界单位）
+    PVP_SCAN_COOLDOWN = 20.0       # 手动扫描冷却（秒）
+    PVP_SCAN_AUTO_INTERVAL = 30.0  # 自动脉冲间隔（秒）
+
+    def _trigger_pvp_scan(self, auto=False):
+        """v2.5.6 触发一次 PvP 主动探测（脉冲式暴露敌对玩家位置，非持续暴露）"""
+        try:
+            if not (getattr(self.config, 'pvp_enabled', False) and self.is_multiplayer_active()):
+                return False
+            if getattr(self, 'pvp_scan_active', 0) > 0:
+                return False
+            if not auto and getattr(self, 'pvp_scan_cd', 0.0) > 0:
+                return False
+            self.pvp_scan_active = self.PVP_SCAN_DURATION
+            self.pvp_scan_cd = self.PVP_SCAN_COOLDOWN
+            _txt = "敌方信号扫描中..." if auto else "主动扫描！"
+            for _p in self._alive_players():
+                try:
+                    self.floating_texts.append(FloatingText(
+                        _p.x, _p.y - 60, _txt, color=(120, 220, 255), lifetime=1.4))
+                except Exception:
+                    pass
+            return True
+        except Exception:
+            return False
+
+    def _player_is_protected(self, player):
+        """玩家当前是否处于「受保护」状态（怪物不锁定、伤害免疫）
+
+        v2.5.6：倒地 = 永久保护（等待救援）；升级选卡 = 仅前 UPGRADE_GRACE_TIME 秒保护，
+        之后重新会被怪物锁定并受到伤害，杜绝"卡在升级界面刷无敌"的玩法。
+        """
+        if player is None:
+            return False
+        if getattr(player, 'downed', False):
+            return True
+        if getattr(player, 'upgrade_paused', False) and getattr(player, 'upgrade_grace_timer', 0) > 0:
+            return True
+        return False
 
     def is_network_client_render(self):
         """是否为网络客户端游玩渲染（快照渲染，无本地世界）"""
@@ -654,6 +763,8 @@ class GameCore:
             self.world = GameWorld(map_type=self.current_map, limited=True)
             # v2.4.0 新局重置阵营胜负状态
             self.victory_team = None
+            # v2.5.6 结算页标题（争分夺秒：挑战完成/挑战失败）
+            self.result_title = None
             self._team_race_inited = False
             # v2.0.13/14：可选加载 .zmap 二进制大地图（默认空=原随机地图；缺失/损坏自动回退并提示）
             _mf = getattr(self.config, "MAP_FILE", "")
@@ -1102,7 +1213,7 @@ class GameCore:
                 return self.player
             best, best_d = self.player, 1e18
             for _p in self._all_players():
-                if getattr(_p, 'downed', False) or getattr(_p, 'upgrade_paused', False):
+                if self._player_is_protected(_p):
                     continue
                 _d = (_p.x - self.player.x) ** 2 + (_p.y - self.player.y) ** 2
                 if _d < best_d:
@@ -1117,8 +1228,7 @@ class GameCore:
         try:
             if not self.is_multiplayer_active():
                 return self.player
-            _avail = [p for p in self._all_players()
-                      if getattr(p, 'downed', False) is False and not getattr(p, 'upgrade_paused', False)]
+            _avail = [p for p in self._all_players() if not self._player_is_protected(p)]
             if not _avail:
                 _avail = [p for p in self._all_players() if getattr(p, 'downed', False) is False]
             if not _avail:
@@ -1132,8 +1242,7 @@ class GameCore:
         try:
             if not self.is_multiplayer_active():
                 return self.player
-            _avail = [p for p in self._all_players()
-                      if getattr(p, 'downed', False) is False and not getattr(p, 'upgrade_paused', False)]
+            _avail = [p for p in self._all_players() if not self._player_is_protected(p)]
             if not _avail:
                 _avail = [p for p in self._all_players() if getattr(p, 'downed', False) is False]
             if not _avail:
@@ -1366,6 +1475,12 @@ class GameCore:
         elif self.state == GameState.SKILL_SELECT:
             if self.particles:
                 self.particles.update(dt)
+            # v2.5.6：选卡界面也推进「升级保护/超时自动选卡」计时
+            # （单机切全局 SKILL_SELECT 后 _update_playing 不再跑，计时器必须在这里走）
+            try:
+                self._update_upgrade_pause(dt)
+            except Exception:
+                pass
         elif self.state == GameState.RECORDS:
             pass
         elif self.state == GameState.SKILL_TREE:
@@ -1416,6 +1531,23 @@ class GameCore:
                 self.pvp_reveal_active = False
         except Exception:
             self.pvp_reveal_active = False
+        # v2.5.6 PvP 主动探测：不再常驻暴露敌对玩家位置（消除"透视"）
+        # 改为「脉冲式」扫描：每 30s 自动脉冲一次（3s），也可按 V 键手动触发（冷却 20s）
+        try:
+            if getattr(self.config, 'pvp_enabled', False) and self.is_multiplayer_active():
+                self.pvp_scan_cd = max(0.0, getattr(self, 'pvp_scan_cd', 0.0) - dt)
+                self.pvp_scan_active = max(0.0, getattr(self, 'pvp_scan_active', 0.0) - dt)
+                if not hasattr(self, '_pvp_scan_cycle'):
+                    self._pvp_scan_cycle = 0.0
+                self._pvp_scan_cycle += dt
+                if self._pvp_scan_cycle >= self.PVP_SCAN_AUTO_INTERVAL:
+                    self._pvp_scan_cycle = 0.0
+                    self._trigger_pvp_scan(auto=True)
+            else:
+                self.pvp_scan_active = 0.0
+                self.pvp_scan_cd = 0.0
+        except Exception:
+            self.pvp_scan_active = 0.0
         # 双人救援：每帧结算倒地/救援（全倒地时在此结束游戏）
         if self.is_multiplayer_active() and self._update_rescue(dt):
             self._trigger_multiplayer_game_over()
@@ -1425,7 +1557,12 @@ class GameCore:
                 if self.is_multiplayer_active():
                     _wt = self._check_round_end(dt)
                     if _wt is not None:
-                        self._trigger_team_victory(_wt)
+                        if _wt >= 0:
+                            self._trigger_team_victory(_wt)
+                        else:
+                            # v2.5.6：所有阵营都出局（计时耗尽）→ 挑战失败
+                            self._trigger_multiplayer_game_over(
+                                victory=False, title="挑战失败！时间耗尽")
             except Exception:
                 pass
 
