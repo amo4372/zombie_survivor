@@ -75,22 +75,31 @@ def load_vehicle_images():
                     surf = surf.convert_alpha()
                 except Exception:
                     pass  # 无显示环境（测试/无头）直接使用原 surface
-                # v2.5.0 修复底图黑背景：按四角背景色抠除同色区域（保留车身/轮胎细节）
+                # v2.6.1 修复底图黑背景：增强去黑逻辑（提高容差+确保alpha通道）
                 try:
+                    # 确保有 alpha 通道
+                    if surf.get_bitsize() < 32:
+                        surf = surf.convert_alpha()
                     _w, _h = surf.get_size()
-                    _corners = [surf.get_at((0, 0)), surf.get_at((_w - 1, 0)),
-                                surf.get_at((0, _h - 1)), surf.get_at((_w - 1, _h - 1))]
-                    _bgrs = [(c.r, c.g, c.b) for c in _corners]
-                    def _near_bg(c):
-                        return any(abs(c.r - br) <= 12 and abs(c.g - bg) <= 12 and abs(c.b - bb) <= 12
-                                   for br, bg, bb in _bgrs)
-                    _pa = pygame.PixelArray(surf)
-                    for _y in range(_h):
-                        for _x in range(_w):
-                            _c = _pa[_x, _y]
-                            if _c.a > 0 and _near_bg(_c):
-                                _pa[_x, _y] = (0, 0, 0, 0)
-                    del _pa
+                    # 采样更多点（四角+四边中点）
+                    _samples = [
+                        (0, 0), (_w - 1, 0), (0, _h - 1), (_w - 1, _h - 1),
+                        (_w // 2, 0), (_w // 2, _h - 1), (0, _h // 2), (_w - 1, _h // 2)
+                    ]
+                    _corners = [surf.get_at(pos) for pos in _samples if 0 <= pos[0] < _w and 0 <= pos[1] < _h]
+                    _bgrs = [(c.r, c.g, c.b) for c in _corners if c.a > 0]
+                    if _bgrs:
+                        def _near_bg(c):
+                            # 提高容差到 25，并特别处理深色背景
+                            return any(abs(c.r - br) <= 25 and abs(c.g - bg) <= 25 and abs(c.b - bb) <= 25
+                                       for br, bg, bb in _bgrs) or (c.r < 30 and c.g < 30 and c.b < 30)
+                        _pa = pygame.PixelArray(surf)
+                        for _y in range(_h):
+                            for _x in range(_w):
+                                _c = _pa[_x, _y]
+                                if _c.a > 0 and _near_bg(_c):
+                                    _pa[_x, _y] = (0, 0, 0, 0)
+                        del _pa
                 except Exception:
                     pass
                 _VEHICLE_IMAGES[vid] = surf

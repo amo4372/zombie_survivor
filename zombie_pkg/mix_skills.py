@@ -1427,12 +1427,16 @@ class SkillsMixin:
         if _left > 0:
             player.skill_cards = player.skill_tree.get_random_skill_cards(getattr(player, 'skill_slot_count', 3))
             player.pending_level_up = True
-            # v2.5.8 修复：连胜多级时重新显示技能卡选择器（确保 visible=True 接受输入）
+            # v2.6.1 修复：连升多级时重新调用 show 方法（确保卡片列表正确初始化）
             try:
                 if hasattr(self, 'skill_card_selector') and self.skill_card_selector:
-                    self.skill_card_selector.visible = True
-                    self.skill_card_selector.title = f"{player.label if hasattr(player, 'label') else 'P1'} 升级！选择你的强化"
-                    self.skill_card_selector.subtitle = f"等级 {player.level} → 选择技能卡"
+                    _tag = "P1" if player is self.player else ("P2" if player is getattr(self, 'player2', None) else "P1")
+                    _half = max(320, getattr(self, 'scaled_width', 1280) // 2)
+                    import pygame
+                    _region = pygame.Rect(0 if _tag == "P1" else getattr(self, 'scaled_width', 1280) - _half, 0, _half, getattr(self, 'scaled_height', 720))
+                    self.skill_card_selector.show(player.skill_cards, region=_region,
+                                                  title=f"{_tag} 升级！选择你的强化",
+                                                  subtitle=f"{_tag} 等级 {player.level} → 选择技能卡")
             except Exception:
                 pass
         else:
