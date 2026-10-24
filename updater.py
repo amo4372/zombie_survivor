@@ -198,7 +198,6 @@ def check_for_updates(timeout=10):
 
         # 如果release没有assets，尝试源码包
         if not download_url:
-            if not download_url:
             download_url = data.get("zipball_url")
 
         # v2.5.8：下载URL也走最快节点
