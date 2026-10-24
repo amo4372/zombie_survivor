@@ -72,8 +72,8 @@ def draw_teammate_arrow(surface, vw, vh, sx, sy, label, downed,
     # 朝向角
     ang = math.atan2(uy, ux)
     col = (220, 90, 80) if downed else (110, 220, 110)
-    # 箭头三角形（沿方向旋转）
-    r = max(8, int(12 * scale))
+    # 箭头三角形（沿方向旋转）v2.5.8 放大箭头便于定位
+    r = max(10, int(18 * scale))
     pts = [
         (px + int(math.cos(ang) * r), py + int(math.sin(ang) * r)),
         (px + int(math.cos(ang + 2.6) * r * 0.7), py + int(math.sin(ang + 2.6) * r * 0.7)),
@@ -142,7 +142,7 @@ def draw_enemy_player_indicators(renderer, game, viewports, vp):
                 # 探测脉冲内：近距离敌人显示方位 + 距离
                 _mx, _my = int(sx), int(sy)
                 if _in_view:
-                    _mr = max(6, int(7 * game.scale))
+                    _mr = max(8, int(10 * game.scale))
                     pygame.draw.polygon(renderer.screen, (255, 60, 60),
                                         [(_mx, _my - _mr), (_mx + _mr, _my), (_mx, _my + _mr), (_mx - _mr, _my)])
                     pygame.draw.polygon(renderer.screen, (255, 200, 200),
@@ -163,10 +163,11 @@ def draw_enemy_player_indicators(renderer, game, viewports, vp):
                 ey = max(16, min(sh - 16, cy + math.sin(ang) * (sh * 0.42)))
                 _a1 = ang + 2.6
                 _a2 = ang - 2.6
+                # v2.5.8 放大敌方箭头
                 pygame.draw.polygon(renderer.screen, (255, 60, 60), [
-                    (ex + math.cos(ang) * 12, ey + math.sin(ang) * 12),
-                    (ex + math.cos(_a1) * 8, ey + math.sin(_a1) * 8),
-                    (ex + math.cos(_a2) * 8, ey + math.sin(_a2) * 8)])
+                    (ex + math.cos(ang) * 18, ey + math.sin(ang) * 18),
+                    (ex + math.cos(_a1) * 12, ey + math.sin(_a1) * 12),
+                    (ex + math.cos(_a2) * 12, ey + math.sin(_a2) * 12)])
     except Exception:
         pass
 

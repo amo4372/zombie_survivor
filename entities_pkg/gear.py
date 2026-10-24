@@ -453,7 +453,18 @@ class RiotGear:
                 if d < best_d:
                     best_d = d
                     best = _pe
-        # 3) 特殊道具（宝箱/武器箱/加时道具等）
+        # v2.5.8 3) 同阵营存活玩家（可勾取救援/自拉）
+        if best is None and players_teammate:
+            for _pt in players_teammate:
+                if not getattr(_pt, 'alive', True):
+                    continue
+                if getattr(_pt, 'downed', False):
+                    continue
+                d = math.hypot(_pt.x - _ax, _pt.y - _ay)
+                if d < best_d:
+                    best_d = d
+                    best = _pt
+        # 4) 特殊道具（宝箱/武器箱/加时道具等）
         if best is None and items:
             for it in items:
                 if not getattr(it, "alive", False):
@@ -462,7 +473,7 @@ class RiotGear:
                 if d < best_d:
                     best_d = d
                     best = it
-        # 4) 圈内最近敌人（Boss 不可锁定）
+        # 5) 圈内最近敌人（Boss 不可锁定）
         if best is None:
             for e in enemies:
                 if not getattr(e, "alive", False):
@@ -477,7 +488,18 @@ class RiotGear:
         # （"直至极点自动锁定"——满蓄力即锁定最近的可锁定对象，无需手动对准）
         if best is None and self._grapple_aim_charge >= 0.95:
             full_r = self.grapple_lock_radius
-            if items:
+            # v2.5.8: 极点也搜索存活队友
+            if players_teammate:
+                for _pt in players_teammate:
+                    if not getattr(_pt, 'alive', True):
+                        continue
+                    if getattr(_pt, 'downed', False):
+                        continue
+                    d = math.hypot(_pt.x - _ax, _pt.y - _ay)
+                    if d < full_r:
+                        full_r = d
+                        best = _pt
+            if best is None and items:
                 for it in items:
                     if not getattr(it, "alive", False):
                         continue

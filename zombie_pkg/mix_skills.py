@@ -1378,7 +1378,9 @@ class SkillsMixin:
 
     def _select_skill_card(self, index):
         """选择技能卡（双人：作用于当前升级的玩家）"""
-        player = self.player2 if getattr(self, 'pending_upgrade_for', None) == "P2" and self.player2 else self.player
+        # v2.5.8 修复：与 _apply_skill_card 保持一致的玩家选择逻辑
+        _upw = getattr(self, '_upgrade_pause_player', None)
+        player = self.player2 if (_upw == "P2" or getattr(self, 'pending_upgrade_for', None) == "P2") and self.player2 else self.player
         if 0 <= index < len(player.skill_cards):
             skill = player.skill_cards[index]
             self._apply_skill_card(skill)
@@ -1419,12 +1421,20 @@ class SkillsMixin:
             self._check_combos()
         except Exception:
             pass
-        # v2.5.2 多级连升逐级弹卡：还有剩余级数则重新生成卡片再次触发选卡
+        # v2.5.2/2.5.8 多级连升逐级弹卡：还有剩余级数则重新生成卡片再次触发选卡
         _left = getattr(player, 'pending_levels', 0) - 1
         player.pending_levels = max(0, _left)
         if _left > 0:
             player.skill_cards = player.skill_tree.get_random_skill_cards(getattr(player, 'skill_slot_count', 3))
             player.pending_level_up = True
+            # v2.5.8 修复：连胜多级时重新显示技能卡选择器（确保 visible=True 接受输入）
+            try:
+                if hasattr(self, 'skill_card_selector') and self.skill_card_selector:
+                    self.skill_card_selector.visible = True
+                    self.skill_card_selector.title = f"{player.label if hasattr(player, 'label') else 'P1'} 升级！选择你的强化"
+                    self.skill_card_selector.subtitle = f"等级 {player.level} → 选择技能卡"
+            except Exception:
+                pass
         else:
             player.pending_level_up = False
             player.skill_cards = []
@@ -1440,6 +1450,8 @@ class SkillsMixin:
             _tag = "P1" if player is self.player else ("P2" if player is getattr(self, 'player2', None) else "P3")
             self._upgrade_pause_player = _tag
             player.upgrade_paused = True
+            # v2.5.8 修复：确保 pending_upgrade_for 同步更新（防止状态不一致）
+            self.pending_upgrade_for = _tag
             # v2.5.6：新一轮选卡重新计时（保护限时 + 超时自动选）
             player.upgrade_grace_timer = self.UPGRADE_GRACE_TIME
             self._upgrade_pause_timer = self.UPGRADE_AUTO_PICK_TIME

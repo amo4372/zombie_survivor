@@ -892,6 +892,7 @@ class PlayMixin:
                 enemies=self.game.enemies,
                 projectiles=getattr(self.game, 'projectiles', []),
                 viewport_x=viewport_x,
+                is_multiplayer=bool(_light_players),
             )
 
         # 绘制触控控件（v2.1.3 修复：同屏双人分屏由 _draw_hud_split/_draw_touch_controls_split
@@ -955,7 +956,8 @@ class PlayMixin:
                 self.game.weapon_wheel.draw(self.screen, self.game.font, self.game.font_large, scale)
 
         # ==========键鼠长按G瞄准预览（复用SkillCaster原生绘制逻辑） ==========
-        # v2.2.7：aim_owner 区分视口——P1 视口画 P1 预瞄，P2 视口画 P2 预瞄（修复"P2预瞄画在P1上"）
+        # v2.2.7/2.5.8：aim_owner 区分视口——P1 视口画 P1 预瞄，P2 视口画 P2 预瞄
+        # v2.5.8 修复：严格隔离，P2 预瞄线绝不出现在 P1 视口中
         _g = self.game
         _is_p2 = aim_owner == "P2"
         if _is_p2 and _g.p2_controls:
@@ -966,6 +968,7 @@ class PlayMixin:
             if _tc2 is not None and getattr(_tc2, "is_aiming", False):
                 self._draw_throwable_preview(_tc2, _g.scale)
         elif not _is_p2:
+            # v2.5.8 确保只有 P1 的预瞄在此绘制（P2 的预瞄由 aim_owner="P2" 视口负责）
             if _g.config.control_mode == ControlMode.KEYBOARD and _g.skill_caster.is_aiming:
                 _g.skill_caster._draw_aim_preview(self.screen, _g.selected_skill, _g.scale)
             # ========== 投掷物瞄准预览（键鼠长按Q/触控长按投掷均显示） ==========

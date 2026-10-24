@@ -831,8 +831,8 @@ class GameCore:
     # ==================== v2.5.6 PvP 主动探测（防位置持续暴露）====================
     PVP_SCAN_DURATION = 3.0        # 单次扫描持续时间（秒）
     PVP_SCAN_RADIUS = 500.0        # 扫描半径（世界单位）
-    PVP_SCAN_COOLDOWN = 20.0       # 手动扫描冷却（秒）
-    PVP_SCAN_AUTO_INTERVAL = 30.0  # 自动脉冲间隔（秒）
+    PVP_SCAN_COOLDOWN = 10.0       # 手动扫描冷却（秒）v2.5.8 缩短冷却
+    PVP_SCAN_AUTO_INTERVAL = 15.0  # 自动脉冲间隔（秒）v2.5.8 缩短检测间隔
 
     def _trigger_pvp_scan(self, auto=False):
         """v2.5.6 触发一次 PvP 主动探测（脉冲式暴露敌对玩家位置，非持续暴露）"""
@@ -1732,6 +1732,24 @@ class GameCore:
         except Exception:
             return []
 
+    def _alive_teammates_of(self, player):
+        """同阵营存活玩家（不含自身，可用于钩爪勾取救援）"""
+        try:
+            _res = []
+            _t = getattr(player, 'team_id', 0)
+            for _p in self._all_players():
+                if _p is player or not getattr(_p, 'alive', True):
+                    continue
+                if getattr(_p, 'team_id', 1) != _t:
+                    continue
+                # 载具形态不可被钩爪勾取
+                if getattr(_p, 'vehicle', None) is not None or getattr(_p, 'riding_vehicle', None) is not None:
+                    continue
+                _res.append(_p)
+            return _res
+        except Exception:
+            return []
+
     # ==================== v2.5.1 阵营载具乘坐 ====================
     def _find_board_candidate(self, player):
         """找玩家附近（<140px）同阵营存活载具：合作模式全队可坐，PvP 仅同阵营"""
@@ -1966,7 +1984,7 @@ class GameCore:
                 self._pvp_reveal_cycle += dt
                 _c = self._pvp_reveal_cycle
                 # 开局 0-3s 全显；之后 45s 周期内最后 3s 闪烁（v2.5.2 缩短开局全显防"一直显示"观感）
-                self.pvp_reveal_active = _c <= 3.0 or (_c % 45.0) > 42.0
+                self.pvp_reveal_active = _c <= 3.0 or (_c % 20.0) > 17.0  # v2.5.8 缩短周期
             else:
                 self.pvp_reveal_active = False
         except Exception:

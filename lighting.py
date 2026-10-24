@@ -213,7 +213,7 @@ class LightingSystem:
         """设置手电筒朝向（弧度）"""
         self._flashlight_angle = angle
 
-    def render(self, screen, camera_x, camera_y, scale, player=None, enemies=None, projectiles=None, particles=None, viewport_x=0, players=None):
+    def render(self, screen, camera_x, camera_y, scale, player=None, enemies=None, projectiles=None, particles=None, viewport_x=0, players=None, is_multiplayer=False):
         """渲染光照层到屏幕
 
         Args:
@@ -254,8 +254,14 @@ class LightingSystem:
                 continue
             px = int((_pl.x - camera_x) * scale / rs) - (viewport_x // rs)
             py = int((_pl.y - camera_y) * scale / rs)
-            player_radius = max(8, int(getattr(self, 'player_light_radius', 280) * scale / rs))
-            player_intensity = getattr(self, 'player_light_intensity', 1.3)
+            # v2.5.8：多人模式下增大光源半径和强度防止画面过暗
+            _plr = getattr(self, 'player_light_radius', 280)
+            _pli = getattr(self, 'player_light_intensity', 1.3)
+            if is_multiplayer:
+                _plr = int(_plr * 1.4)
+                _pli = min(2.5, _pli * 1.3)
+            player_radius = max(8, int(_plr * scale / rs))
+            player_intensity = _pli
             if _in_view(px, py, player_radius):
                 gradient = self._get_gradient(player_radius, (255, 245, 210))
                 if player_intensity > 1.0:
@@ -370,7 +376,11 @@ class LightingSystem:
                 self._gl = None  # 永久回退，避免每帧重试的开销
 
         # —— CPU 合成路径（GPU 不可用时的回退）——
-        self._dark_surface.fill((0, 0, 0, self.ambient_darkness))
+        # v2.5.8：多人模式下降低黑暗度防止画面过黑（多人有多个光源但分屏视口更小）
+        _darkness = self.ambient_darkness
+        if is_multiplayer:
+            _darkness = max(40, int(_darkness * 0.55))  # 多人模式减少约45%黑暗
+        self._dark_surface.fill((0, 0, 0, _darkness))
         # 用光源表面"挖洞"（从黑暗中减去光）
         self._dark_surface.blit(self._light_surface, (0, 0), special_flags=pygame.BLEND_RGBA_SUB)
 

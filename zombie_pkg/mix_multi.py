@@ -811,7 +811,7 @@ class MultiplayerMixin:
                 _dy = math.sin(angle)
                 best = None
                 best_proj = actual_dist
-                # v2.5.5 P2 短按勾取同阵营倒地队友（救援拉回，优先级最高）
+                # v2.5.8 修复：P2 短按勾取同阵营倒地队友（救援拉回，优先级最高）
                 try:
                     for _pd in self._downed_teammates_of(p2):
                         _ex = _pd.x - p2.x
@@ -823,6 +823,23 @@ class MultiplayerMixin:
                         _py = _ey - _pr * _dy
                         if math.hypot(_px, _py) < 30 + 26 and _pr < best_proj:
                             best = _pd
+                            best_proj = _pr
+                except Exception:
+                    pass
+                # v2.5.8 修复：P2 短按勾取存活同阵营队友（含P1，支持救援拉回/自拉）
+                try:
+                    for _pa in self._alive_teammates_of(p2):
+                        if getattr(_pa, 'downed', False):
+                            continue  # 倒地已由上面处理
+                        _ex = _pa.x - p2.x
+                        _ey = _pa.y - p2.y
+                        _pr = _ex * _dx + _ey * _dy
+                        if _pr < 0 or _pr > actual_dist:
+                            continue
+                        _px = _ex - _pr * _dx
+                        _py = _ey - _pr * _dy
+                        if math.hypot(_px, _py) < 30 + 26 and _pr < best_proj:
+                            best = _pa
                             best_proj = _pr
                 except Exception:
                     pass

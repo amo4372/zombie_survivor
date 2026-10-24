@@ -16,6 +16,7 @@
   F10 切换游戏速度（0.5x / 1x / 2x / 4x）
   F11 在鼠标位置生成 10 只僵尸
   F12 传送到鼠标位置
+  F13 禁用僵尸刷新（v2.5.8 新增）
   N   穿墙/自由移动（Noclip）
 
 注意：此 mod 仅用于开发调试，正式发布时请移除或禁用。
@@ -27,7 +28,7 @@ import random
 MOD_NAME = "开发者模式"
 MOD_VERSION = "1.0.0"
 MOD_AUTHOR = "Developer"
-MOD_DESCRIPTION = "内置调试工具：无敌、一击必杀、无冷却、生成怪物、传送、调速等。按 F1-F12 使用。"
+MOD_DESCRIPTION = "内置调试工具：无敌、一击必杀、无冷却、生成怪物、传送、调速、禁用僵尸刷新等。按 F1-F13 使用。"
 
 # ========== 状态 ==========
 _state = {
@@ -37,6 +38,7 @@ _state = {
     "debug_hud": True,       # 默认开启调试面板
     "noclip": False,
     "time_scale_index": 1,   # 0=0.5x, 1=1x, 2=2x, 3=4x
+    "disable_zombie_spawn": False,  # v2.5.8: 禁用僵尸刷新
     "game_ref": None,
     "fps_frames": 0,
     "fps_time": 0,
@@ -82,6 +84,7 @@ def on_game_start(game):
     _state["one_hit_kill"] = False
     _state["no_cooldown"] = False
     _state["noclip"] = False
+    _state["disable_zombie_spawn"] = False  # v2.5.8
     _state["time_scale_index"] = 1
     print("[DevMode] 新游戏开始，调试状态已重置")
 
@@ -124,6 +127,16 @@ def on_game_tick(game, dt):
             game.player.noclip = False
         except Exception:
             pass
+
+    # v2.5.8: 禁用僵尸刷新 - 通过设置世界刷新生效为False实现
+    if _state["disable_zombie_spawn"] and hasattr(game, 'world') and game.world:
+        try:
+            game.world.zombie_spawn_enabled = False
+        except Exception:
+            try:
+                game.world.spawn_enabled = False
+            except Exception:
+                pass
 
 
 def on_keydown(key):
@@ -214,6 +227,12 @@ def on_keydown(key):
         _notify(game, "已传送", (150, 200, 255))
         return True
 
+    # v2.5.8 禁用僵尸刷新
+    elif key == pygame.K_F13:
+        on = _toggle("disable_zombie_spawn")
+        _notify(game, f"禁用僵尸刷新: {'开' if on else '关'}", (255, 100, 255))
+        return True
+
     return False
 
 
@@ -299,6 +318,7 @@ def on_render_hud(screen, game):
     lines.append(f"F3无CD: {'ON' if _state['no_cooldown'] else 'off'}")
     lines.append(f"N穿墙: {'ON' if _state['noclip'] else 'off'}")
     lines.append(f"F10速度: {_time_scales[_state['time_scale_index']]}x")
+    lines.append(f"F13禁刷: {'ON' if _state['disable_zombie_spawn'] else 'off'}")
 
     # 渲染
     try:

@@ -29,6 +29,38 @@ GH_MIRRORS = [
     "https://mirror.ghproxy.com/",
     "https://github.moeyy.xyz/",
 ]
+# v2.5.8：自动测速选最快节点
+def _ping_mirror(mirror_url, timeout=3.0):
+    """ping 单个镜像节点，返回延迟秒数；失败返回 timeout+1"""
+    import socket
+    try:
+        # 从 URL 提取主机名
+        host = mirror_url.replace("https://", "").replace("http://", "").split("/")[0]
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(timeout)
+        start = time.time()
+        sock.connect((host, 443))
+        sock.close()
+        return time.time() - start
+    except Exception:
+        return timeout + 1.0
+
+
+def _select_fastest_mirror():
+    """测速所有镜像节点，返回最快的节点 URL 和延迟
+    v2.5.8：每次更新时自动测速，选择延迟最低的节点"""
+    global UPDATE_STATE
+    fastest = None
+    fastest_latency = float("inf")
+    for mirror in GH_MIRRORS:
+        latency = _ping_mirror(mirror)
+        if latency < fastest_latency:
+            fastest_latency = latency
+            fastest = mirror
+    UPDATE_STATE["mirror"] = fastest or GH_PROXY
+    UPDATE_STATE["mirror_latency"] = fastest_latency
+    print(f"[Updater] 最快节点: {fastest} (延迟 {fastest_latency:.2f}s)")
+    return fastest or GH_PROXY
 VERSION_FILE = "version.txt"
 _UPDATER_DIR = os.path.dirname(os.path.abspath(__file__))
 UPDATE_CACHE_DIR = os.path.join(_UPDATER_DIR, "_update_cache")
@@ -97,8 +129,10 @@ def is_newer_version(latest, current):
     return _parse_version(latest) > _parse_version(current)
 
 
-def _gh_proxy_url(url):
-    """给所有GitHub相关URL加gh-proxy前缀（统一代理）"""
+def _gh_proxy_url(url, mirror=None):
+    """给所有GitHub相关URL加gh-proxy前缀（统一代理）
+    v2.5.8: 支持指定镜像节点"""
+    _mirror = mirror or GH_PROXY
     github_domains = [
         "https://github.com",
         "https://api.github.com",
@@ -112,7 +146,7 @@ def _gh_proxy_url(url):
     ]
     for domain in github_domains:
         if url.startswith(domain):
-            return GH_PROXY + url
+            return _mirror + url
     return url
 
 
@@ -126,10 +160,12 @@ def check_for_updates(timeout=10):
     UPDATE_STATE["error"] = None
 
     try:
+        # v2.5.8：自动测速选最快节点
+        _selected_mirror = _select_fastest_mirror()
         # GitHub API 获取最新release
         api_url = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/releases/latest"
-        # API也走代理
-        api_url_proxied = _gh_proxy_url(api_url)
+        # API也走代理（使用测速选中的节点）
+        api_url_proxied = _gh_proxy_url(api_url, mirror=_selected_mirror)
 
         req = urllib.request.Request(api_url_proxied, headers={
             "User-Agent": "ZombieSurvivor-Updater/1.0",
@@ -149,20 +185,25 @@ def check_for_updates(timeout=10):
         for asset in assets:
             name = asset.get("name", "").lower()
             if name.endswith('.zip') and ('zombie' in name or 'survivor' in name or 'game' in name or 'update' in name):
-                download_url = asset.get("browser_download_url")
+                download_url = _gh_proxy_url(asset.get("browser_download_url"), mirror=UPDATE_STATE.get("mirror"))
                 _asset_size = int(asset.get("size", 0) or 0)
                 break
         # 如果没找到特定名称的，取第一个zip
         if not download_url:
             for asset in assets:
                 if asset.get("name", "").lower().endswith('.zip'):
-                    download_url = asset.get("browser_download_url")
+                    download_url = _gh_proxy_url(asset.get("browser_download_url"), mirror=UPDATE_STATE.get("mirror"))
                     _asset_size = int(asset.get("size", 0) or 0)
                     break
 
         # 如果release没有assets，尝试源码包
         if not download_url:
+            if not download_url:
             download_url = data.get("zipball_url")
+
+        # v2.5.8：下载URL也走最快节点
+        if download_url:
+            download_url = _gh_proxy_url(download_url, mirror=UPDATE_STATE.get("mirror"))
 
         if not download_url:
             UPDATE_STATE["error"] = "未找到更新包"
