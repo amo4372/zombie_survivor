@@ -43,18 +43,24 @@ def git(*args):
 
 
 def main():
-    base = sys.argv[1] if len(sys.argv) > 1 else None
+    # argv[1] = 本地 diff 基准（默认 HEAD^）；远端 base 由 API 查
+    local_base = sys.argv[1] if len(sys.argv) > 1 else "HEAD^"
     ref = sys.argv[2] if len(sys.argv) > 2 else "HEAD"
-    if not base:
-        base = api(f"/repos/{REPO}/git/ref/heads/main")["object"]["sha"]
-    print("远端 base:", base)
+
+    # 远端 main 的 commit（作为新 commit 的 parent）+ tree（作为 base_tree）
+    _ref = api(f"/repos/{REPO}/git/ref/heads/main")
+    base = _ref["object"]["sha"]
+    _c = api(f"/repos/{REPO}/git/commits/{base}")
+    base_tree = _c["tree"]["sha"]
+    print("远端 base:", base, "tree:", base_tree)
 
     head_sha = git("rev-parse", ref).strip()
     msg = git("log", "-1", "--format=%B", head_sha).strip()
-    parent = git("rev-parse", head_sha + "^").strip()
+    local_base_sha = git("rev-parse", local_base).strip()
+    print("本地 diff 基准:", local_base_sha, "→", head_sha)
 
-    # 变更文件清单（相对 base）
-    diff = git("diff", "--name-status", base, head_sha).strip().splitlines()
+    # 变更文件清单（相对本地基准）
+    diff = git("diff", "--name-status", local_base_sha, head_sha).strip().splitlines()
     entries = []
     for line in diff:
         parts = line.split("\t")
@@ -67,12 +73,12 @@ def main():
         entries.append({"path": path, "mode": mode, "type": "blob", "sha": sha})
     print(f"待推送文件: {len(entries)}")
 
-    # 1) 上传 blob
+    # 1) 上传 blob（内容取自 git 对象库中的目标提交，避免工作区被改动导致 sha 不一致）
     for e in entries:
         if e["sha"] is None:
             continue
-        with open(os.path.join("/workspace/zombie_survivor", e["path"]), "rb") as f:
-            content = f.read()
+        content = subprocess.check_output(
+            ["git", "-C", "/workspace/zombie_survivor", "cat-file", "blob", e["sha"]])
         b64 = base64.b64encode(content).decode()
         res = api(f"/repos/{REPO}/git/blobs", "POST", {"content": b64, "encoding": "base64"})
         assert res["sha"] == e["sha"], f"blob sha 不一致: {e['path']} {res['sha']} != {e['sha']}"
@@ -80,7 +86,7 @@ def main():
 
     # 2) 创建 tree
     tree = api(f"/repos/{REPO}/git/trees", "POST",
-               {"base_tree": base, "tree": entries})
+               {"base_tree": base_tree, "tree": entries})
     print("[2/4] tree:", tree["sha"])
 
     # 3) 创建 commit
