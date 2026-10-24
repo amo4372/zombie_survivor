@@ -901,6 +901,9 @@ class GameCore:
             self._dev_reset_states()
         except Exception:
             pass
+        # v2.5.10：非多人模式时强制关闭 PvP 开关（防止上局 PvP 残留导致单人/非PvP模式出现毒圈/阵营）
+        if self.multiplayer_mode not in ("same_screen", "network"):
+            self.config.pvp_enabled = False
         # v2.2.11 逐玩家房间配置：先把 per-player 武器/角色写入选择槽
         # （必须在 selected_character/玩家创建之前生效）
         try:

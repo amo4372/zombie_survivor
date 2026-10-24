@@ -519,9 +519,10 @@ class MultiplayerMixin:
             self._throw_p2()
         # ===== 拾取 =====
         self._pickup_for_player(p2)
-        # ===== v2.5.7 P2 技能按钮 CD 显示（此前从未调用 set_cooldown → 按钮不显示冷却） =====
+        # ===== v2.5.10 P2 按钮 CD 遮罩完整同步（射击换弹/武器冷却/技能CD/投掷CD） =====
         try:
             if self.config.control_mode == ControlMode.TOUCH and self.p2_controls:
+                # P2 技能按钮 CD
                 _c2 = self.p2_controls.get("skill_caster")
                 if _c2 is not None:
                     _sel2 = self.p2_selected_skill
@@ -529,6 +530,30 @@ class MultiplayerMixin:
                         _c2.set_cooldown(p2.active_skills[_sel2])
                     else:
                         _c2.set_cooldown(0)
+                # P2 射击按钮：换弹遮罩 + 武器发射冷却遮罩（与 P1 一致）
+                _p2_shoot_btn = self.p2_controls.get("shoot")
+                _p2_weapon = p2.get_current_weapon()
+                if _p2_shoot_btn and _p2_weapon:
+                    if _p2_weapon.is_reloading:
+                        _p2_shoot_btn.is_reloading = True
+                        _p2_shoot_btn.reload_progress = 1.0 - (_p2_weapon.reload_timer / _p2_weapon.reload_time) if _p2_weapon.reload_time > 0 else 0
+                    else:
+                        _p2_shoot_btn.is_reloading = False
+                        # 武器自身发射冷却也显示
+                        if hasattr(_p2_weapon, 'cooldown_timer') and _p2_weapon.cooldown_timer > 0 and _p2_weapon.fire_rate > 0:
+                            _p2_shoot_btn.cooldown = _p2_weapon.cooldown_timer
+                            _p2_shoot_btn.max_cooldown = _p2_weapon.fire_rate
+                        else:
+                            _p2_shoot_btn.cooldown = 0
+                # P2 投掷按钮 CD
+                _p2_throw_btn = self.p2_controls.get("throwable_caster")
+                if _p2_throw_btn is not None:
+                    _p2_throw_cd = getattr(p2, 'throwable_cooldown', 0)
+                    _p2_throw_max = getattr(p2, 'throwable_max_cooldown', 0)
+                    if _p2_throw_cd > 0 and _p2_throw_max > 0:
+                        _p2_throw_btn.set_cooldown(_p2_throw_cd)
+                    else:
+                        _p2_throw_btn.set_cooldown(0)
         except Exception:
             pass
         # v2.2.7：P2 死神镰刀换弹期间同样触发圆形横扫（与 P1 一致）

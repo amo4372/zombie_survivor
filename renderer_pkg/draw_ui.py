@@ -2036,6 +2036,8 @@ class UiMixin:
             if btn.update(mouse_pos, mouse_pressed, self.game.touch_events, scale):
                 if i == 0:
                     self.game.multiplayer_mode = None
+                    # v2.5.10：单人模式强制关闭 PvP 开关（防止上局 PvP 残留导致单人模式出现毒圈/阵营）
+                    self.game.config.pvp_enabled = False
                     self.game.state = GameState.MODE_SELECT
                 elif i == 1:
                     self.game.state = GameState.MULTIPLAYER_SELECT
