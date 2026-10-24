@@ -229,11 +229,11 @@ class GameWorld:
         self.map_config = MAP_CONFIGS.get(map_type, MAP_CONFIGS[MapType.SCHOOL])
         # 地图专属地面瓷砖颜色
         self.ground_colors = {
-            MapType.SCHOOL: ((95, 90, 82), (108, 102, 92)),       # 校园 - 灰黄地砖（v2.5.10 提亮）
-            MapType.STREET: ((82, 85, 92), (95, 97, 105)),         # 街区 - 灰沥青（v2.5.10 提亮）
-            MapType.DOWNTOWN: ((105, 65, 48), (118, 75, 55)),      # 市中心 - 火光橙红（v2.5.10 提亮）
-            MapType.SUBURB: ((72, 95, 68), (85, 108, 80)),         # 郊区 - 墨绿草地（v2.5.10 提亮）
-            MapType.NUCLEAR_PLANT: ((65, 62, 100), (78, 75, 115)), # 核电站 - 深紫辐射（v2.5.10 提亮）
+            MapType.SCHOOL: ((55, 52, 48), (62, 58, 53)),       # 校园 - 灰黄地砖
+            MapType.STREET: ((48, 50, 55), (55, 57, 62)),         # 街区 - 灰沥青
+            MapType.DOWNTOWN: ((60, 35, 25), (70, 42, 30)),       # 市中心 - 火光橙红
+            MapType.SUBURB: ((40, 55, 38), (48, 62, 45)),         # 郊区 - 墨绿草地
+            MapType.NUCLEAR_PLANT: ((35, 35, 60), (42, 42, 70)),  # 核电站 - 深紫辐射
         }
         self.tile_color_a, self.tile_color_b = self.ground_colors.get(map_type, ((50, 48, 45), (58, 55, 50)))
         self.obstacles = []

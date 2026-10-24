@@ -795,6 +795,7 @@ class InputMixin:
         specs = [
             (f"无敌:{'开' if st.god else '关'}", (60, 60, 220), "god"),
             (f"抗尸:{'开' if st.zombie_immune else '关'}", (150, 95, 40), "zombie_immune"),
+            (f"禁刷怪:{'开' if st.disable_zombie_spawn else '关'}", (120, 100, 140), "disable_spawn"),
             (f"倍率:x{self.dev_time_scale}", (40, 140, 80), "time_scale"),
             (f"TP:{st.tp_target_label}", (70, 60, 160), "tp_target"),
             ("立即传送", (40, 120, 150), "tp_now"),
@@ -890,6 +891,9 @@ class InputMixin:
             st.zombie_immune = not st.zombie_immune
             st.apply_to(player)
             self._dev_notify(idx, f"{st.label} 抗尸:{'开' if st.zombie_immune else '关'}", (255, 170, 90))
+        elif action == "disable_spawn":
+            st.disable_zombie_spawn = not st.disable_zombie_spawn
+            self._dev_notify(idx, f"{st.label} 禁刷怪:{'开' if st.disable_zombie_spawn else '关'}", (180, 140, 200))
         elif action == "time_scale":
             self.dev_time_scale = {1.0: 2.0, 2.0: 4.0, 4.0: 0.5, 0.5: 1.0}.get(self.dev_time_scale, 1.0)
         elif action == "tp_target":

@@ -18,7 +18,7 @@ class DevPlayerState:
     """单个玩家的开发者状态（v2.5.8）"""
 
     __slots__ = ("index", "label", "god", "zombie_immune", "panel_open",
-                 "buttons", "tp_target")
+                 "buttons", "tp_target", "disable_zombie_spawn")
 
     def __init__(self, index=1, label="P1"):
         self.index = index
@@ -28,6 +28,7 @@ class DevPlayerState:
         self.panel_open = False     # 该玩家自己的面板是否打开
         self.buttons = []           # 该玩家面板按钮（互不共享）
         self.tp_target = 0          # 传送目标玩家序号（0=未选择）
+        self.disable_zombie_spawn = False  # v2.6.0：禁用僵尸刷新
 
     # ---------- 显示 ----------
     @property
@@ -61,6 +62,7 @@ class DevPlayerState:
         self.zombie_immune = False
         self.panel_open = False
         self.tp_target = 0
+        self.disable_zombie_spawn = False
         self.buttons = []
 
 

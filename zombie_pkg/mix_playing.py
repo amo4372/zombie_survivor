@@ -1162,9 +1162,19 @@ class PlayingMixin:
             if self.aim_button.is_shooting and self.player.riot_gear.can_bash():
                 self._perform_bash(self.player.facing_angle)
 
+        # v2.6.0：开发者面板禁用僵尸刷新（任一玩家开启则全局禁用）
+        _spawn_disabled = False
+        try:
+            for _idx in (1, 2, 3, 4):
+                _dst = self._dev_state(_idx)
+                if getattr(_dst, 'disable_zombie_spawn', False):
+                    _spawn_disabled = True
+                    break
+        except Exception:
+            pass
         # 生成敌人 - 尸潮期间大量刷新，非尸潮期间少量刷新
         # 双人/联机：怪物按玩家人数调整难度（上限×1.8 + 额外刷新频率）
-        spawn_type = self.horde_manager.should_spawn()
+        spawn_type = self.horde_manager.should_spawn() if not _spawn_disabled else None
         mp_mult = 1.8 if self.is_multiplayer_active() else 1.0
         max_enemies = 80 if self.horde_manager.is_horde_active() else 25
         if not hasattr(self, 'time_slow_active') or not self.time_slow_active:
@@ -2389,9 +2399,17 @@ class PlayingMixin:
         if self.is_multiplayer_active():
             # 双人/联机：救援系统——全部倒地才游戏结束
             if self._update_rescue(dt):
-                self._trigger_multiplayer_game_over()
+                # v2.6.0：争分夺秒模式下全部倒地应先结算再结束（而非直接游戏结束）
+                if self.config.game_mode == GameMode.TIMED:
+                    self._settle_race_auto()
+                else:
+                    self._trigger_multiplayer_game_over()
         elif self.player.hp <= 0:
-            self._trigger_multiplayer_game_over()
+            # v2.6.0：单人争分夺秒模式下死亡也应先结算
+            if self.config.game_mode == GameMode.TIMED:
+                self._settle_race_auto()
+            else:
+                self._trigger_multiplayer_game_over()
         # v2.2.0 争分夺秒：倒计时耗尽 → 挑战结算（非死亡）
         if self.config.game_mode == GameMode.TIMED and self.state == GameState.PLAYING:
             try:

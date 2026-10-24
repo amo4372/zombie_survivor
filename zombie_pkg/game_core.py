@@ -983,6 +983,14 @@ class GameCore:
             _sx, _sy = 0, 0
             if getattr(self.world, 'limited', False):
                 _sx, _sy = 400.0, float(self.world.map_size - 400)
+            # v2.6.0：PvP 模式下出生点必须在毒圈内（毒圈中心是地图中心，初始半径 6200）
+            if getattr(self.config, 'pvp_enabled', False) and getattr(self, 'pvp_zone', None):
+                _zone_cx = self.pvp_zone.get('cx', 6000.0)
+                _zone_cy = self.pvp_zone.get('cy', 6000.0)
+                _zone_r = self.pvp_zone.get('r', 6200.0)
+                # 出生点设为毒圈中心偏左下（距离中心 1000，确保在圈内）
+                _sx = _zone_cx - 1000.0
+                _sy = _zone_cy + 1000.0
             self.player = Player(_sx, _sy, start_weapon=self.selected_weapon, start_weapon_level=self.selected_weapon_level)
             # v2.0.14：加载 .zmap 时玩家出生对齐地图出生点（默认 0,0）
             _psp = getattr(self.world, "spawn_points", {}).get("player", [])
