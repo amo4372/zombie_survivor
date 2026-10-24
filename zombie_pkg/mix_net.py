@@ -202,6 +202,15 @@ class NetMixin:
         if not self.net_client:
             self.state = GameState.NET_MULTIPLAYER
             return
+        # v2.5.8：网络客户端的开发者面板交互（本地 P1）
+        try:
+            if self.dev_mode:
+                _any_open = any(st.panel_open for st in (getattr(self, 'dev_states', None) or {}).values())
+                if _any_open:
+                    self._update_dev_panel(pygame.mouse.get_pos(), pygame.mouse.get_pressed(),
+                                           self.touch_events, self.scale)
+        except Exception:
+            pass
         # v2.2.9 应用主机下发的房间配置（幂等，welcome 到达后生效一次）
         try:
             _rc = getattr(self.net_client, 'room_cfg', None)

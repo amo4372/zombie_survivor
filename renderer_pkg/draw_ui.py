@@ -3074,6 +3074,12 @@ class UiMixin:
             # 非开发者模式下隐藏"开发者面板"按钮
             if btn.text == "开发者面板" and not getattr(self.game, 'dev_mode', False):
                 continue
+            # v2.5.8：P2 开发者面板按钮——仅多人模式（存在 P2）时显示
+            if btn.text == "P2开发者面板":
+                if not getattr(self.game, 'dev_mode', False):
+                    continue
+                if getattr(self.game, "player2", None) is None:
+                    continue
             if btn.update(mouse_pos, mouse_pressed, self.game.touch_events, self.game.scale):
                 self.game.logger.info(f"暂停按钮 '{btn.text}' 被点击")
                 if btn.text == "继续":
@@ -3093,10 +3099,19 @@ class UiMixin:
                     self.game.settings_from_pause = True
                     self.game.state = GameState.SETTINGS
                 elif btn.text == "开发者面板":
-                    # 开发者模式下面板开关（局内调试面板）
+                    # 开发者模式下面板开关（P1 面板）
                     self.game.dev_panel_open = not getattr(self.game, 'dev_panel_open', False)
                     if hasattr(self.game, '_rebuild_dev_buttons'):
-                        self.game._rebuild_dev_buttons()
+                        self.game._rebuild_dev_buttons(1)
+                    self.game.state = GameState.PLAYING
+                elif btn.text == "P2开发者面板":
+                    # v2.5.8：P2 独立面板开关
+                    try:
+                        _st = self.game._dev_state(2)
+                        _st.panel_open = not _st.panel_open
+                        self.game._rebuild_dev_buttons(2)
+                    except Exception:
+                        pass
                     self.game.state = GameState.PLAYING
                 elif btn.text == "返回菜单":
                     self.game.state = GameState.MENU

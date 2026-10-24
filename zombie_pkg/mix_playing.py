@@ -1955,7 +1955,7 @@ class PlayingMixin:
                         if _d < proj.explosion_radius:
                             _dmg = proj.damage * (1 - _d / proj.explosion_radius)
                             _pvp_d = self._pvp_dmg_to_player(_dmg, proj)
-                            _pp.take_damage(_pvp_d, damage_type='ranged', attack_x=proj.x, attack_y=proj.y, bypass_dodge=True)
+                            _pp.take_damage(_pvp_d, damage_type='ranged', attack_x=proj.x, attack_y=proj.y, bypass_dodge=True, source='player')
                             self.damage_numbers.append(DamageNumber(_pp.x, _pp.y, _pvp_d, color=RED))
 
             if not proj.alive:
@@ -1974,7 +1974,7 @@ class PlayingMixin:
                         proj.alive = False
                         proj.hits.append(_pp)
                         _pvp_d = self._pvp_dmg_to_player(proj.damage, proj)
-                        _pp.take_damage(_pvp_d, damage_type='ranged', attack_x=proj.x, attack_y=proj.y, bypass_dodge=True)
+                        _pp.take_damage(_pvp_d, damage_type='ranged', attack_x=proj.x, attack_y=proj.y, bypass_dodge=True, source='player')
                         self.damage_numbers.append(DamageNumber(_pp.x, _pp.y, _pvp_d, color=RED))
                         self._on_player_hit_by_projectile(_pp, proj)
 
@@ -2026,7 +2026,7 @@ class PlayingMixin:
                             _cly = proj.y + _t2 * _lldy
                             if math.hypot(_pp.x - _clx, _pp.y - _cly) < getattr(_pp, 'size', 20) + proj.laser_width:
                                 _pvp_d = self._pvp_dmg_to_player(proj.damage, proj)
-                                _pp.take_damage(_pvp_d, damage_type='ranged', attack_x=proj.x, attack_y=proj.y, bypass_dodge=True)
+                                _pp.take_damage(_pvp_d, damage_type='ranged', attack_x=proj.x, attack_y=proj.y, bypass_dodge=True, source='player')
                                 self.damage_numbers.append(DamageNumber(_pp.x, _pp.y, _pvp_d, color=RED))
                 continue
 

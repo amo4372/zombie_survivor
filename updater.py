@@ -21,6 +21,14 @@ from pathlib import Path
 GITHUB_USER = "amo4372"
 GITHUB_REPO = "zombie_survivor"  # 仓库名，可根据实际修改
 GH_PROXY = "https://gh-proxy.com/"
+# v2.5.8：备用镜像节点（国内网络直连 GitHub 慢/断时自动测速切换）
+GH_MIRRORS = [
+    "https://ghfast.top/",
+    "https://gh-proxy.com/",
+    "https://gh-proxy.net/",
+    "https://mirror.ghproxy.com/",
+    "https://github.moeyy.xyz/",
+]
 VERSION_FILE = "version.txt"
 _UPDATER_DIR = os.path.dirname(os.path.abspath(__file__))
 UPDATE_CACHE_DIR = os.path.join(_UPDATER_DIR, "_update_cache")
@@ -339,13 +347,16 @@ def _zip_is_complete(zip_path, expect_version=None):
 
 
 def _mirror_candidates(url):
-    """v2.2.13 生成候选下载节点：原始 GitHub + 各代理前缀（去重）"""
+    """v2.5.8 生成候选下载节点：原始 GitHub + 全部代理前缀（去重）
+
+    网络不好（直连 GitHub 很慢/超时）时，下载会自动改走镜像节点，
+    测速后选最快的那个；全部失败则回退原始 URL。
+    """
     out = [url]
     prox = _gh_proxy_url(url)
-    if prox != url:
+    if prox != url and prox not in out:
         out.append(prox)
-    # 备选加速节点（失败自动跳过，测速后选最快）
-    for _p in ("https://ghfast.top/", "https://gh-proxy.com/", "https://mirror.ghproxy.com/"):
+    for _p in GH_MIRRORS:
         _c = _p + url if not url.startswith(_p) else url
         if _c not in out:
             out.append(_c)
@@ -405,11 +416,16 @@ def download_update(download_url, progress_callback=None, version=None):
             UPDATE_STATE["downloaded_bytes"] = UPDATE_STATE["total_bytes"]
             return output_path
 
-        # 2) v2.2.13 断点续传前先测速选最快节点（原始 GitHub / 代理镜像）
+        # 2) v2.5.8 节点容错：测速选最快节点，失败自动换下一个镜像重试
+        #    （国内网络直连 GitHub 常超时/龟速 → 依次尝试 ghfast/gh-proxy 等镜像）
         try:
             _fast, _lat = pick_fastest_mirror(download_url)
         except Exception:
             _fast, _lat = _gh_proxy_url(download_url), 0.0
+        _cands = [u for u in _mirror_candidates(download_url)]
+        if _fast in _cands:
+            _cands.remove(_fast)
+        _cands.insert(0, _fast)          # 测速最快的排最前
         proxied_url = _fast
         UPDATE_STATE["mirror"] = _fast
         UPDATE_STATE["mirror_latency"] = round(_lat, 2) if _lat else 0
@@ -419,8 +435,25 @@ def download_update(download_url, progress_callback=None, version=None):
             resume_from = os.path.getsize(part_path)
             headers["Range"] = f"bytes={resume_from}-"
             # 目标为最终 zip 时直接续写 part
-        req = urllib.request.Request(proxied_url, headers=headers)
-        with urllib.request.urlopen(req, timeout=60) as resp:
+        _last_err = None
+        _resp = None
+        for _try_url in _cands:
+            try:
+                _h = dict(headers)
+                if resume_from > 0:
+                    _h["Range"] = f"bytes={resume_from}-"
+                _req = urllib.request.Request(_try_url, headers=_h)
+                UPDATE_STATE["mirror"] = _try_url
+                _resp = urllib.request.urlopen(_req, timeout=60)
+                proxied_url = _try_url
+                break
+            except Exception as _e:
+                _last_err = _e
+                _resp = None
+                continue
+        if _resp is None:
+            raise Exception(f"所有下载节点均失败（最后错误: {_last_err}）")
+        with _resp as resp:
             total_size = int(resp.headers.get('Content-Length', 0))
             if resp.status == 206:
                 total_size = resume_from + total_size

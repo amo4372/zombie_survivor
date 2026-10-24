@@ -550,7 +550,7 @@ class CombatMixin:
                         self.melee_hit_players = set()
                     self.melee_hit_players.add(id(_pp))
                     _pp.take_damage(self.melee_attack_damage, damage_type='melee',
-                                    attack_x=self.player.x, attack_y=self.player.y)
+                                    attack_x=self.player.x, attack_y=self.player.y, source='player')
                     self.damage_numbers.append(DamageNumber(_pp.x, _pp.y, int(self.melee_attack_damage), color=RED))
         
         if self.melee_attack_timer <= 0:

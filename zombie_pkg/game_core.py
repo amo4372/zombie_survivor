@@ -23,6 +23,7 @@ from skill_tree_view import SkillTreeRenderer, skill_tree_unlock_manager
 from mod_loader import (load_all_mods, trigger_hook, HOOK_GAME_START, HOOK_GAME_TICK, HOOK_ENEMY_SPAWN, HOOK_ENEMY_DEATH, HOOK_PLAYER_DAMAGE, HOOK_KEYDOWN, HOOK_RENDER_HUD, HOOK_GAME_OVER, HOOK_WAVE_COMPLETE, HOOK_TOUCH_EVENT, HOOK_PLAYER_MOVE, HOOK_PLAYER_FIRE, HOOK_SKILL_USE, HOOK_ENEMY_UPDATE, HOOK_DAMAGE_DEALT)
 from logger import GameLogger
 import updater
+from dev_state import build_dev_states, DevPlayerState  # v2.5.8 开发者状态（每玩家独立面板）
 
 # ============ 存档加密工具（内联，避免加密打包后外部依赖） ============
 _SAVE_CRYPT_KEY = b"Z0mb13_Surv1v0r_Save_Crypt_2024!@#$%"
@@ -407,10 +408,9 @@ class GameCore:
         self.dev_input_active = False    # 密码输入框是否激活
         self.dev_input_focused = False   # 密码输入框是否聚焦（点击后接受系统输入法）
         self.dev_input_str = ""          # 已输入密码
-        self.dev_panel_open = False      # 局内调试面板开关
-        self.dev_god = False             # 无敌
-        self.dev_time_scale = 1.0        # 时间倍率（局内已支持，见 run()）
-        self.dev_buttons = []            # 局内调试面板按钮
+        # v2.5.8：开发者模式多人化——每个玩家一份独立状态（独立面板/无敌/抗尸/传送目标）
+        self.dev_states = build_dev_states()
+        self.dev_time_scale = 1.0        # 时间倍率（局内已支持，见 run()；全局共享）
         self._DEV_PASSWORD = "dev4372"   # 开发者密码
         self.update_status_text = ""     # 主菜单提示文本
         self.update_notice = None        # 自动检查发现的新版本弹窗 (latest_version, changelog)
@@ -523,6 +523,183 @@ class GameCore:
 
         self.renderer = Renderer(self.screen, self)
         logger.info("游戏初始化完成")
+
+        # ================================================================
+        # v2.5.8 开发者模式多人化 —— 兼容属性 + 辅助方法
+        # ================================================================
+        # 旧字段（dev_god / dev_panel_open / dev_buttons）保留为 P1 的别名，
+        # 保证旧代码与旧存档行为不变，同时新增 P2~P4 独立面板。
+        self._dev_button_owner = 1      # dev_buttons 当前指向的玩家序号
+
+    # ---------- 开发者状态：兼容属性（P1 别名）----------
+    @property
+    def dev_god(self):
+        """P1 无敌开关（v2.5.8：转发到 dev_states[1].god）"""
+        st = getattr(self, "dev_states", {}).get(1)
+        return bool(st.god) if st else False
+
+    @dev_god.setter
+    def dev_god(self, value):
+        st = getattr(self, "dev_states", {}).get(1)
+        if st is not None:
+            st.god = bool(value)
+            st.apply_to(getattr(self, "player", None))
+
+    @property
+    def dev_panel_open(self):
+        """P1 调试面板开关（v2.5.8：转发到 dev_states[1].panel_open）"""
+        st = getattr(self, "dev_states", {}).get(1)
+        return bool(st.panel_open) if st else False
+
+    @dev_panel_open.setter
+    def dev_panel_open(self, value):
+        st = getattr(self, "dev_states", {}).get(1)
+        if st is not None:
+            st.panel_open = bool(value)
+
+    @property
+    def dev_buttons(self):
+        """P1 面板按钮（v2.5.8：转发到 dev_states[1].buttons）"""
+        st = getattr(self, "dev_states", {}).get(1)
+        return st.buttons if st else []
+
+    @dev_buttons.setter
+    def dev_buttons(self, value):
+        st = getattr(self, "dev_states", {}).get(1)
+        if st is not None:
+            st.buttons = value
+
+    # ---------- 开发者状态：查询 ----------
+    def _dev_state(self, index=1):
+        """取某玩家（1~4）的开发者状态；越界回退 P1"""
+        try:
+            index = int(index)
+        except Exception:
+            index = 1
+        states = getattr(self, "dev_states", None) or {}
+        if index not in states:
+            index = 1
+        return states[index]
+
+    def _dev_player_entity(self, index=1):
+        """取某玩家序号（1~4）对应的玩家实体（不存在返回 None）"""
+        try:
+            index = int(index)
+        except Exception:
+            index = 1
+        return getattr(self, "player" if index == 1 else f"player{index}", None)
+
+    def _dev_player_indices(self):
+        """当前真实存在的玩家序号列表（P1~P4）"""
+        out = []
+        for i in (1, 2, 3, 4):
+            p = self._dev_player_entity(i)
+            if p is not None:
+                out.append(i)
+        return out
+
+    def _dev_tp_targets(self, index=1):
+        """可传送的目标玩家序号（排除自己）"""
+        return [i for i in self._dev_player_indices() if i != int(index or 1)]
+
+    # 开发者面板布局常量（渲染与点击检测共用，保证位置一致）
+    DEV_PANEL_TOP = 52
+    DEV_PANEL_BTN_W = 150
+    DEV_PANEL_BTN_H = 36
+    DEV_PANEL_GAP = 6
+
+    def _dev_viewport_rect(self, index=1):
+        """该玩家所在视口矩形（分屏时是各自那半，单人时全屏）
+
+        与 renderer_pkg.draw_multiplayer.build_split_viewports 的切分规则保持一致：
+        存在的玩家按 P1..P4 顺序等分屏幕宽度。
+        """
+        try:
+            sw = int(self.scaled_width)
+            sh = int(self.scaled_height)
+        except Exception:
+            return pygame.Rect(0, 0, 800, 600)
+        idxs = self._dev_player_indices()
+        try:
+            idx = int(index or 1)
+        except Exception:
+            idx = 1
+        if idx not in idxs or len(idxs) <= 1:
+            return pygame.Rect(0, 0, sw, sh)
+        k = idxs.index(idx)
+        half = sw // len(idxs)
+        return pygame.Rect(k * half, 0, half, sh)
+
+    def _dev_sync_states(self):
+        """把所有玩家状态同步到实体（开局/换人后调用）"""
+        for i in (1, 2, 3, 4):
+            st = getattr(self, "dev_states", {}).get(i)
+            if st is not None:
+                st.apply_to(self._dev_player_entity(i))
+
+    def _dev_reset_states(self):
+        """重置全部开发者状态（开局时调用）"""
+        for st in (getattr(self, "dev_states", None) or {}).values():
+            try:
+                st.reset()
+            except Exception:
+                pass
+        self.dev_time_scale = 1.0
+
+    def _dev_teleport_to(self, index=1, target_index=0):
+        """把 index 号玩家传送到 target_index 号玩家身边。
+
+        返回 (是否成功, 说明文本)。PvP 调试最常用：
+        传送到敌对玩家旁边观察对局 / 抢点。
+        """
+        idx = int(index or 1)
+        tgt = int(target_index or 0)
+        if not tgt:
+            return False, "未选择传送目标"
+        src = self._dev_player_entity(idx)
+        dst = self._dev_player_entity(tgt)
+        if src is None:
+            return False, "目标玩家不存在"
+        if dst is None:
+            return False, f"P{tgt} 不存在"
+        try:
+            src.x = dst.x + 60
+            src.y = dst.y + 40
+            cam = getattr(self, "camera" if idx == 1 else f"camera{idx}", None)
+            if cam is not None and hasattr(cam, "update"):
+                try:
+                    cam.update(0.016, src.x, src.y)
+                except TypeError:
+                    pass
+            self._dev_sync_states()
+            return True, f"P{idx} → P{tgt}"
+        except Exception as e:
+            return False, f"传送失败: {e}"
+
+    def _dev_kill_hostile_players(self, index=1):
+        """PvP 调试：秒杀所有敌对阵营玩家，返回击杀数量"""
+        idx = int(index or 1)
+        src = self._dev_player_entity(idx)
+        if src is None:
+            return 0
+        pvp = bool(getattr(self.config, "pvp_enabled", False))
+        my_team = getattr(src, "team_id", 0)
+        killed = 0
+        for i in self._dev_player_indices():
+            if i == idx:
+                continue
+            p = self._dev_player_entity(i)
+            if p is None or not getattr(p, "alive", True):
+                continue
+            if pvp and getattr(p, "team_id", 0) == my_team:
+                continue  # 同阵营不杀
+            try:
+                p.hp = 0
+                p.alive = False
+                killed += 1
+            except Exception:
+                continue
+        return killed
 
     def save_ai_stats(self):
         """导出 RL 遥测数据到 data/ai_stats.json（开发者分析用）"""
@@ -719,6 +896,11 @@ class GameCore:
 
     def start_game(self):
         logger.info("开始新游戏")
+        # v2.5.8：开发者状态随新局重置（每玩家独立面板/无敌/抗尸/传送目标）
+        try:
+            self._dev_reset_states()
+        except Exception:
+            pass
         # v2.2.11 逐玩家房间配置：先把 per-player 武器/角色写入选择槽
         # （必须在 selected_character/玩家创建之前生效）
         try:
@@ -885,6 +1067,11 @@ class GameCore:
                     self.player2 = None
                 self.camera2 = Camera(BASE_WIDTH // 2, BASE_HEIGHT)  # 同屏半屏视口宽=半宽
                 self.camera2.shake_enabled = self.config.screen_shake
+                # v2.5.8：P2 实体就绪 → 同步该玩家的开发者状态（无敌/抗尸）
+                try:
+                    self._dev_sync_states()
+                except Exception:
+                    pass
                 # v2.2.7：网络联机支持最多 4 人——3/4 号客户端由主机补位实体
                 # （无对应客户端时保持 None；有客户端连接时创建 AI 补位，受网络输入驱动）
                 for _i in (3, 4):
@@ -1701,9 +1888,14 @@ class GameCore:
                 except Exception:
                     pass
                 self._net_send_snapshot()
-            # 开发者调试面板
-            if self.dev_mode and self.dev_panel_open:
-                self._update_dev_panel(pygame.mouse.get_pos(), pygame.mouse.get_pressed(), self.touch_events, self.scale)
+            # 开发者调试面板（v2.5.8：任一玩家面板打开即处理，各自独立）
+            if self.dev_mode:
+                try:
+                    _dev_any = any(st.panel_open for st in (self.dev_states or {}).values())
+                except Exception:
+                    _dev_any = self.dev_panel_open
+                if _dev_any:
+                    self._update_dev_panel(pygame.mouse.get_pos(), pygame.mouse.get_pressed(), self.touch_events, self.scale)
         elif self.state == GameState.NET_CLIENT_PLAY:
             self._update_net_client(dt)
         elif self.state == GameState.DIALOGUE:

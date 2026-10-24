@@ -93,10 +93,15 @@ class FakeGameDev:
     def _advance_to_next_map(self):
         self.advanced = True
 class FakeInput(InputMixin):
+    # v2.5.8：开发者面板改为「每玩家独立 + 动作名驱动」，测试替身需提供
+    #         dev_states / _dev_state / _dev_player_entity（与真实 Game 一致）
     def __init__(self):
+        from dev_state import build_dev_states
+        self.dev_states = build_dev_states()
         self.dev_buttons = []
         self.records = FakeRecords()
         self.player = Player(0, 0)
+        self.player2 = None
         self.floating_texts = []
         self.config = type("C", (), {"game_mode": GameMode.STORY})()
         self.enemies = []
@@ -105,23 +110,29 @@ class FakeInput(InputMixin):
         self.dev_god = False
         self.dev_time_scale = 1.0
         self.advanced = False
+    def _dev_state(self, index=1):
+        return self.dev_states.get(index) or self.dev_states[1]
+    def _dev_player_entity(self, index=1):
+        return self.player if index == 1 else None
     def _advance_to_next_map(self):
         self.advanced = True
 
 fi = FakeInput()
-fi._rebuild_dev_buttons()
+fi._rebuild_dev_buttons(1)
 labels = [b.text for b in fi.dev_buttons]
 check("开发者面板含'直接下一章'按钮", "直接下一章" in labels, f"labels={labels}")
-check("按钮总数 11（含关闭）", len(fi.dev_buttons) == 11, f"n={len(fi.dev_buttons)}")
-fi._dev_action(9)
+check("按钮含'关闭面板'", "关闭面板" in labels, f"labels={labels}")
+check("v2.5.8 新增抗尸/TP 按钮", ("抗尸:关" in labels) and ("TP:关" in labels), f"labels={labels}")
+check("按钮带动作标记", all(hasattr(b, "dev_action") for b in fi.dev_buttons))
+fi._dev_action(1, "next_chapter")
 check("点击'下一章'调用 _advance_to_next_map", fi.advanced, "")
-fi._dev_action(10)
-check("点击'关闭面板'关闭面板", not fi.dev_panel_open, "")
+fi._dev_action(1, "close")
+check("点击'关闭面板'关闭面板", not fi._dev_state(1).panel_open, "")
 
 # 非故事模式提示且不崩溃
 fi2 = FakeInput()
 fi2.config = type("C", (), {"game_mode": GameMode.ENDLESS})()
-fi2._dev_action(9)
+fi2._dev_action(1, "next_chapter")
 check("非故事模式下一章不崩溃", True, "")
 
 # ========== 4. 多人光照全部玩家生效 ==========

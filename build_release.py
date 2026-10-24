@@ -31,6 +31,7 @@ ESSENTIAL_FILES = [
     "skill_wheel.py", "runes.py", "lighting.py", "gl_renderer.py", "mod_loader.py",
     "codex.py", "skill_tree_view.py", "updater.py", "net.py", "version.txt",
     "error_silencer.py",  # v2.2.0 错误可忽略静默机制（game_core 依赖）
+    "dev_state.py",      # v2.5.8 开发者状态（每玩家独立面板，game_core 依赖）
     "requirements.txt", "README.md",
 ]
 

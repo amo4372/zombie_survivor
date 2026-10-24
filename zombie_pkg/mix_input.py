@@ -723,8 +723,18 @@ class InputMixin:
         for ev in events:
             if ev.type == pygame.KEYDOWN and ev.key == pygame.K_F9:
                 if self.state == GameState.PLAYING and self.dev_mode:
-                    self.dev_panel_open = not self.dev_panel_open
-                    self._rebuild_dev_buttons()
+                    # v2.5.8：F9 切换 P1 面板，F10 切换 P2 面板（各自独立）
+                    st = self._dev_state(1)
+                    st.panel_open = not st.panel_open
+                    self._rebuild_dev_buttons(1)
+            if ev.type == pygame.KEYDOWN and ev.key == pygame.K_F10:
+                if self.state == GameState.PLAYING and self.dev_mode:
+                    if self._dev_player_entity(2) is None:
+                        self.update_status_text = "当前没有 P2（多人模式才有）"
+                    else:
+                        st = self._dev_state(2)
+                        st.panel_open = not st.panel_open
+                        self._rebuild_dev_buttons(2)
             # v2.2.0 争分夺秒：K 键主动结算关卡
             if ev.type == pygame.KEYDOWN and ev.key == pygame.K_k:
                 _ms = getattr(self, '_settle_race_manual', None)
@@ -763,87 +773,182 @@ class InputMixin:
         except Exception:
             pass
 
-    def _rebuild_dev_buttons(self):
-        """重建局内调试面板按钮（依据当前 dev 状态）"""
+    # ================================================================
+    # v2.5.8 开发者面板（多人化）：每玩家一份独立面板
+    # ================================================================
+    def _rebuild_dev_buttons(self, index=1):
+        """重建某玩家（1~4）的调试面板按钮（依据当前 dev 状态）
+
+        v2.5.8：面板按玩家独立——P1/P2 各开各的，互不影响。
+        新增：无敌开关、抗尸（免疫僵尸不免疫玩家）、传送目标、立即传送、
+              PvP 秒杀敌对。
+        """
         # Button 已在 game.py 顶部 from ui import 导入
-        self.dev_buttons = [
-            Button(0, 0, 150, 36, f"无敌:{'开' if self.dev_god else '关'}", color=(60, 60, 220)),
-            Button(0, 0, 150, 36, f"倍率:x{self.dev_time_scale}", color=(40, 140, 80)),
-            Button(0, 0, 150, 36, "生成Boss", color=(180, 60, 60)),
-            Button(0, 0, 150, 36, "生成精英", color=(120, 80, 160)),
-            Button(0, 0, 150, 36, "生成小怪", color=(90, 130, 80)),
-            Button(0, 0, 150, 36, "清空敌人", color=(120, 120, 130)),
-            Button(0, 0, 150, 36, "+5000金币", color=(200, 170, 60)),
-            Button(0, 0, 150, 36, "+5000经验", color=(90, 160, 200)),
-            Button(0, 0, 150, 36, "满血满弹", color=(60, 200, 120)),
-            Button(0, 0, 150, 36, "直接下一章", color=(200, 120, 60)),
-            Button(0, 0, 150, 36, "关闭面板", color=(130, 60, 60)),
+        st = self._dev_state(index)
+        pvp = bool(getattr(self.config, 'pvp_enabled', False))
+        specs = [
+            (f"无敌:{'开' if st.god else '关'}", (60, 60, 220), "god"),
+            (f"抗尸:{'开' if st.zombie_immune else '关'}", (150, 95, 40), "zombie_immune"),
+            (f"倍率:x{self.dev_time_scale}", (40, 140, 80), "time_scale"),
+            (f"TP:{st.tp_target_label}", (70, 60, 160), "tp_target"),
+            ("立即传送", (40, 120, 150), "tp_now"),
         ]
+        if pvp:
+            specs.append(("秒杀敌对", (190, 60, 60), "kill_hostile"))
+        specs += [
+            ("生成Boss", (180, 60, 60), "spawn_boss"),
+            ("生成精英", (120, 80, 160), "spawn_elite"),
+            ("生成小怪", (90, 130, 80), "spawn_zombie"),
+            ("清空敌人", (120, 120, 130), "clear_enemies"),
+            ("+5000金币", (200, 170, 60), "coins"),
+            ("+5000经验", (90, 160, 200), "exp"),
+            ("满血满弹", (60, 200, 120), "full_heal"),
+            ("直接下一章", (200, 120, 60), "next_chapter"),
+            ("关闭面板", (130, 60, 60), "close"),
+        ]
+        btns = []
+        for text, color, act in specs:
+            b = Button(0, 0, 150, 36, text, color=color)
+            b.dev_action = act
+            btns.append(b)
+        st.buttons = btns
+        return btns
+
+    def _dev_panel_positions(self, index=1):
+        """面板按钮的全局屏幕坐标（分屏时锁在各自视口内，超高自动双列）"""
+        st = self._dev_state(index)
+        n = len(st.buttons)
+        rect = self._dev_viewport_rect(index)
+        rx, ry, rw, rh = rect
+        bw, bh, gap = 150, 36, 6
+        spacing = bh + gap
+        top = ry + self.DEV_PANEL_TOP
+        rows = n
+        if n and (top + rows * spacing > ry + rh):
+            if rw >= bw * 2 + gap + 24:
+                rows = (n + 1) // 2      # 视口够宽 → 双列
+            else:
+                avail = max(bh, rh - self.DEV_PANEL_TOP)
+                spacing = max(bh, avail // max(1, n))
+        out = []
+        for i in range(n):
+            c = i // rows if rows else 0
+            r = i % rows if rows else 0
+            x = rx + rw - (c + 1) * (bw + gap) + gap
+            y = top + r * spacing
+            out.append((int(x), int(y)))
+        return out
 
     def _update_dev_panel(self, mouse_pos, mouse_pressed, touch_events, scale):
-        """局内调试面板：按钮点击检测与功能执行"""
-        if not (self.dev_mode and self.dev_panel_open):
+        """局内调试面板：按钮点击检测与功能执行（逐玩家独立面板）"""
+        if not self.dev_mode:
             return
-        from config import EnemyType
-        bx, by = self.scaled_width - 190, 90
-        for idx, btn in enumerate(self.dev_buttons):
-            btn.base_x = bx
-            btn.base_y = by + idx * 42
-            # 注意：bx/by 已是屏幕像素坐标，Button 内部不再缩放（传 scale=1.0）
-            if btn.update(mouse_pos, mouse_pressed, touch_events, 1.0):
-                self._dev_action(idx)
+        for idx in (1, 2, 3, 4):
+            st = self._dev_state(idx)
+            if not st.panel_open:
+                continue
+            if not st.buttons:
+                self._rebuild_dev_buttons(idx)
+            pos = self._dev_panel_positions(idx)
+            for i, btn in enumerate(st.buttons):
+                if i >= len(pos):
+                    break
+                btn.base_x, btn.base_y = pos[i]
+                # 注意：坐标已是屏幕像素，Button 内部不再缩放（传 scale=1.0）
+                if btn.update(mouse_pos, mouse_pressed, touch_events, 1.0):
+                    self._dev_action(idx, getattr(btn, 'dev_action', ''))
 
-    def _dev_action(self, idx):
-        """执行调试面板按钮动作"""
-        if idx == 0:
-            self.dev_god = not self.dev_god
-            if self.player:
-                self.player.dev_god = self.dev_god
-            self._rebuild_dev_buttons()
-        elif idx == 1:
+    def _dev_notify(self, index, text, color=(200, 200, 210)):
+        """在指定玩家头顶显示提示"""
+        try:
+            p = self._dev_player_entity(index)
+            if p is None:
+                return
+            self.floating_texts.append(FloatingText(p.x, p.y - 40, text, color=color, lifetime=1.5))
+        except Exception:
+            pass
+
+    def _dev_action(self, index=1, action=""):
+        """执行调试面板按钮动作（index = 面板所属玩家序号）"""
+        try:
+            idx = int(index or 1)
+        except Exception:
+            idx = 1
+        st = self._dev_state(idx)
+        player = self._dev_player_entity(idx)
+        if action == "god":
+            st.god = not st.god
+            st.apply_to(player)
+            self._dev_notify(idx, f"{st.label} 无敌:{'开' if st.god else '关'}", (120, 160, 255))
+        elif action == "zombie_immune":
+            st.zombie_immune = not st.zombie_immune
+            st.apply_to(player)
+            self._dev_notify(idx, f"{st.label} 抗尸:{'开' if st.zombie_immune else '关'}", (255, 170, 90))
+        elif action == "time_scale":
             self.dev_time_scale = {1.0: 2.0, 2.0: 4.0, 4.0: 0.5, 0.5: 1.0}.get(self.dev_time_scale, 1.0)
-            self._rebuild_dev_buttons()
-        elif idx == 2:
+        elif action == "tp_target":
+            seq = [0] + self._dev_tp_targets(idx)
+            try:
+                pos = seq.index(st.tp_target)
+            except ValueError:
+                pos = 0
+            st.tp_target = seq[(pos + 1) % len(seq)]
+            self._dev_notify(idx, f"传送目标: {st.tp_target_label}", (150, 220, 255))
+        elif action == "tp_now":
+            ok, msg = self._dev_teleport_to(idx, st.tp_target)
+            self._dev_notify(idx, msg if ok else msg, (120, 230, 180) if ok else (255, 140, 140))
+        elif action == "kill_hostile":
+            n = self._dev_kill_hostile_players(idx)
+            self._dev_notify(idx, f"秒杀敌对玩家 x{n}", (255, 120, 120))
+        elif action == "spawn_boss":
             from config import EnemyType as _ET
             bs = [_ET.BOSS_LONG, _ET.BOSS_XIANG, _ET.BOSS_MUTANT, _ET.BOSS_QUEEN, _ET.BOSS_TITAN, _ET.BOSS_WANG]
             import random as _r
             et = _r.choice(bs)
-            e = Enemy(self.player.x + _r.randint(-100, 100), self.player.y + _r.randint(-100, 100), et, 1, self.config.difficulty)
+            _px = player.x if player is not None else self.player.x
+            _py = player.y if player is not None else self.player.y
+            e = Enemy(_px + _r.randint(-100, 100), _py + _r.randint(-100, 100), et, 1, self.config.difficulty)
             self.enemies.append(e)
-            self.floating_texts.append(FloatingText(e.x, e.y, f"生成 {getattr(e,'name','')}", color=(255, 80, 80), lifetime=2.0))
-        elif idx == 3:
+            self.floating_texts.append(FloatingText(e.x, e.y, f"生成 {getattr(e, 'name', '')}", color=(255, 80, 80), lifetime=2.0))
+        elif action == "spawn_elite":
             import random as _r
             from config import EnemyType as _ET
             ets = [_ET.ELITE_BRUTE, _ET.ELITE_ASSASSIN, _ET.ELITE_SORCERER, _ET.ELITE_GUARDIAN]
+            _px = player.x if player is not None else self.player.x
+            _py = player.y if player is not None else self.player.y
             for _ in range(5):
-                e = Enemy(self.player.x + _r.randint(-150, 150), self.player.y + _r.randint(-150, 150), _r.choice(ets), 1, self.config.difficulty)
+                e = Enemy(_px + _r.randint(-150, 150), _py + _r.randint(-150, 150), _r.choice(ets), 1, self.config.difficulty)
                 self.enemies.append(e)
-        elif idx == 4:
+        elif action == "spawn_zombie":
             import random as _r
             from config import EnemyType as _ET
             ets = [_ET.ZOMBIE_NORMAL, _ET.ZOMBIE_FAST, _ET.ZOMBIE_CRAWLER, _ET.ZOMBIE_RANGED]
+            _px = player.x if player is not None else self.player.x
+            _py = player.y if player is not None else self.player.y
             for _ in range(12):
-                e = Enemy(self.player.x + _r.randint(-200, 200), self.player.y + _r.randint(-200, 200), _r.choice(ets), 1, self.config.difficulty)
+                e = Enemy(_px + _r.randint(-200, 200), _py + _r.randint(-200, 200), _r.choice(ets), 1, self.config.difficulty)
                 self.enemies.append(e)
-        elif idx == 5:
+        elif action == "clear_enemies":
             self.enemies.clear()
-            self.floating_texts.append(FloatingText(self.player.x, self.player.y - 40, "已清空敌人", color=(200, 200, 210), lifetime=1.5))
-        elif idx == 6:
+            self._dev_notify(idx, "已清空敌人", (200, 200, 210))
+        elif action == "coins":
             try:
                 self.records.add_coins(5000)
             except Exception:
                 pass
-            self.floating_texts.append(FloatingText(self.player.x, self.player.y - 40, "+5000金币", color=(255, 215, 0), lifetime=1.5))
-        elif idx == 7:
-            self.player.gain_exp(5000)
-            self.floating_texts.append(FloatingText(self.player.x, self.player.y - 40, "+5000经验", color=(90, 200, 240), lifetime=1.5))
-        elif idx == 8:
-            self.player.hp = self.player.max_hp
-            for w in self.player.weapons:
-                if hasattr(w, 'current_ammo') and w.current_ammo != "Inf":
-                    w.current_ammo = w.max_ammo
-            self.floating_texts.append(FloatingText(self.player.x, self.player.y - 40, "已回复满", color=(60, 220, 120), lifetime=1.5))
-        elif idx == 9:
+            self._dev_notify(idx, "+5000金币", (255, 215, 0))
+        elif action == "exp":
+            if player is not None:
+                player.gain_exp(5000)
+            self._dev_notify(idx, "+5000经验", (90, 200, 240))
+        elif action == "full_heal":
+            if player is not None:
+                player.hp = player.max_hp
+                for w in player.weapons:
+                    if hasattr(w, 'current_ammo') and w.current_ammo != "Inf":
+                        w.current_ammo = w.max_ammo
+            self._dev_notify(idx, "已回复满", (60, 220, 120))
+        elif action == "next_chapter":
             # v2.1.6：开发者"直接下一章"——仅故事模式生效，其余模式提示
             if self.config.game_mode == GameMode.STORY:
                 try:
@@ -851,10 +956,12 @@ class InputMixin:
                 except Exception as _e:
                     logger.warning(f"下一章失败: {_e}")
             else:
-                self.floating_texts.append(FloatingText(
-                    self.player.x, self.player.y - 40, "仅故事模式可用", color=(200, 200, 210), lifetime=1.5))
-        elif idx == 10:
-            self.dev_panel_open = False
+                self._dev_notify(idx, "仅故事模式可用", (200, 200, 210))
+        elif action == "close":
+            st.panel_open = False
+        # 状态文字可能变了 → 重建按钮
+        if action != "close":
+            self._rebuild_dev_buttons(idx)
 
     def _handle_keydown(self, key):
         import time

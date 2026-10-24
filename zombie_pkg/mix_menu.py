@@ -353,6 +353,8 @@ class MenuMixin:
             Button(cx, 365, 200, 50, "设置", color=GRAY),
             Button(cx, 430, 200, 50, "返回菜单", color=RED),
             Button(cx, 495, 200, 50, "开发者面板", color=(80, 180, 90)),
+            # v2.5.8：P2 独立开发者面板（仅多人模式显示）
+            Button(cx, 560, 200, 50, "P2开发者面板", color=(80, 140, 200)),
         ]
         self.settings_from_pause = False  # 标记设置是否从暂停菜单进入
         # 符文查看界面状态

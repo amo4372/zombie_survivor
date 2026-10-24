@@ -120,21 +120,57 @@ class DevMixin:
                 g._blur_dev_input()
 
     def _draw_dev_panel(self):
-        """绘制局内开发者调试面板"""
+        """绘制局内开发者调试面板（v2.5.8：每玩家独立面板，各自锁在自己视口内）"""
         g = self.game
         scale = g.scale
         sw = g.scaled_width
-        ov = pygame.Surface((sw, g.scaled_height), pygame.SRCALPHA)
-        ov.fill((0, 0, 0, 120))
-        self.screen.blit(ov, (0, 0))
-        head = g.font.render("开发者调试面板", True, (60, 220, 60))
-        self.screen.blit(head, (sw - 210, 40))
-        tip = g.font_small.render("F9 键 关闭面板 · 无敌/倍率等", True, (200, 200, 210))
-        self.screen.blit(tip, (sw - 250, 66))
-        bx, by = sw - 190, 90
-        for btn in g.dev_buttons:
-            btn.base_x = bx
-            btn.base_y = by
-            # 注意：bx/by 已是屏幕像素坐标，Button 内部不再缩放（传 scale=1.0）
-            btn.draw(self.screen, g.font_large, 1.0)
-            by += 42
+        for idx in (1, 2, 3, 4):
+            try:
+                st = g._dev_state(idx)
+            except Exception:
+                continue
+            if not st.panel_open:
+                continue
+            if not st.buttons:
+                try:
+                    g._rebuild_dev_buttons(idx)
+                except Exception:
+                    continue
+            rect = g._dev_viewport_rect(idx)
+            rx, ry, rw, rh = rect
+            # 面板底板（只压暗面板自身区域，不影响其他玩家视野）
+            try:
+                positions = g._dev_panel_positions(idx)
+            except Exception:
+                positions = []
+            pad = 8
+            if positions:
+                min_x = min(p[0] for p in positions) - pad
+                max_x = max(p[0] for p in positions) + g.DEV_PANEL_BTN_W + pad
+                min_y = min(p[1] for p in positions) - pad
+                max_y = max(p[1] for p in positions) + g.DEV_PANEL_BTN_H + pad
+            else:
+                min_x, max_x = rx + rw - 190, rx + rw - 20
+                min_y, max_y = ry + 40, ry + 90
+            bg = pygame.Rect(int(min_x), int(min_y), int(max_x - min_x), int(max_y - min_y))
+            panel_bg = pygame.Surface((max(1, bg.width), max(1, bg.height)), pygame.SRCALPHA)
+            panel_bg.fill((0, 0, 0, 150))
+            self.screen.blit(panel_bg, bg.topleft)
+            pygame.draw.rect(self.screen, (60, 220, 60), bg, 2, border_radius=6)
+            # 标题 + 状态
+            head = g.font.render(f"开发者面板 {st.label}", True, (60, 220, 60))
+            self.screen.blit(head, (bg.left + 6, bg.top - 22))
+            try:
+                status = g.font_small.render(st.status_text(), True, (190, 220, 190))
+                self.screen.blit(status, (bg.left + 6, bg.top - 4))
+            except Exception:
+                pass
+            tip = g.font_small.render("F9/F10 开关面板", True, (150, 150, 160))
+            self.screen.blit(tip, (bg.left + 6, bg.bottom + 2))
+            # 按钮
+            for i, btn in enumerate(st.buttons):
+                if i >= len(positions):
+                    break
+                btn.base_x, btn.base_y = positions[i]
+                btn.draw(self.screen, g.font_large, 1.0)
+        del sw, scale

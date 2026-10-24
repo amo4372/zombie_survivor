@@ -95,12 +95,26 @@ class RenderCore:
             self._draw_net_wait()
         elif state == GameState.NET_CLIENT_PLAY:
             self._draw_net_client()
+            # v2.5.8：网络客户端同样支持开发者面板（本地 P1）
+            if getattr(self.game, 'dev_mode', False):
+                try:
+                    _any_open = any(st.panel_open for st in (getattr(self.game, 'dev_states', None) or {}).values())
+                except Exception:
+                    _any_open = False
+                if _any_open:
+                    self._draw_dev_panel()
         elif state == GameState.TUTORIAL:
             self._draw_tutorial()
         elif state == GameState.PLAYING:
             self._draw_playing()
-            if getattr(self.game, 'dev_mode', False) and getattr(self.game, 'dev_panel_open', False):
-                self._draw_dev_panel()
+            # v2.5.8：开发者面板每玩家独立——任一玩家面板打开就绘制（各自锁在自己视口内）
+            if getattr(self.game, 'dev_mode', False):
+                try:
+                    _any_open = any(st.panel_open for st in (getattr(self.game, 'dev_states', None) or {}).values())
+                except Exception:
+                    _any_open = getattr(self.game, 'dev_panel_open', False)
+                if _any_open:
+                    self._draw_dev_panel()
         elif state == GameState.PAUSED:
             self._draw_playing()
             self._draw_pause()

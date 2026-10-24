@@ -91,6 +91,9 @@ class Player:
         self.speed_mult = 1.0
         self.fire_rate_mult = 1.0
         self.reload_speed_mult = 1.0  # 新增：换弹速度加成
+        # v2.5.8 开发者：无敌 / 抗尸（免疫僵尸伤害但仍会被玩家打伤）
+        self.dev_god = False
+        self.dev_zombie_immune = False
         self.crit_chance = 0.05
         self.crit_damage = 1.5
         self.life_steal = 0.0
@@ -492,9 +495,13 @@ class Player:
         except Exception:
             pass
 
-    def take_damage(self, damage, damage_type="melee", from_front=False, attack_x=None, attack_y=None, bypass_dodge=False):
+    def take_damage(self, damage, damage_type="melee", from_front=False, attack_x=None, attack_y=None, bypass_dodge=False, source="zombie"):
         # 开发者模式：无敌
         if getattr(self, 'dev_god', False):
+            return 0
+        # v2.5.8 开发者：抗尸——只免疫僵尸造成的伤害，玩家造成的伤害照吃
+        # （PvP 调试核心：可以安心刷怪，但依然会被敌对玩家击杀）
+        if getattr(self, 'dev_zombie_immune', False) and source != "player":
             return 0
         # v2.5.1 阵营载具乘客：受到的伤害记在载具血条上（乘客本体不扣血）
         _rv = getattr(self, 'riding_vehicle', None)
