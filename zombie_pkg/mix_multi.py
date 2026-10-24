@@ -113,6 +113,8 @@ class Config:
         self.mp_p1_layout = {}  # 双人模式 P1 触控布局（独立于单机）
         self.p2_hud_layout = {}  # 双人模式 P2 触控布局
         self.hud_layout_version = 0  # HUD 布局方案版本：v2.0.6 起=2（双人默认布局大改，旧布局需重置）
+        # v2.5.7 同屏多人房间配置持久化（名字/武器/角色/阵营）
+        self.mp_room_cfgs = {}  # {"1": {"name": str, "weapon": str, "char": str, "team": int}, ...}
         self.config_file = "config.json"
         self.load()
         # v2.0.6 布局版本升级：旧版双人布局（v2.0.2 前全屏坐标）会堆叠/缺摇杆，重置为默认并持久化
@@ -154,6 +156,15 @@ class Config:
                     if isinstance(_p2, dict):
                         self.p2_hud_layout = {k: list(v) for k, v in _p2.items() if isinstance(v, (list, tuple)) and len(v) == 2}
                     self.hud_layout_version = data.get("hud_layout_version", 0)
+                    # v2.5.7 多人房间配置持久化
+                    _mrc = data.get("mp_room_cfgs", {})
+                    if isinstance(_mrc, dict):
+                        self.mp_room_cfgs = {}
+                        for _k, _v in _mrc.items():
+                            if isinstance(_v, dict):
+                                self.mp_room_cfgs[str(_k)] = {
+                                    k2: v2 for k2, v2 in _v.items()
+                                    if isinstance(v2, (str, int, float, bool))}
         except Exception as e:
             logger.error(f"配置加载失败: {e}")
 
@@ -175,6 +186,7 @@ class Config:
             "mp_p1_layout": self.mp_p1_layout,
             "p2_hud_layout": self.p2_hud_layout,
             "hud_layout_version": getattr(self, 'hud_layout_version', 2),
+            "mp_room_cfgs": getattr(self, 'mp_room_cfgs', {}) or {},
         }
         try:
             with open(self.config_file, "w", encoding="utf-8") as f:
@@ -254,6 +266,11 @@ class MultiplayerMixin:
         p2 = self.player2
         if not p2 or not getattr(p2, "alive", True):
             return
+        # v2.5.7 修复：预瞄释放标记每帧重置（此前长按后残留 True，
+        #   导致之后的短按也被当成"拖拽预瞄释放"，方向/距离全是上一次的旧值）
+        self._p2_cast_aimed = False
+        self._p2_cast_angle = 0.0
+        self._p2_cast_ratio = 1.0
         # ===== 输入来源 =====
         if self.multiplayer_mode == "network" and self.net_host:
             ci = self.net_host.get_input()
@@ -409,6 +426,11 @@ class MultiplayerMixin:
         else:
             p2.update(dt, 0, 0, angle, self.world, sprinting=sprint)
         p2.facing_angle = angle
+        # v2.5.7 过热倾泻统一更新（P2 此前计时器永不递减 → 永久过热）
+        try:
+            self._update_overdrive(p2, dt)
+        except Exception:
+            pass
         # ===== 射击 =====
         # v2.5.6：P2 蓄力预瞄武器（AWM/轨道炮）——按住蓄力（显示预瞄线，角度随摇杆实时更新），
         # 松开才开火一次（与 P1 完全一致；修掉"按下即开火"与"预瞄线卡死"）
@@ -441,6 +463,10 @@ class MultiplayerMixin:
                     self.assets.play_sound_random(["shoot_pistol", "shoot_smg"])
             elif _veh2 is None or not _veh2.alive:
                 weapon = p2.get_current_weapon()
+                # v2.5.7 过热倾泻：无限弹药（此前只有 P1 有）
+                if getattr(p2, 'overdrive_timer', 0) > 0 and hasattr(weapon, 'current_ammo') \
+                        and weapon.current_ammo != "∞":
+                    weapon.current_ammo = min(weapon.max_ammo, weapon.current_ammo + 1)
                 if weapon.can_fire():
                     projs = weapon.fire(
                         p2.x, p2.y, _p2_angle,
@@ -449,7 +475,11 @@ class MultiplayerMixin:
                     self.projectiles.extend(projs)
                     self.assets.play_sound_random(["shoot_pistol", "melee_swing"])
         # ===== 技能 =====
-        if skill:
+        # v2.5.7 修复：同屏键控模式下 P2 技能统一由"松开 U 键"触发
+        #   （此前按住 U 的第一帧就走了短按释放 → 长按预瞄方向/距离完全用不上）
+        _kb_skill_blocked = (self.multiplayer_mode == "same_screen"
+                             and self.config.control_mode != ControlMode.TOUCH)
+        if skill and not _kb_skill_blocked:
             st = self.p2_selected_skill
             if st is None:
                 sts = self._get_unlocked_skills_for(p2)
@@ -457,14 +487,16 @@ class MultiplayerMixin:
                     st = sts[0]
             if st:
                 # v2.2.3 P2 载具存活时长按技能 → 退出载具
+                # v2.5.7 修复：只有当前技能为「载具召唤」时长按才退出载具；其它技能照常释放
                 _veh2x = getattr(p2, 'vehicle', None)
-                if _veh2x is not None and _veh2x.alive:
+                _p2_veh_skill = (st == SkillType.VEHICLE_SUMMON)
+                if _veh2x is not None and _veh2x.alive and _p2_veh_skill:
                     if getattr(self, '_p2_cast_aimed', False):
-                        self._vehicle_destroyed_for(p2, friendly=True)
+                        self._exit_vehicle(p2)
                     else:
                         self.floating_texts.append(FloatingText(
                             p2.x, p2.y - 50, "长按技能按钮退出载具", (160, 160, 160), 1.2))
-                elif getattr(p2, 'riding_vehicle', None) is not None:
+                elif getattr(p2, 'riding_vehicle', None) is not None and _p2_veh_skill:
                     # v2.5.1 P2 乘客：长按技能按钮下车
                     if getattr(self, '_p2_cast_aimed', False):
                         self._exit_vehicle(p2)
@@ -487,6 +519,18 @@ class MultiplayerMixin:
             self._throw_p2()
         # ===== 拾取 =====
         self._pickup_for_player(p2)
+        # ===== v2.5.7 P2 技能按钮 CD 显示（此前从未调用 set_cooldown → 按钮不显示冷却） =====
+        try:
+            if self.config.control_mode == ControlMode.TOUCH and self.p2_controls:
+                _c2 = self.p2_controls.get("skill_caster")
+                if _c2 is not None:
+                    _sel2 = self.p2_selected_skill
+                    if _sel2 and _sel2 in p2.active_skills:
+                        _c2.set_cooldown(p2.active_skills[_sel2])
+                    else:
+                        _c2.set_cooldown(0)
+        except Exception:
+            pass
         # v2.2.7：P2 死神镰刀换弹期间同样触发圆形横扫（与 P1 一致）
         try:
             _cw2 = p2.get_current_weapon()
@@ -592,7 +636,8 @@ class MultiplayerMixin:
         if skill_type in p2.active_skills:
             self.floating_texts.append(FloatingText(p2.x, p2.y - 40, "冷却中...", color=GRAY, lifetime=1.0))
             return
-        cd = 10.0 * p2.cooldown_mult
+        # v2.5.7：P2 冷却同样走统一表（与 P1 一致）
+        cd = get_skill_cooldown(skill_type, p2.cooldown_mult)
         # 简易执行
         ok = False
         if skill_type == SkillType.DASH:
@@ -600,11 +645,9 @@ class MultiplayerMixin:
             p2.invincible_timer = max(p2.invincible_timer, 0.3)
             p2.x += math.cos(math.radians(p2.facing_angle)) * 120
             p2.y += math.sin(math.radians(p2.facing_angle)) * 120
-            cd = 5.0
         elif skill_type == SkillType.GRENADE:
             ok = True
             self._spawn_grenade(p2.x, p2.y, p2.facing_angle, p2)
-            cd = 8.0
         elif skill_type == SkillType.SHOCKWAVE:
             ok = True
             for e in self.enemies:
@@ -616,9 +659,8 @@ class MultiplayerMixin:
                                             start_radius=150, end_angle_offset=3.0))
         elif skill_type == SkillType.VEHICLE_SUMMON:
             # v2.2.0 P2 载具召唤（与 P1 并行）
+            # v2.5.7 修复：原来 cd 被写成 12.0（覆盖了 60s 载具冷却）→ 与 P1 统一为 60s
             ok = self._p2_skill_vehicle_summon()
-            cd = 60.0 * p2.cooldown_mult
-            cd = 12.0
         elif skill_type == SkillType.ICE_NOVA:
             ok = True
             from buff import BuffType
@@ -627,15 +669,15 @@ class MultiplayerMixin:
                 if math.hypot(e.x - p2.x, e.y - p2.y) <= 240:
                     e.buff_manager.add_buff(BuffType.FROST, duration=3.0)
                     e.take_damage(40 * p2.damage_multiplier, damage_type="aoe")
-            cd = 20.0
         elif skill_type == SkillType.SCYTHE_DANCE:
             ok = self._skill_p2_scythe_dance(p2)
-            cd = 30.0
         elif skill_type == SkillType.MINIGUN_OVERDRIVE:
-            p2.overdrive_timer = 5.0
-            p2.overdrive_mult = 3.0
+            # v2.5.7：时长/倍率按等级（P1 同规则）
+            _odlv = self._legendary_skill_level(SkillType.MINIGUN_OVERDRIVE, p2)
+            p2.overdrive_timer = {1: 3.0, 2: 4.0, 3: 5.0, 4: 6.0, 5: 8.0}.get(_odlv, 5.0)
+            p2.overdrive_mult = {1: 2.5, 2: 3.0, 3: 3.5, 4: 4.0, 5: 4.5}.get(_odlv, 3.0)
+            p2.overdrive_burn = (_odlv >= 4)
             ok = True
-            cd = 25.0
         elif skill_type == SkillType.RAILGUN_ANNIHILATION:
             ok = True
             dmg = 300 * p2.damage_multiplier
@@ -644,11 +686,9 @@ class MultiplayerMixin:
                               pierce=99, explosive=True, explosion_radius=90,
                               is_laser=True, laser_width=50, laser_duration=0.85)
             self.projectiles.append(proj)
-            cd = 35.0
         elif skill_type == SkillType.RIOT_GEAR:
             # v2.2.7：P2 防爆套装（不再提示"暂不支持双人"）——切换装备，规则与 P1 一致
             ok = True
-            cd = 30.0 * p2.cooldown_mult
             rg = getattr(p2, 'riot_gear', None)
             if rg is None:
                 try:
@@ -671,7 +711,6 @@ class MultiplayerMixin:
         elif skill_type == SkillType.SHIELD_BASH:
             # v2.2.7：P2 肘击（防爆套装近战）
             ok = True
-            cd = 3.0 * p2.cooldown_mult
             try:
                 self._skill_shield_bash_for(p2)
             except Exception:
@@ -702,7 +741,7 @@ class MultiplayerMixin:
         if skill_type in p2.active_skills:
             self.floating_texts.append(FloatingText(p2.x, p2.y - 40, "冷却中...", color=GRAY, lifetime=1.0))
             return False
-        cd = 10.0 * p2.cooldown_mult
+        cd = get_skill_cooldown(skill_type, p2.cooldown_mult)
         ok = False
         if skill_type == SkillType.GRENADE:
             actual_dist = self._get_skill_max_distance(SkillType.GRENADE) * max(0.1, distance_ratio)
@@ -710,7 +749,6 @@ class MultiplayerMixin:
             ty = p2.y + math.sin(angle) * actual_dist
             self._throw_skill_grenade_p2(tx, ty, p2)
             ok = True
-            cd = 8.0
         elif skill_type == SkillType.RAILGUN_ANNIHILATION:
             lv = self._legendary_skill_level(SkillType.RAILGUN_ANNIHILATION, p2)
             dmg = (300 + 80 * (lv - 1)) * p2.damage_multiplier * p2.buff_manager.get_damage_mult()
@@ -721,15 +759,14 @@ class MultiplayerMixin:
                               is_laser=True, laser_width=width, laser_duration=0.85)
             self.projectiles.append(proj)
             ok = True
-            cd = 35.0
         elif skill_type == SkillType.SCYTHE_DANCE:
             ok = self._skill_p2_scythe_dance(p2)
-            cd = 30.0
         elif skill_type == SkillType.MINIGUN_OVERDRIVE:
-            p2.overdrive_timer = 5.0
-            p2.overdrive_mult = 3.0
+            _odlv = self._legendary_skill_level(SkillType.MINIGUN_OVERDRIVE, p2)
+            p2.overdrive_timer = {1: 3.0, 2: 4.0, 3: 5.0, 4: 6.0, 5: 8.0}.get(_odlv, 5.0)
+            p2.overdrive_mult = {1: 2.5, 2: 3.0, 3: 3.5, 4: 4.0, 5: 4.5}.get(_odlv, 3.0)
+            p2.overdrive_burn = (_odlv >= 4)
             ok = True
-            cd = 25.0
         elif skill_type == SkillType.SHOCKWAVE:
             ok = True
             for e in self.enemies:
@@ -740,7 +777,6 @@ class MultiplayerMixin:
                     e.knockdown_timer = 0.8
             self.slash_arcs.append(SlashArc(p2.x, p2.y, 0, 200, (255, 220, 100), lifetime=0.4, kind="scythe",
                                             start_radius=150, end_angle_offset=3.0))
-            cd = 12.0
         elif skill_type == SkillType.GRAPPLE_PULL:
             # v2.2.6：P2 钩爪施放（支持锁定直飞/路径勾取/自我拉拽，与 P1 一致）
             rg = p2.riot_gear
@@ -826,7 +862,8 @@ class MultiplayerMixin:
             if rg.use_grapple(tx, ty, p2.x, p2.y, target, scythe=scythe,
                               direct_pull=locals().get('_direct_pull', False)):
                 ok = True
-                cd = rg.grapple_scythe_max_cooldown if scythe else rg.grapple_max_cooldown
+                # v2.5.7 统一钩爪 CD（与 P1 同一套：技能 CD 与装备 CD 取大者）
+                cd = self._grapple_cd_for(p2)
                 self.floating_texts.append(FloatingText(p2.x, p2.y - 45, "钩爪发射!", color=GOLD, lifetime=1.2))
                 # v2.2.12：发射后清理瞄准锁定态（避免残留红色锁定误导）
                 rg.grapple_aiming = False
@@ -930,16 +967,8 @@ class MultiplayerMixin:
         self.assets.play_sound("grenade_throw")
 
     def _p2_throwable_stock(self, p2):
-        """确保 P2 有投掷物库存容器（道具拾取/存档会填充，这里兜底给基础库存）"""
-        if not hasattr(p2, 'throwables') or not isinstance(getattr(p2, 'throwables', None), dict):
-            p2.throwables = {}
-        # 初始保底库存：燃烧弹+烟雾弹各 2（与单人开局机制一致）
-        if not getattr(p2, '_throwables_init', False):
-            p2._throwables_init = True
-            if p2.throwables.get("incendiary", 0) <= 0:
-                p2.throwables["incendiary"] = 2
-            if p2.throwables.get("smoke", 0) <= 0:
-                p2.throwables["smoke"] = 2
+        """确保 P2 有投掷物库存容器（与 P1 完全一致的规则，见 _ensure_throwable_stock）"""
+        self._ensure_throwable_stock(p2)
 
     def _cycle_p2_throwable(self, p2):
         """P2 投掷物切换：仅在持有库存的类型间轮换（燃烧弹→烟雾弹→集束→EMP）"""

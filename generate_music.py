@@ -8,7 +8,12 @@
 
 import os
 import random
-from mido import MidiFile, MidiTrack, Message, MetaMessage, bpm2tempo
+# v2.5.7：优先用 mido；没装 mido 的环境（手机 PyDroid3 / 离线 CI）自动退回
+# 仓库自带的零依赖实现 midi_lite（API 同名子集，生成结果等价）
+try:
+    from mido import MidiFile, MidiTrack, Message, MetaMessage, bpm2tempo
+except ImportError:  # pragma: no cover - 环境差异
+    from midi_lite import MidiFile, MidiTrack, Message, MetaMessage, bpm2tempo
 
 OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'assets', 'music')
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -110,6 +115,20 @@ def make_midi(bpm, tpb=480):
     meta.append(MetaMessage('time_signature', numerator=4, denominator=4, time=0))
     mid.tracks.append(meta)
     return mid
+
+
+def finish_meta(mid, final=0):
+    """v2.5.7：给速度轨补 end_of_track（长度与各乐器轨一致）。
+
+    少了这个收尾标记，部分手机音乐 App 导入后会提示"文件不完整"
+    或把速度轨当成空轨丢弃。"""
+    try:
+        if not mid.tracks:
+            return
+        _meta = mid.tracks[0]
+        _meta.append(MetaMessage('end_of_track', time=max(int(final), 0)))
+    except Exception:
+        pass
 
 
 def _seg(note_on_msgs, n=8, bar_beats=4, bpm=120, beats=4):

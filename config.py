@@ -735,6 +735,54 @@ class SkillType(Enum):
     VEHICLE_SUMMON = auto()    # 载具召唤（v2.2.0）- 生命强化满级解锁：重卡/99A坦克/武装直升机
 
 
+# ==================== v2.5.7 技能冷却表（P1/P2 唯一真源） ====================
+# 修复：此前 P1 在 _use_skill / _use_skill_aimed 里各写了一份冷却表（且 _use_skill_aimed
+# 缺了传说级技能 → 预瞄释放时 CD 变成默认 10s），P2 又是第三份（载具召唤还被写成 12s）。
+# 现在统一到这张表，P1/P2/预瞄/短按 全部共用，保证同一技能 CD 一致。
+SKILL_COOLDOWNS = {
+    # 基础主动技
+    SkillType.DASH: 5.0,
+    SkillType.GRENADE: 8.0,
+    SkillType.TURRET: 15.0,
+    SkillType.AIRSTRIKE: 20.0,
+    SkillType.SHIELD_BASH: 3.0,
+    SkillType.GRAPPLE_PULL: 2.0,
+    SkillType.TIME_SLOW: 25.0,
+    SkillType.OVERLOAD: 30.0,
+    SkillType.RIOT_GEAR: 30.0,
+    SkillType.STEEL_WILL: 30.0,
+    SkillType.BLINK: 8.0,
+    SkillType.BLACK_HOLE: 25.0,
+    SkillType.ICE_NOVA: 20.0,
+    SkillType.CHAIN_LIGHTNING: 15.0,
+    SkillType.BERSERK: 20.0,
+    SkillType.PHANTOM_STRIKE: 18.0,
+    SkillType.MEDIC_POD: 30.0,
+    SkillType.SHOCKWAVE: 12.0,
+    # Buff 系
+    SkillType.WAR_CRY: 25.0,
+    SkillType.PURIFY: 35.0,
+    # 传说级武器专属
+    SkillType.SCYTHE_DANCE: 30.0,
+    SkillType.MINIGUN_OVERDRIVE: 25.0,
+    SkillType.RAILGUN_ANNIHILATION: 35.0,
+    SkillType.VEHICLE_SUMMON: 60.0,
+}
+DEFAULT_SKILL_COOLDOWN = 10.0
+
+
+def get_skill_cooldown(skill_type, cooldown_mult=1.0):
+    """统一取技能冷却秒数（P1/P2 共用）。"""
+    base = SKILL_COOLDOWNS.get(skill_type, DEFAULT_SKILL_COOLDOWN)
+    try:
+        mult = float(cooldown_mult) if cooldown_mult else 1.0
+    except Exception:
+        mult = 1.0
+    if mult < 0:
+        mult = 1.0
+    return base * mult
+
+
 # ==================== 局外商店：武器价格（金币） ====================
 # 武器解锁价格（首次购买），升级费用 = 基础价 * 0.6 * 目标等级
 WEAPON_PRICES = {

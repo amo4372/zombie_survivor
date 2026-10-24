@@ -141,6 +141,15 @@ class PlayMixin:
                                 rect.x + half_w // 2, _by - int(2 * scale))))
         except Exception:
             pass
+        # ===== v2.5.7 PvP 毒圈状态 =====
+        try:
+            _ztxt, _zcol = self._pvp_zone_status()
+            if _ztxt:
+                _zsurf = g.font_small.render(_ztxt, True, _zcol)
+                self.screen.blit(_zsurf, _zsurf.get_rect(midtop=(
+                    rect.x + half_w // 2, rect.y + int(116 * scale))))
+        except Exception:
+            pass
         # ===== 阵营角标（多人） =====
         try:
             if g.is_multiplayer_active():
@@ -215,13 +224,47 @@ class PlayMixin:
                 else:
                     s_txt = g.font_small.render(f"技能: {sname}", True, (150, 230, 150))
                 self.screen.blit(s_txt, (bx, rect.y + int(92 * scale)))
+        # ===== 投掷物（类型 + 数量）v2.5.7：补齐 P2（此前 P2 看不到投掷物状态） =====
+        try:
+            if label == "P2":
+                _tkey = getattr(g, 'p2_selected_throwable', None)
+            else:
+                _tkey = getattr(g, 'selected_throwable', None)
+            if _tkey:
+                _tname = g.throwable_names.get(_tkey, "?")
+                _tcol = g.throwable_colors.get(_tkey, ORANGE)
+                _tc = getattr(player, 'throwables', {}).get(_tkey, 0)
+                _ttotal = sum(getattr(player, 'throwables', {}).values())
+                if _ttotal > 0:
+                    _t_txt = g.font_small.render(f"投掷: {_tname} x{_tc}", True, _tcol)
+                else:
+                    _t_txt = g.font_small.render("投掷: 无", True, (110, 110, 110))
+                self.screen.blit(_t_txt, (bx, rect.y + int(106 * scale)))
+        except Exception:
+            pass
         # ===== Buff 简览 =====
         try:
             _buffs = player.buff_manager.get_active_buffs()
             if _buffs:
                 _bnames = [getattr(b, 'name', str(b.buff_type))[:6] for b in _buffs[:3]]
                 b_txt = g.font_small.render("Buff: " + "·".join(_bnames), True, (200, 160, 255))
-                self.screen.blit(b_txt, (bx, rect.y + int(106 * scale)))
+                self.screen.blit(b_txt, (bx, rect.y + int(120 * scale)))
+        except Exception:
+            pass
+        # ===== 防爆套装状态 v2.5.7：补齐 P2 =====
+        try:
+            _rg = getattr(player, 'riot_gear', None)
+            if _rg is not None:
+                if getattr(_rg, 'equipped', False):
+                    _rg_txt = "防爆套装: 已装备"
+                    if getattr(_rg, 'shield_broken', False):
+                        _rg_txt = "防爆套装: 观察窗已破"
+                    self.screen.blit(g.font_small.render(_rg_txt, True, (120, 200, 255)),
+                                     (bx, rect.y + int(134 * scale)))
+                elif getattr(_rg, 'riot_gear_cd_timer', 0) > 0:
+                    self.screen.blit(g.font_small.render(
+                        f"防爆冷却: {getattr(_rg, 'riot_gear_cd_timer', 0):.1f}s", True, (150, 170, 190)),
+                        (bx, rect.y + int(134 * scale)))
         except Exception:
             pass
         # ===== 得分 =====
@@ -238,12 +281,12 @@ class PlayMixin:
             self.screen.blit(ht, (rect.x + half_w // 2 - ht.get_width() // 2, rect.y + int(120 * scale)))
         # ===== 倒地状态：显示救援进度条 =====
         if getattr(player, 'downed', False):
-            pygame.draw.rect(self.screen, (80, 70, 20), (bx, rect.y + int(132 * scale), bar_w, int(10 * scale)))
+            pygame.draw.rect(self.screen, (80, 70, 20), (bx, rect.y + int(148 * scale), bar_w, int(10 * scale)))
             prog = max(0.0, min(1.0, getattr(player, 'rescue_progress', 0) / 2.5))
-            pygame.draw.rect(self.screen, (240, 220, 80), (bx, rect.y + int(132 * scale), int(bar_w * prog), int(10 * scale)))
-            pygame.draw.rect(self.screen, (255, 255, 255), (bx, rect.y + int(132 * scale), bar_w, int(10 * scale)), 1)
+            pygame.draw.rect(self.screen, (240, 220, 80), (bx, rect.y + int(148 * scale), int(bar_w * prog), int(10 * scale)))
+            pygame.draw.rect(self.screen, (255, 255, 255), (bx, rect.y + int(148 * scale), bar_w, int(10 * scale)), 1)
             dtxt = g.font_small.render("倒地 · 队友靠近救援", True, (240, 230, 120))
-            self.screen.blit(dtxt, (bx, rect.y + int(144 * scale)))
+            self.screen.blit(dtxt, (bx, rect.y + int(160 * scale)))
         # ===== 触控控件（仅触控模式） =====
         if g.config.control_mode == ControlMode.TOUCH and not g.is_network_client_render():
             if label == "P1":
@@ -345,13 +388,18 @@ class PlayMixin:
                 _ed = min(player.x - _lo, _hi - player.x, player.y - _lo, _hi - player.y)
                 _pd = 420.0
                 if _ed < _pd and player.alive:
+                    # v2.5.7 修复：分屏时用"当前视口尺寸"而不是整窗尺寸
+                    #（此前用 scaled_width/scaled_height → P2 视口红框画到屏幕外，
+                    #  文字又按整窗中心 + viewport_x 计算 → P2 永远看不到边界警示）
+                    _vw = self.screen.get_width()
+                    _vh = self.screen.get_height()
                     _a = int(150 * (1 - max(0.0, _ed) / _pd))
-                    _bvs = pygame.Surface((self.game.scaled_width, self.game.scaled_height), pygame.SRCALPHA)
-                    pygame.draw.rect(_bvs, (255, 40, 40, _a), (0, 0, self.game.scaled_width, self.game.scaled_height), max(2, int(5 * scale)))
+                    _bvs = pygame.Surface((_vw, _vh), pygame.SRCALPHA)
+                    pygame.draw.rect(_bvs, (255, 40, 40, _a), (0, 0, _vw, _vh), max(2, int(5 * scale)))
                     self.screen.blit(_bvs, (0, 0))
                     if _ed < _pd * 0.6:
                         _bt = self.game.font_small.render("⚠ 地图边界", True, (255, 90, 90))
-                        self.screen.blit(_bt, _bt.get_rect(midtop=(self.game.scaled_width // 2 + viewport_x, int(30 * scale))))
+                        self.screen.blit(_bt, _bt.get_rect(midtop=(_vw // 2, int(30 * scale))))
         except Exception:
             pass
         # 绘制世界（v2.5.1 修复：world 挂载于 game，Renderer 本身无 world 属性）
@@ -461,20 +509,22 @@ class PlayMixin:
             _q_succ = getattr(player, 'qte_success_timer', 0.0)
             _q_fail = getattr(player, 'qte_fail_timer', 0.0)
             _q_flash = getattr(player, 'qte_hit_flash', 0.0)
-            _cx = self.game.scaled_width // 2 + viewport_x
+            # v2.5.7 修复：分屏时用"当前视口"坐标（此前按整窗中心 + viewport_x 算，
+            #   边缘红框又 blit 到 viewport_x → P2 视口里整块画到屏幕外，看不到被勾提示）
+            _cx = self.screen.get_width() // 2
             # 被勾住：屏幕边缘红色脉冲（紧迫感）
             if _is_grappled:
                 _pulse = 0.5 + 0.5 * math.sin(pygame.time.get_ticks() * 0.02)
                 _ew = int(10 * scale * (0.6 + 0.4 * _pulse))
-                _vw2 = self.game.scaled_width // (2 if viewport_x > 0 else 1)  # 分屏：边缘框限本视口
-                _vh2 = self.game.scaled_height
+                _vw2 = self.screen.get_width()   # 分屏：边缘框限本视口
+                _vh2 = self.screen.get_height()
                 _edge = pygame.Surface((_vw2, _vh2), pygame.SRCALPHA)
                 _ea = int(70 + 50 * _pulse)
                 pygame.draw.rect(_edge, (220, 30, 30, _ea), (0, 0, _edge.get_width(), _ew))
                 pygame.draw.rect(_edge, (220, 30, 30, _ea), (0, _edge.get_height() - _ew, _edge.get_width(), _ew))
                 pygame.draw.rect(_edge, (220, 30, 30, _ea), (0, 0, _ew, _edge.get_height()))
                 pygame.draw.rect(_edge, (220, 30, 30, _ea), (_edge.get_width() - _ew, 0, _ew, _edge.get_height()))
-                self.screen.blit(_edge, (viewport_x, 0))
+                self.screen.blit(_edge, (0, 0))
                 # 绳索线（从钩爪源画到被勾玩家）
                 try:
                     _rf = getattr(player, 'qte_rope_from', None)
@@ -597,7 +647,8 @@ class PlayMixin:
                 try:
                     _px = int((p.x - cam_x) * scale)
                     _py = int((p.y - cam_y) * scale)
-                    _tname = getattr(p, 'name', None) or getattr(p, 'nickname', None) or ""
+                    _tname = (getattr(p, 'name', None) or getattr(p, 'nickname', None)
+                              or getattr(p, 'nick', None) or "")
                     _tid = getattr(p, 'team_id', 0)
                     _same = (_tid == getattr(player, 'team_id', 0)) or (not getattr(self.game.config, 'pvp_enabled', False))
                     _tcol = (120, 240, 120) if _same else (250, 90, 90)
@@ -758,6 +809,9 @@ class PlayMixin:
 
         # 绘制烟雾区域
         self._draw_smoke_zones(cam_x, cam_y, scale)
+
+        # v2.5.7 PvP 毒圈：圈外毒雾遮罩（画在世界之上、实体之下）
+        self._draw_pvp_zone_fill(cam_x, cam_y, scale)
 
         # 绘制空袭飞机
         self._draw_airstrike_planes(cam_x, cam_y, scale)
@@ -994,6 +1048,60 @@ class PlayMixin:
         except Exception:
             pass
 
+    def _pvp_zone_status(self):
+        """v2.5.7 PvP 毒圈状态文本（阶段/剩余收缩时间/圈外伤害）"""
+        z = getattr(self.game, 'pvp_zone', None)
+        if not z:
+            return "", (200, 200, 200)
+        try:
+            phases = getattr(self.game, 'PVP_ZONE_PHASES', []) or []
+            _ph = int(z.get('phase', 0))
+            _dps = float(z.get('dps', 0.0))
+            if _ph < len(phases):
+                _shrink = phases[_ph][1]
+                _left = max(0.0, _shrink - float(z.get('timer', 0.0)))
+                return f"毒圈收缩中 {_left:.0f}s · 圈外 -{int(_dps)}/s", (255, 130, 160)
+            return f"毒圈已收拢 · 圈外 -{int(_dps)}/s", (255, 90, 120)
+        except Exception:
+            return "", (200, 200, 200)
+
+    def _draw_pvp_zone_fill(self, cam_x, cam_y, scale):
+        """v2.5.7 PvP 毒圈：圈外毒雾遮罩 + 边界光圈（仅 PvP 生效）"""
+        z = getattr(self.game, 'pvp_zone', None)
+        if not z:
+            return
+        try:
+            _cx = int((z.get('cx', 0) - cam_x) * scale)
+            _cy = int((z.get('cy', 0) - cam_y) * scale)
+            _r = int(z.get('r', 0) * scale)
+            if _r <= 2:
+                return
+            _w = self.screen.get_width()
+            _h = self.screen.get_height()
+            if _w <= 0 or _h <= 0:
+                return
+            # 毒雾底色
+            _surf = pygame.Surface((_w, _h), pygame.SRCALPHA)
+            _surf.fill((120, 20, 70, 92))
+            # 圈内镂空
+            _mask = pygame.Surface((_w, _h), pygame.SRCALPHA)
+            _mask.fill((255, 255, 255, 255))
+            pygame.draw.circle(_mask, (0, 0, 0, 255), (_cx, _cy), _r)
+            try:
+                _surf.blit(_mask, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+            except Exception:
+                pass
+            self.screen.blit(_surf, (0, 0))
+            # 边界光圈（双层，呼吸感）
+            _t = pygame.time.get_ticks() / 1000.0
+            _pulse = 0.75 + 0.25 * math.sin(_t * 3.0)
+            pygame.draw.circle(self.screen, (255, 90, 130), (_cx, _cy), _r,
+                               max(2, int(4 * scale * _pulse)))
+            pygame.draw.circle(self.screen, (255, 190, 210), (_cx, _cy),
+                               max(1, int((4 * scale * _pulse) + 3)), max(1, int(1 * scale)))
+        except Exception:
+            pass
+
     def _draw_throwable_preview(self, tc, scale):
         """投掷物瞄准预览（P1/P2 通用，v2.2.7 提取为共享绘制）"""
         try:
@@ -1110,6 +1218,15 @@ class PlayMixin:
                     _gtxt = self.game.font_small.render(f"+{int(_gain)} 秒", True, (255, int(200 * _alpha), 40))
                     _gtxt.set_alpha(_gp)
                     self.screen.blit(_gtxt, _gtxt.get_rect(midtop=(_cx, time_rect.bottom + int(6 * scale))))
+        except Exception:
+            pass
+
+        # v2.5.7 PvP 毒圈状态（单人 HUD）
+        try:
+            _ztxt, _zcol = self._pvp_zone_status()
+            if _ztxt:
+                _zs = self.game.font_small.render(_ztxt, True, _zcol)
+                self.screen.blit(_zs, _zs.get_rect(midtop=(_cx, time_rect.bottom + int(22 * scale))))
         except Exception:
             pass
 

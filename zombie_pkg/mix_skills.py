@@ -113,6 +113,8 @@ class Config:
         self.mp_p1_layout = {}  # 双人模式 P1 触控布局（独立于单机）
         self.p2_hud_layout = {}  # 双人模式 P2 触控布局
         self.hud_layout_version = 0  # HUD 布局方案版本：v2.0.6 起=2（双人默认布局大改，旧布局需重置）
+        # v2.5.7 同屏多人房间配置持久化（名字/武器/角色/阵营）
+        self.mp_room_cfgs = {}  # {"1": {"name": str, "weapon": str, "char": str, "team": int}, ...}
         self.config_file = "config.json"
         self.load()
         # v2.0.6 布局版本升级：旧版双人布局（v2.0.2 前全屏坐标）会堆叠/缺摇杆，重置为默认并持久化
@@ -154,6 +156,15 @@ class Config:
                     if isinstance(_p2, dict):
                         self.p2_hud_layout = {k: list(v) for k, v in _p2.items() if isinstance(v, (list, tuple)) and len(v) == 2}
                     self.hud_layout_version = data.get("hud_layout_version", 0)
+                    # v2.5.7 多人房间配置持久化
+                    _mrc = data.get("mp_room_cfgs", {})
+                    if isinstance(_mrc, dict):
+                        self.mp_room_cfgs = {}
+                        for _k, _v in _mrc.items():
+                            if isinstance(_v, dict):
+                                self.mp_room_cfgs[str(_k)] = {
+                                    k2: v2 for k2, v2 in _v.items()
+                                    if isinstance(v2, (str, int, float, bool))}
         except Exception as e:
             logger.error(f"配置加载失败: {e}")
 
@@ -175,6 +186,7 @@ class Config:
             "mp_p1_layout": self.mp_p1_layout,
             "p2_hud_layout": self.p2_hud_layout,
             "hud_layout_version": getattr(self, 'hud_layout_version', 2),
+            "mp_room_cfgs": getattr(self, 'mp_room_cfgs', {}) or {},
         }
         try:
             with open(self.config_file, "w", encoding="utf-8") as f:
@@ -236,8 +248,26 @@ class SkillsMixin:
             SkillType.DASH: 150,
             SkillType.SHIELD_BASH: 120,
             SkillType.SHOCKWAVE: 150,
+            # v2.5.7 传说级：湮灭射线（射线长度）/ 死亡轮回（AoE 半径）
+            SkillType.RAILGUN_ANNIHILATION: 900,
+            SkillType.SCYTHE_DANCE: 400,
         }
         return distances.get(skill_type, 500)
+
+    def _grapple_cd_for(self, player):
+        """v2.5.7 统一钩爪冷却（P1/P2 同一套规则）：
+        技能 CD（SKILL_COOLDOWNS，2.0s × 冷却缩减）与防爆装备自带 CD 取较大者。
+        修复：P2 此前只吃装备 CD（0.8s），比 P1（2.0s）快 2.5 倍。"""
+        cd = get_skill_cooldown(SkillType.GRAPPLE_PULL, getattr(player, 'cooldown_mult', 1.0))
+        rg = getattr(player, 'riot_gear', None)
+        if rg is not None:
+            try:
+                gear_cd = (rg.grapple_scythe_max_cooldown if self._is_wielding_scythe_for(player)
+                           else rg.grapple_max_cooldown)
+                cd = max(cd, float(gear_cd))
+            except Exception:
+                pass
+        return cd
 
     def _use_skill(self, skill_type):
         """使用指定技能"""
@@ -267,38 +297,16 @@ class SkillsMixin:
             ))
             return False
 
-        # 检查并设置冷却
-        cooldowns = {
-            SkillType.DASH: 5.0, 
-            SkillType.GRENADE: 8.0, 
-            SkillType.TURRET: 15.0,
-            SkillType.AIRSTRIKE: 20.0, 
-            SkillType.SHIELD_BASH: 3.0,
-            SkillType.GRAPPLE_PULL: 2.0, 
-            SkillType.TIME_SLOW: 25.0, 
-            SkillType.OVERLOAD: 30.0,
-            SkillType.RIOT_GEAR: 30.0,
-            SkillType.BLINK: 8.0,
-            SkillType.BLACK_HOLE: 25.0,
-            SkillType.ICE_NOVA: 20.0,
-            SkillType.CHAIN_LIGHTNING: 15.0,
-            SkillType.BERSERK: 20.0,
-            SkillType.PHANTOM_STRIKE: 18.0,
-            SkillType.MEDIC_POD: 30.0,
-            SkillType.SHOCKWAVE: 12.0,
-            SkillType.WAR_CRY: 25.0,
-            SkillType.PURIFY: 35.0,
-            SkillType.SCYTHE_DANCE: 30.0,
-            SkillType.MINIGUN_OVERDRIVE: 25.0,
-            SkillType.RAILGUN_ANNIHILATION: 35.0,
-            SkillType.VEHICLE_SUMMON: 60.0,
-        }
-        cd = cooldowns.get(skill_type, 10.0) * self.player.cooldown_mult
+        # 检查并设置冷却（v2.5.7：统一走 config.SKILL_COOLDOWNS，P1/P2/预瞄一致）
+        cd = get_skill_cooldown(skill_type, self.player.cooldown_mult)
 
         # 执行技能效果
         success = self._execute_skill(skill_type)
 
         if success:
+            # v2.5.7 钩爪 CD 统一（技能 CD 与装备 CD 取大者，P1/P2 一致）
+            if skill_type == SkillType.GRAPPLE_PULL:
+                cd = self._grapple_cd_for(self.player)
             # v2.2.3 载具召唤不在释放时进入冷却：CD 从载具报废或主动退出后才开始
             if skill_type != SkillType.RIOT_GEAR and skill_type != SkillType.VEHICLE_SUMMON:
                 self.player.active_skills[skill_type] = cd
@@ -343,9 +351,9 @@ class SkillsMixin:
 
         cooldowns = {
             SkillType.DASH: 5.0, 
-            SkillType.GRENADE: 8.0, 
+            SkillType.GRENADE: 8.0,
             SkillType.TURRET: 15.0,
-            SkillType.AIRSTRIKE: 20.0, 
+            SkillType.AIRSTRIKE: 20.0,
             SkillType.SHIELD_BASH: 3.0,
             SkillType.GRAPPLE_PULL: 2.0, 
             SkillType.TIME_SLOW: 25.0, 
@@ -360,7 +368,8 @@ class SkillsMixin:
             SkillType.MEDIC_POD: 30.0,
             SkillType.SHOCKWAVE: 12.0,
         }
-        cd = cooldowns.get(skill_type, 10.0) * self.player.cooldown_mult
+        # v2.5.7：预瞄释放的冷却同样走统一表（原来这里缺传说级技能 → 一律 10s）
+        cd = get_skill_cooldown(skill_type, self.player.cooldown_mult)
 
         # 根据 distance_ratio 计算实际距离
         max_dist = self._get_skill_max_distance(skill_type)
@@ -398,10 +407,19 @@ class SkillsMixin:
             target_x = self.player.x + math.cos(angle) * actual_dist
             target_y = self.player.y + math.sin(angle) * actual_dist
             success = self._skill_medic_pod(target_x, target_y)
+        elif skill_type == SkillType.RAILGUN_ANNIHILATION:
+            # v2.5.7 修复：湮灭射线按预瞄方向释放（原来忽略瞄准角，恒定朝 facing_angle）
+            success = self._skill_railgun_annihilation(angle=angle)
+        elif skill_type == SkillType.SCYTHE_DANCE:
+            # v2.5.7：死亡轮回为自身周围 AoE（有预瞄圈），方向不影响效果
+            success = self._skill_scythe_dance()
         else:
             success = self._execute_skill(skill_type)
 
         if success:
+            # v2.5.7 钩爪 CD 统一（技能 CD 与装备 CD 取大者，P1/P2 一致）
+            if skill_type == SkillType.GRAPPLE_PULL:
+                cd = self._grapple_cd_for(self.player)
             # v2.2.3 载具召唤不在释放时进入冷却：CD 从载具报废或主动退出后才开始
             if skill_type != SkillType.RIOT_GEAR and skill_type != SkillType.VEHICLE_SUMMON:
                 self.player.active_skills[skill_type] = cd
@@ -990,15 +1008,17 @@ class SkillsMixin:
         self.assets.play_sound("minigun")
         return True
 
-    def _skill_railgun_annihilation(self):
-        """轨道炮专属·湮灭射线：超粗贯穿激光 + 命中爆炸"""
+    def _skill_railgun_annihilation(self, angle=None):
+        """轨道炮专属·湮灭射线：超粗贯穿激光 + 命中爆炸
+        v2.5.7：支持传入瞄准角（长按预瞄时按预瞄方向释放，而不是固定朝向前方）"""
         lv = self._legendary_skill_level(SkillType.RAILGUN_ANNIHILATION)
         width = {1: 40, 2: 40, 3: 55, 4: 70, 5: 85}[lv]
         dmg = 300
         dmg *= (self.player.damage_multiplier *
                 self.player.buff_manager.get_damage_mult() *
                 getattr(self.player, 'damage_mult', 1.0))
-        angle = math.radians(self.player.facing_angle)
+        if angle is None:
+            angle = math.radians(self.player.facing_angle)
         proj = Projectile(
             self.player.x, self.player.y,
             math.cos(angle) * 3, math.sin(angle) * 3,

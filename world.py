@@ -586,8 +586,23 @@ class GameWorld:
 
         self.items.append(SpecialItem(x, y, item_type))
 
-    def update(self, dt, player_x, player_y):
-        self.ensure_chunks_around(player_x, player_y)
+    def update(self, dt, player_x, player_y, extra_positions=None):
+        """更新世界
+
+        v2.5.7：支持传入多名玩家位置（extra_positions=[(x, y), ...]）：
+        区块生成与道具刷新按"每个玩家"各算一次 —— 此前只用 P1 的位置，
+        多人模式里 P2 走到没人生成过道具的角落就永远捡不到补给。
+        """
+        positions = [(player_x, player_y)]
+        if extra_positions:
+            for _p in extra_positions:
+                try:
+                    positions.append((float(_p[0]), float(_p[1])))
+                except Exception:
+                    continue
+
+        for _px, _py in positions:
+            self.ensure_chunks_around(_px, _py)
 
         for item in self.items[:]:
             item.update(dt, player_x, player_y)
@@ -597,8 +612,12 @@ class GameWorld:
         self.item_spawn_timer += dt
         if self.item_spawn_timer >= self.item_spawn_interval:
             self.item_spawn_timer = 0
-            if len(self.items) < 8:
-                self.spawn_item(player_x, player_y)
+            # v2.5.7：每个玩家周围各刷一个道具（人数越多补给越多，但有上限）
+            _cap = 8 + 4 * (len(positions) - 1)
+            for _px, _py in positions:
+                if len(self.items) >= _cap:
+                    break
+                self.spawn_item(_px, _py)
 
     def _ensure_grid(self):
         """v2.4.0 惰性构建障碍空间网格（障碍只增不删，构建一次）"""

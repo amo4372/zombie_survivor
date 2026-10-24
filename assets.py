@@ -252,6 +252,11 @@ ASSET_REGISTRY = {
         "boss":              "assets/music/boss.ogg",
         "horde":             "assets/music/horde.ogg",
         "tension":           "assets/music/tension.ogg",
+        # v2.5.7 争分夺秒（TIMED）模式专用配乐
+        #   MIDI 源文件：assets/music/race_urgency.mid（可用 generate_music_race.py 重新生成）
+        #   成品 OGG 由用户用手机音乐 App 制作后放回 assets/music/race_urgency.ogg
+        #   文件缺失时资源管理器会跳过并由游戏逻辑回退到地图原声（不会报错）
+        "race":              "assets/music/race_urgency.ogg",
         # 兼容旧名称
         "gameplay":          "assets/music/school.ogg",
         # === 经典原版音乐（保留备用）===

@@ -404,6 +404,36 @@ class SkillCaster:
                 ex = px + math.cos(rad) * 150 * scale
                 ey = py + math.sin(rad) * 150 * scale
                 pygame.draw.line(screen, ORANGE, (int(sx), int(sy)), (int(ex), int(ey)), max(1, int(2 * scale)))
+        elif skill_type == SkillType.SCYTHE_DANCE:
+            # v2.5.7：死亡轮回长按预瞄圈（此前完全缺失 → 长按没有任何提示）
+            # 自身周围 AoE 半径（等级 1~5 = 300~400，按最大射程显示）
+            _sr = int(self.max_skill_distance * scale)
+            if _sr < 8:
+                _sr = int(340 * scale)
+            _surf = pygame.Surface((_sr * 2, _sr * 2), pygame.SRCALPHA)
+            pygame.draw.circle(_surf, (*LIME[:3], 45), (_sr, _sr), _sr)
+            screen.blit(_surf, (int(px - _sr), int(py - _sr)))
+            pygame.draw.circle(screen, LIME, (int(px), int(py)), _sr, max(1, int(2 * scale)))
+            for i in range(4):
+                _rad = math.radians(math.degrees(self.angle) + i * 90)
+                _ex = px + math.cos(_rad) * _sr
+                _ey = py + math.sin(_rad) * _sr
+                pygame.draw.line(screen, (*LIME[:3], 110), (int(px), int(py)),
+                                 (int(_ex), int(_ey)), max(1, int(1 * scale)))
+            _tt = pygame.font.SysFont("arial", 12).render("死亡轮回", True, LIME)
+            screen.blit(_tt, (int(px) + 6, int(py) - _sr - _tt.get_height()))
+        elif skill_type == SkillType.RAILGUN_ANNIHILATION:
+            # v2.5.7：湮灭射线预瞄线（方向即释放方向——此前释放恒定朝向前方）
+            _ex = px + math.cos(self.angle) * dist * scale
+            _ey = py + math.sin(self.angle) * dist * scale
+            pygame.draw.line(screen, (140, 200, 245), (int(px), int(py)), (int(_ex), int(_ey)),
+                             max(3, int(12 * scale)))
+            pygame.draw.line(screen, (225, 245, 255), (int(px), int(py)), (int(_ex), int(_ey)),
+                             max(1, int(3 * scale)))
+            pygame.draw.circle(screen, (140, 200, 245), (int(_ex), int(_ey)), int(12 * scale),
+                               max(1, int(2 * scale)))
+            _tt2 = pygame.font.SysFont("arial", 12).render("湮灭射线", True, (170, 220, 255))
+            screen.blit(_tt2, (int(_ex) + 10, int(_ey) - 20))
 
 
 class SkillCardSelector:

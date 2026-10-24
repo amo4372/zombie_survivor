@@ -41,6 +41,9 @@ class Player:
         self.qte_rope_to = (0.0, 0.0)    # 绳索终点（被勾玩家）
         self.qte_break_hint = 0.0        # 打断提示显示计时
         self.rescue_progress = 0.0  # 队友救援进度（0~2.5）
+        # v2.5.7 永久死亡标记（救援超时后不再被重新判定倒地）
+        self.permanently_dead = False
+        self.last_rescue_time = -999.0  # 上次被救起的时间（救援冷却用）
         self.level = 1
         self.exp = 0
         self.exp_to_level = 100

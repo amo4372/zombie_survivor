@@ -10,7 +10,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from generate_music import Trk, make_midi, chord, nn
+from generate_music import Trk, make_midi, chord, nn, finish_meta
 
 OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'assets', 'music')
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -20,7 +20,7 @@ P_STRINGS  = 48   # String Ensemble（紧张同音反复）
 P_TRUMPET  = 56   # Trumpet（警报动机）
 P_BASS     = 33   # Electric Bass（八分脉冲）
 P_TIMPANI  = 47   # Timpani
-P_SYNTH    = 82   # Lead 4 (chiffer) 合成警报
+P_SYNTH    = 83   # Lead 4 (chiffer) 合成警报（更亮更刺耳，适合防空警笛）
 
 # GM 鼓组（channel 9）
 KICK = 35; SNARE = 38; HH_CL = 42; HH_OP = 46; RIDE = 51; CRASH = 49
@@ -39,12 +39,13 @@ def generate_race():
     e = beat // 2   # 8 分音符 = 240 ticks
     mid = make_midi(BPM, tpb)
 
-    strings = Trk(mid, P_STRINGS, 0, 'StringsStaccato')
-    brass = Trk(mid, P_TRUMPET, 1, 'AlarmMotif')
-    bass = Trk(mid, P_BASS, 2, 'PulseBass')
-    timp = Trk(mid, P_TIMPANI, 3, 'Timpani')
-    synth = Trk(mid, P_SYNTH, 4, 'AlarmSynth')
-    drums = Trk(mid, None, 9, 'StopwatchTicks')
+    # 轨道名带序号：手机音乐工坊导入后按轨序排列，一眼看清谁是谁
+    strings = Trk(mid, P_STRINGS, 0, '1-Strings Staccato')
+    brass = Trk(mid, P_TRUMPET, 1, '2-Brass Alarm')
+    bass = Trk(mid, P_BASS, 2, '3-Bass Pulse')
+    timp = Trk(mid, P_TIMPANI, 3, '4-Timpani')
+    synth = Trk(mid, P_SYNTH, 4, '5-Synth Alarm')
+    drums = Trk(mid, None, 9, '6-Drums Stopwatch')
 
     total = BARS * 4 * beat
 
@@ -134,6 +135,8 @@ def generate_race():
 
     for tr in (strings, brass, bass, timp, synth, drums):
         tr.end(total)
+    # v2.5.7：速度轨收尾（否则部分手机 App 会提示文件不完整）
+    finish_meta(mid, total)
 
     path = os.path.join(OUTPUT_DIR, 'race_urgency.mid')
     mid.save(path)

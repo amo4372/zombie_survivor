@@ -90,12 +90,21 @@ def draw_teammate_arrow(surface, vw, vh, sx, sy, label, downed,
 
 
 def draw_teammate_indicators(renderer, game, viewports, vp):
-    """为指定视口绘制其余队友的方位指示（同屏 N 人通用）"""
+    """为指定视口绘制其余队友的方位指示（同屏 N 人通用）
+
+    v2.5.7 修复：PvP 下阵营不同 = 敌人，绝不能画成绿色队友箭头（更不能暴露距离）。
+    只有同阵营玩家才显示绿色方位箭头；PvP 的敌方信息统一走
+    draw_enemy_player_indicators（红箭头/探测脉冲，且不常驻暴露位置）。
+    """
     sw = vp.rect.width
     sh = vp.rect.height
+    _pvp = bool(getattr(getattr(game, "config", None), "pvp_enabled", False))
+    _my_team = getattr(vp.player, "team_id", 0)
     for other in viewports:
         if other is vp or other.player is None:
             continue
+        if _pvp and getattr(other.player, "team_id", 0) != _my_team:
+            continue  # PvP 异阵营 = 敌人，不画队友绿箭头
         sx, sy = _screen_pos_of(other.player.x, other.player.y, vp.camera, game.scale)
         dx, dy = other.player.x - vp.player.x, other.player.y - vp.player.y
         dist_m = math.hypot(dx, dy)

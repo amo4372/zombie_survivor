@@ -113,6 +113,9 @@ class Config:
         self.mp_p1_layout = {}  # 双人模式 P1 触控布局（独立于单机）
         self.p2_hud_layout = {}  # 双人模式 P2 触控布局
         self.hud_layout_version = 0  # HUD 布局方案版本：v2.0.6 起=2（双人默认布局大改，旧布局需重置）
+        # v2.5.7 同屏多人房间配置持久化（名字/武器/角色/阵营）：
+        #   此前每次进房间配置页都要重选一遍，这里保存到 config.json
+        self.mp_room_cfgs = {}  # {"1": {"name": str, "weapon": str, "char": str, "team": int}, ...}
         self.config_file = "config.json"
         self.load()
         # v2.0.6 布局版本升级：旧版双人布局（v2.0.2 前全屏坐标）会堆叠/缺摇杆，重置为默认并持久化
@@ -154,6 +157,14 @@ class Config:
                     if isinstance(_p2, dict):
                         self.p2_hud_layout = {k: list(v) for k, v in _p2.items() if isinstance(v, (list, tuple)) and len(v) == 2}
                     self.hud_layout_version = data.get("hud_layout_version", 0)
+                    # v2.5.7 多人房间配置持久化
+                    _mrc = data.get("mp_room_cfgs", {})
+                    if isinstance(_mrc, dict):
+                        self.mp_room_cfgs = {}
+                        for _k, _v in _mrc.items():
+                            if isinstance(_v, dict):
+                                self.mp_room_cfgs[str(_k)] = {k2: v2 for k2, v2 in _v.items()
+                                                             if isinstance(v2, (str, int, float, bool))}
         except Exception as e:
             logger.error(f"配置加载失败: {e}")
 
@@ -175,6 +186,7 @@ class Config:
             "mp_p1_layout": self.mp_p1_layout,
             "p2_hud_layout": self.p2_hud_layout,
             "hud_layout_version": getattr(self, 'hud_layout_version', 2),
+            "mp_room_cfgs": getattr(self, 'mp_room_cfgs', {}) or {},
         }
         try:
             with open(self.config_file, "w", encoding="utf-8") as f:

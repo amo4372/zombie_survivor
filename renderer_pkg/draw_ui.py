@@ -9,6 +9,7 @@ import pygame
 import mod_loader
 import math
 import random
+import time
 from config import *
 from buff import BuffType
 from codex import codex_unlock_manager
@@ -2067,6 +2068,11 @@ class UiMixin:
                         g.room_map_idx = 0
                     if not hasattr(g, 'room_weapon_idx'):
                         g.room_weapon_idx = 0
+                    # v2.5.7：恢复上次的多人房间配置（名字/武器/角色/阵营）
+                    try:
+                        g._load_room_cfgs_from_config()
+                    except Exception:
+                        pass
                     self.game.state = GameState.MULTI_ROOM_CONFIG
                 elif i == 1:
                     self.game.multiplayer_mode = "network"
@@ -2253,13 +2259,15 @@ class UiMixin:
         # 玩家标签
         _plabels = ["P1", "P2", "P3", "P4"]
         _pw = (rw - int(24 * scale)) // 4
+        _player_chips = []
         for _pi in range(1, 5):
             _pr = pygame.Rect(rx + (_pi - 1) * (_pw + int(8 * scale)), int(118 * scale), _pw, int(40 * scale))
+            _player_chips.append(_pr)
             _sel = _pi == g.room_sel_player
             _c = (60, 130, 90) if _sel else (40, 46, 60)
             pygame.draw.rect(self.screen, _c, _pr, border_radius=8)
             _nm = (_rpcs.get(_pi, {}).get("name") or "").strip()
-            _txt = f"{_plabels[_pi - 1]}·{_nm[:4]}" if _nm else _plabels[_pi - 1]
+            _txt = f"{_plabels[_pi - 1]}·{_nm[:6]}" if _nm else _plabels[_pi - 1]
             _t = self.game.font_small.render(_txt, True, (245, 245, 245))
             self.screen.blit(_t, _t.get_rect(center=_pr.center))
             if _pi <= g.coop_player_count and any(_pr.collidepoint(te["pos"]) for te in _ups):
@@ -2267,20 +2275,48 @@ class UiMixin:
                 g.room_dropdown = None
         # 选中玩家详细配置
         _cy = int(172 * scale)
-        # 名字（可输入）
+        # 名字（可输入）—— v2.5.7 体验优化：
+        #  1) 聚焦时有光标 + 明确提示（此前聚焦且为空时只显示"名字："，像坏了）；
+        #  2) 点击输入框以外的区域自动退出输入态（此前只能按回车/ESC，
+        #     在手机上根本退不出 → 键盘一直被输入框吃掉，其它操作无效）；
+        #  3) 名字输入框位置记录到 g.room_name_rect 供输入处理使用。
         _nr = pygame.Rect(rx, _cy, rw, rh)
+        g.room_name_rect = _nr
         _focus = bool(getattr(g, 'room_name_focus', False))
         pygame.draw.rect(self.screen, (30, 60, 50) if _focus else (28, 32, 44), _nr, border_radius=10)
         pygame.draw.rect(self.screen, (120, 220, 120) if _focus else (70, 78, 96), _nr, 2, border_radius=10)
-        _nt = self.game.font.render(f"名字：{(_cur.get('name') or '') or ('点击输入…' if not _focus else '')}",
-                                    True, (235, 235, 235))
-        self.screen.blit(_nt, _nt.get_rect(midleft=(_nr.x + int(14 * scale), _nr.centery)))
+        _name_val = (_cur.get('name') or '').strip()
+        if _focus:
+            _shown = _name_val if _name_val else "请输入名字…"
+            _nt = self.game.font.render(f"名字：{_shown}", True, (235, 235, 255) if _name_val else (170, 200, 190))
+            self.screen.blit(_nt, _nt.get_rect(midleft=(_nr.x + int(14 * scale), _nr.centery)))
+            # 闪烁光标
+            if int(time.time() * 2) % 2 == 0:
+                _cx = _nr.x + int(14 * scale) + _nt.get_width() + int(3 * scale)
+                pygame.draw.line(self.screen, (150, 255, 170),
+                                 (_cx, _nr.centery - int(11 * scale)),
+                                 (_cx, _nr.centery + int(11 * scale)), max(1, int(2 * scale)))
+        else:
+            _nt = self.game.font.render(f"名字：{_name_val}" if _name_val else "名字：点击输入…",
+                                        True, (235, 235, 235) if _name_val else (150, 155, 170))
+            self.screen.blit(_nt, _nt.get_rect(midleft=(_nr.x + int(14 * scale), _nr.centery)))
         if any(_nr.collidepoint(te["pos"]) for te in _ups):
             g.room_name_focus = True
             try:
                 pygame.key.start_text_input()
             except Exception:
                 pass
+        elif _focus:
+            # v2.5.7：点击别处 → 退出输入态（手机端最常见的"退不出输入"问题）
+            _outside = [te for te in _ups
+                        if not _nr.collidepoint(te["pos"])
+                        and not any(_pr.collidepoint(te["pos"]) for _pr in _player_chips)]
+            if _outside:
+                g.room_name_focus = False
+                try:
+                    pygame.key.stop_text_input()
+                except Exception:
+                    pass
         _cy += rh + gap
         # 武器（v2.4.0 金币解锁：与单人商店共享 records，未拥有显示 🔒 价格，选中即购买）
         _wi = max(0, _wlist.index(_cur.get("weapon")) if _cur.get("weapon") in _wlist else 0)
@@ -2376,6 +2412,11 @@ class UiMixin:
             g.room_name_focus = False
             try:
                 pygame.key.stop_text_input()
+            except Exception:
+                pass
+            # v2.5.7：返回时也保存房间配置
+            try:
+                g._save_room_cfgs_to_config()
             except Exception:
                 pass
             g.state = GameState.MULTIPLAYER_SELECT
@@ -2481,6 +2522,11 @@ class UiMixin:
         """v2.2.9/11 应用房间配置并开始同屏多人对局（逐玩家配置 + 显式阵营）"""
         g = self.game
         try:
+            # v2.5.7：开局前把房间配置存盘（下次进房间配置页自动恢复）
+            try:
+                g._save_room_cfgs_to_config()
+            except Exception:
+                pass
             g.multiplayer_mode = "same_screen"
             g.coop_player_count = 2  # v2.2.12 同屏固定 2 人
             # 地图
@@ -2834,6 +2880,27 @@ class UiMixin:
             pygame.draw.line(self.screen, (22, 26, 22), (gx, 0), (gx, sh))
         for gy in range(oy, sh, grid):
             pygame.draw.line(self.screen, (22, 26, 22), (0, gy), (sw, gy))
+        # v2.5.7 PvP 毒圈（主机广播的快照）——客户端同样显示圈外遮罩
+        try:
+            _z = snap.get("zone") or None
+            if _z:
+                _zcx = int((_z.get("cx", 0) - cam_x) * scale)
+                _zcy = int((_z.get("cy", 0) - cam_y) * scale)
+                _zr = int(_z.get("r", 0) * scale)
+                if _zr > 2:
+                    _zs = pygame.Surface((sw, sh), pygame.SRCALPHA)
+                    _zs.fill((120, 20, 70, 92))
+                    _zm = pygame.Surface((sw, sh), pygame.SRCALPHA)
+                    _zm.fill((255, 255, 255, 255))
+                    pygame.draw.circle(_zm, (0, 0, 0, 255), (_zcx, _zcy), _zr)
+                    try:
+                        _zs.blit(_zm, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+                    except Exception:
+                        pass
+                    self.screen.blit(_zs, (0, 0))
+                    pygame.draw.circle(self.screen, (255, 90, 130), (_zcx, _zcy), _zr, max(2, int(4 * scale)))
+        except Exception:
+            pass
         # 敌人
         for e in snap.get("enemies", []):
             px = int((e["x"] - cam_x) * scale)
@@ -2899,18 +2966,21 @@ class UiMixin:
                 wt = g.font_small.render(wname, True, GOLD)
                 self.screen.blit(wt, (px - wt.get_width() // 2, py + r + int(4 * scale)))
         # v2.1.3：网络客户端方位指示——主机（P1）不在本视口内时，边缘箭头指向其方位（倒地也显示）
+        # v2.5.7 修复：PvP 下若主机是敌方阵营，不能画成绿色队友箭头（会暴露位置与距离）
         if me is not None and len(players) > 1:
             try:
                 from renderer_pkg.draw_multiplayer import draw_teammate_arrow
                 _peer = players[0]  # 主机 P1
-                _sx = int((_peer["x"] - cam_x) * scale)
-                _sy = int((_peer["y"] - cam_y) * scale)
-                _dx = _peer["x"] - me["x"]
-                _dy = _peer["y"] - me["y"]
-                draw_teammate_arrow(self.screen, sw, sh, _sx, _sy, "P1",
-                                    bool(_peer.get("downed")),
-                                    g.font_small, scale,
-                                    dist_m=math.hypot(_dx, _dy))
+                _peer_enemy = _pvpm and int(_peer.get("team", 0) or 0) != _my_team
+                if not _peer_enemy:
+                    _sx = int((_peer["x"] - cam_x) * scale)
+                    _sy = int((_peer["y"] - cam_y) * scale)
+                    _dx = _peer["x"] - me["x"]
+                    _dy = _peer["y"] - me["y"]
+                    draw_teammate_arrow(self.screen, sw, sh, _sx, _sy, "P1",
+                                        bool(_peer.get("downed")),
+                                        g.font_small, scale,
+                                        dist_m=math.hypot(_dx, _dy))
             except Exception:
                 pass
         # HUD：时间与状态

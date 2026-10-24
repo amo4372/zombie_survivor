@@ -113,6 +113,8 @@ class Config:
         self.mp_p1_layout = {}  # 双人模式 P1 触控布局（独立于单机）
         self.p2_hud_layout = {}  # 双人模式 P2 触控布局
         self.hud_layout_version = 0  # HUD 布局方案版本：v2.0.6 起=2（双人默认布局大改，旧布局需重置）
+        # v2.5.7 同屏多人房间配置持久化（名字/武器/角色/阵营）
+        self.mp_room_cfgs = {}  # {"1": {"name": str, "weapon": str, "char": str, "team": int}, ...}
         self.config_file = "config.json"
         self.load()
         # v2.0.6 布局版本升级：旧版双人布局（v2.0.2 前全屏坐标）会堆叠/缺摇杆，重置为默认并持久化
@@ -154,6 +156,15 @@ class Config:
                     if isinstance(_p2, dict):
                         self.p2_hud_layout = {k: list(v) for k, v in _p2.items() if isinstance(v, (list, tuple)) and len(v) == 2}
                     self.hud_layout_version = data.get("hud_layout_version", 0)
+                    # v2.5.7 多人房间配置持久化
+                    _mrc = data.get("mp_room_cfgs", {})
+                    if isinstance(_mrc, dict):
+                        self.mp_room_cfgs = {}
+                        for _k, _v in _mrc.items():
+                            if isinstance(_v, dict):
+                                self.mp_room_cfgs[str(_k)] = {
+                                    k2: v2 for k2, v2 in _v.items()
+                                    if isinstance(v2, (str, int, float, bool))}
         except Exception as e:
             logger.error(f"配置加载失败: {e}")
 
@@ -175,6 +186,7 @@ class Config:
             "mp_p1_layout": self.mp_p1_layout,
             "p2_hud_layout": self.p2_hud_layout,
             "hud_layout_version": getattr(self, 'hud_layout_version', 2),
+            "mp_room_cfgs": getattr(self, 'mp_room_cfgs', {}) or {},
         }
         try:
             with open(self.config_file, "w", encoding="utf-8") as f:
@@ -198,6 +210,10 @@ class PlayingMixin:
         _now = time.monotonic()
         # 1) 触发倒地：hp<=0 且未倒地 → 倒地（不立即死亡；alive 可能已被 take_damage 置 False，必须照常倒地）
         for p in (p1, p2):
+            # v2.5.7 修复：永久死亡（救援超时）的玩家不再被重新判定为倒地
+            # （此前超时死亡后 hp 仍为 0 → 下一帧又被判倒地 → 可反复被救起）
+            if getattr(p, 'permanently_dead', False):
+                continue
             if p.hp <= 0 and not p.downed:
                 p.downed = True
                 p.alive = False
@@ -205,6 +221,7 @@ class PlayingMixin:
                 p.rescue_progress = 0.0
                 p.last_rescue_time = getattr(p, 'last_rescue_time', -999.0)
                 p._rescue_last_hp = p.hp
+                p._rescue_mate_last_hp = (p2 if p is p1 else p1).hp if (p2 if p is p1 else p1) else 0
                 self.floating_texts.append(FloatingText(
                     p.x, p.y - 40, "倒地！等待救援...", color=(240, 230, 120), lifetime=2.0))
                 self.assets.play_sound_random(["player_hurt", "hurt"])
@@ -223,10 +240,17 @@ class PlayingMixin:
             p.downed_timer += dt
             mate = p2 if p is p1 else p1
             rescued = False
-            # 受击清空救援进度（怪物在旁边干扰时救援会被打断）
-            if getattr(p, '_rescue_last_hp', p.hp) > p.hp:
-                p.rescue_progress = 0.0
-            p._rescue_last_hp = p.hp
+            _cdh = getattr(p, '_rescue_cd_hint', 0.0) - dt
+            p._rescue_cd_hint = max(0.0, _cdh)
+            # v2.5.7 修复：救援者被怪物打中 → 救援被打断（此前只检测被救者掉血，
+            #   而倒地的玩家不会被怪物选中 → 救援永远不被打断）
+            if mate is not None:
+                _mlh = getattr(p, '_rescue_mate_last_hp', mate.hp)
+                if _mlh > mate.hp and p.rescue_progress > 0:
+                    p.rescue_progress = 0.0
+                    self.floating_texts.append(FloatingText(
+                        mate.x, mate.y - 60, "救援被打断!", color=(230, 140, 120), lifetime=0.9))
+                p._rescue_mate_last_hp = mate.hp
             if self.multiplayer_mode == "same_screen":
                 _cd_ok = (_now - getattr(p, 'last_rescue_time', -999.0)) >= self.RESCUE_COOLDOWN
                 # v2.4.0 PvPvE：只有同阵营队友可救援（异阵营不能互相救）
@@ -235,6 +259,11 @@ class PlayingMixin:
                     _same_team = getattr(p, 'team_id', 0) == getattr(mate, 'team_id', 1)
                 near = (mate is not None and not mate.downed and _same_team
                         and math.hypot(mate.x - p.x, mate.y - p.y) < 120)
+                if near and not _cd_ok and getattr(p, '_rescue_cd_hint', 0.0) <= 0:
+                    # 冷却中给个提示（否则队友就在旁边却救不了，玩家毫无反馈）
+                    p._rescue_cd_hint = 3.0
+                    self.floating_texts.append(FloatingText(
+                        p.x, p.y - 70, "救援冷却中...", color=(200, 180, 140), lifetime=1.4))
                 if near and _cd_ok:
                     p.rescue_progress += dt
                     # v2.2.7 救援者 UI 反馈：救援者与被救者都看到进度（0.5s 节流浮字）
@@ -256,6 +285,8 @@ class PlayingMixin:
                 if p.downed_timer >= self.DOWNED_DEATH_TIME:
                     p.downed = False
                     p.alive = False
+                    # v2.5.7：标记永久死亡（不再被重新判定倒地）
+                    p.permanently_dead = True
                     self.floating_texts.append(FloatingText(
                         p.x, p.y - 40, "救援超时，未能生还...", color=(200, 60, 60), lifetime=2.5))
                     continue
@@ -266,6 +297,8 @@ class PlayingMixin:
             if rescued:
                 p.downed = False
                 p.alive = True
+                p.permanently_dead = False
+                p._rescue_cd_hint = 0.0
                 # v2.5.2 救援统计（成就 mp_rescue_10）
                 try:
                     if getattr(self, 'records', None) is not None:
@@ -291,6 +324,34 @@ class PlayingMixin:
                     pass
         # 3) 双人全部倒地 → 游戏结束
         return bool((p1.downed or not p1.alive) and (p2.downed or not p2.alive))
+
+    def _update_overdrive(self, player, dt):
+        """v2.5.7 过热倾泻统一更新（P1/P2 共用）：
+        1) 倒计时递减——此前只有 P1 递减，P2 的 overdrive_timer 只被赋值 → 永久过热；
+        2) 当前武器冷却额外削减（射速暴增的真正实现，P2 此前完全缺失）；
+        3) 枪口灼烧粒子。
+        """
+        if player is None:
+            return
+        _t = getattr(player, 'overdrive_timer', 0)
+        if _t <= 0:
+            return
+        player.overdrive_timer = max(0.0, _t - dt)
+        if player.overdrive_timer <= 0:
+            player.overdrive_burn = False
+        try:
+            _ow = player.get_current_weapon()
+        except Exception:
+            _ow = None
+        if _ow is not None and getattr(_ow, 'cooldown_timer', 0) > 0:
+            try:
+                _ow.cooldown_timer -= (getattr(player, 'overdrive_mult', 2.0) - 1.0) * dt
+            except Exception:
+                pass
+        try:
+            self.particles.spawn(player.x, player.y, (255, 160, 60), 2, (1, 3), (-2, 2), (0.1, 0.4))
+        except Exception:
+            pass
 
     def _reset_weapons_reload(self, player):
         """v2.2.7：强制清除玩家所有武器换弹状态（退出重载/倒地救起后调用，
@@ -648,14 +709,17 @@ class PlayingMixin:
                 pass
             if cast_result:
                 # v2.2.3 载具存活时长按技能按钮 → 退出载具（不执行预瞄/施放）
+                # v2.5.7 修复：只有当前技能为「载具召唤」时长按才退出载具；
+                #   其它技能在载具中照常释放（原来任何技能长按都会被吞掉并强制下车）
                 _veh_t = getattr(self.player, 'vehicle', None)
-                if _veh_t is not None and _veh_t.alive:
+                _is_veh_skill = (self.selected_skill == SkillType.VEHICLE_SUMMON)
+                if _veh_t is not None and _veh_t.alive and _is_veh_skill:
                     if self.skill_caster.was_aiming_on_release:
                         self._exit_vehicle(self.player)
                     else:
                         self.floating_texts.append(FloatingText(
                             self.player.x, self.player.y - 50, "长按技能按钮退出载具", (160, 160, 160), 1.2))
-                elif getattr(self.player, 'riding_vehicle', None) is not None:
+                elif getattr(self.player, 'riding_vehicle', None) is not None and _is_veh_skill:
                     # v2.5.1 乘客：长按技能按钮下车
                     if self.skill_caster.was_aiming_on_release:
                         self._exit_vehicle(self.player)
@@ -803,15 +867,8 @@ class PlayingMixin:
         if not _p1_paused:
             self._update_charge(dt)
         # 过热倾泻：计时 + 射速加成（冷却额外递减）+ 灼烧枪口特效
-        if getattr(self.player, 'overdrive_timer', 0) > 0:
-            self.player.overdrive_timer -= dt
-            if self.player.overdrive_timer <= 0:
-                self.player.overdrive_timer = 0
-                self.player.overdrive_burn = False
-            _ow = self.player.get_current_weapon()
-            if _ow and _ow.cooldown_timer > 0:
-                _ow.cooldown_timer -= (getattr(self.player, 'overdrive_mult', 2.0) - 1.0) * dt
-            self.particles.spawn(self.player.x, self.player.y, (255, 160, 60), 2, (1, 3), (-2, 2), (0.1, 0.4))
+        # v2.5.7：抽成 P1/P2 共用函数（此前 P2 只被赋值，计时器从不递减 → 永久过热）
+        self._update_overdrive(self.player, dt)
         # 显示玩家受到的buff伤害数字
         for dmg, dtype in getattr(self.player, 'buff_damage_events', []):
             if dmg > 0:
@@ -834,7 +891,23 @@ class PlayingMixin:
                 self.session.add_burning_survive_time(dt)
 
         # 更新世界
-        self.world.update(dt, self.player.x, self.player.y)
+        # v2.5.7：PvP 毒圈更新（收缩 + 圈外伤害）
+        try:
+            self._update_pvp_zone(dt)
+        except Exception:
+            pass
+        # v2.5.7：世界更新考虑所有活跃玩家（道具刷新/区块生成按每个玩家进行）
+        _wpos = []
+        try:
+            for _pp in self._all_players():
+                if _pp is None or _pp is self.player:
+                    continue
+                if not getattr(_pp, 'alive', True) or getattr(_pp, 'downed', False):
+                    continue
+                _wpos.append((_pp.x, _pp.y))
+        except Exception:
+            _wpos = []
+        self.world.update(dt, self.player.x, self.player.y, _wpos)
 
         # === Buff视觉效果 ===
         self._update_buff_visuals(dt)
@@ -850,9 +923,8 @@ class PlayingMixin:
             # 尸潮结束，记录存活
             if self.session:
                 self.session.add_horde_survived()
-            # 尸潮结束，恢复地图专属音乐
-            map_name = self.world.map_type.name.lower() if hasattr(self.world, 'map_type') else 'school'
-            map_music = MAP_MUSIC_MAP.get(map_name, 'school')
+            # 尸潮结束，恢复地图专属音乐（争分夺秒模式恢复 race 专用配乐）
+            map_music = self._resolve_map_music()
             self.assets.play_music(map_music)
             self._music_context = 'explore'
             # 尸潮奖励：根据规模刷新对应奖励

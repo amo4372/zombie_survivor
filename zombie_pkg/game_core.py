@@ -115,6 +115,9 @@ class Config:
         self.mp_p1_layout = {}  # 双人模式 P1 触控布局（独立于单机）
         self.p2_hud_layout = {}  # 双人模式 P2 触控布局
         self.hud_layout_version = 0  # HUD 布局方案版本：v2.0.6 起=2（双人默认布局大改，旧布局需重置）
+        # v2.5.7 同屏多人房间配置持久化（名字/武器/角色/阵营）：
+        #   此前每次进房间配置页都要重选一遍，这里保存到 config.json
+        self.mp_room_cfgs = {}  # {"1": {"name": str, "weapon": str, "char": str, "team": int}, ...}
         # v2.0.11：配置文件统一存入 data/ 目录，并迁移旧 config.json
         from .data_io import get_base_dir, get_data_dir, migrate_legacy
         _base_root = get_base_dir()
@@ -160,6 +163,15 @@ class Config:
                     if isinstance(_p2, dict):
                         self.p2_hud_layout = {k: list(v) for k, v in _p2.items() if isinstance(v, (list, tuple)) and len(v) == 2}
                     self.hud_layout_version = data.get("hud_layout_version", 0)
+                    # v2.5.7 多人房间配置持久化
+                    _mrc = data.get("mp_room_cfgs", {})
+                    if isinstance(_mrc, dict):
+                        self.mp_room_cfgs = {}
+                        for _k, _v in _mrc.items():
+                            if isinstance(_v, dict):
+                                self.mp_room_cfgs[str(_k)] = {
+                                    k2: v2 for k2, v2 in _v.items()
+                                    if isinstance(v2, (str, int, float, bool))}
         except Exception as e:
             logger.error(f"配置加载失败: {e}")
 
@@ -181,6 +193,7 @@ class Config:
             "mp_p1_layout": self.mp_p1_layout,
             "p2_hud_layout": self.p2_hud_layout,
             "hud_layout_version": getattr(self, 'hud_layout_version', 2),
+            "mp_room_cfgs": getattr(self, 'mp_room_cfgs', {}) or {},
         }
         try:
             with open(self.config_file, "w", encoding="utf-8") as f:
@@ -725,9 +738,8 @@ class GameCore:
         self.session.set_difficulty(self.config.difficulty)
         self.session.set_mode(self.config.game_mode)
         # 播放游戏音乐
-        # 播放地图专属音乐
-        map_name = self.world.map_type.name.lower() if hasattr(self.world, 'map_type') else 'school'
-        map_music = MAP_MUSIC_MAP.get(map_name, 'school')
+        # 播放地图专属音乐（争分夺秒模式优先用 race_urgency.ogg，缺文件自动回退）
+        map_music = self._resolve_map_music()
         self.assets.play_music(map_music)
         self._current_map_music = map_music
         self._music_context = 'explore'  # explore / boss / horde / tension
@@ -972,7 +984,9 @@ class GameCore:
                         _nm = (_rcfg.get("name") or "").strip()
                         if _nm:
                             try:
+                                # v2.5.7：HUD 读取 nickname/nick（此前只写 nick → 自定义名字不显示）
                                 _pp.nick = _nm
+                                _pp.nickname = _nm
                             except Exception:
                                 pass
                 except Exception as _e:
@@ -993,6 +1007,13 @@ class GameCore:
             self.last_touch_pos = None  # 最后触摸位置，用于buff详情
             self._trauma_cache = None  # 缓存边缘渐变
             self.dialogue = DialogueSystem()
+            # v2.5.7：所有玩家统一投掷物开局库存（P1/P2 规则一致）
+            for _pn in ("player", "player2", "player3", "player4"):
+                _pp2 = getattr(self, _pn, None)
+                if _pp2 is not None:
+                    self._ensure_throwable_stock(_pp2)
+            # v2.5.7：PvP 毒圈初始化（仅 PvP）
+            self._init_pvp_zone()
 
             self.enemies = []
             self.projectiles = []
@@ -1280,6 +1301,229 @@ class GameCore:
         except Exception:
             return []
 
+    # ==================== v2.5.7 音乐选择 ====================
+    def _resolve_map_music(self):
+        """当前应播放的地图音乐名。
+
+        v2.5.7：争分夺秒（TIMED）模式优先用专用配乐 race（assets/music/race_urgency.ogg，
+        由用户用手机音乐 App 从 race_urgency.mid 制作）。文件缺失时自动回退地图原声，
+        不会因为缺资源报错或静音。"""
+        try:
+            map_name = self.world.map_type.name.lower() if hasattr(self.world, 'map_type') else 'school'
+        except Exception:
+            map_name = 'school'
+        _m = MAP_MUSIC_MAP.get(map_name, 'school')
+        try:
+            if getattr(self.config, 'game_mode', None) == GameMode.TIMED:
+                if "race" in (getattr(self.assets, 'music', None) or {}):
+                    return "race"
+        except Exception:
+            pass
+        return _m
+
+    # ==================== v2.5.7 PvP 毒圈 ====================
+    # (目标半径, 收缩耗时秒, 圈外每秒伤害)
+    PVP_ZONE_PHASES = [
+        (5200.0, 55.0, 3.0),
+        (2900.0, 45.0, 6.0),
+        (1700.0, 40.0, 10.0),
+        (950.0, 35.0, 16.0),
+        (520.0, 30.0, 24.0),
+    ]
+    PVP_ZONE_START_R = 6200.0
+
+    def _init_pvp_zone(self):
+        """初始化 PvP 毒圈（开局覆盖全图，逐阶段收缩，逼玩家进圈交手）"""
+        try:
+            if not getattr(self.config, 'pvp_enabled', False):
+                self.pvp_zone = None
+                return
+            _ms = getattr(getattr(self, 'world', None), 'map_size', 12000) or 12000
+            self.pvp_zone = {
+                "cx": float(_ms) / 2.0,
+                "cy": float(_ms) / 2.0,
+                "r": float(self.PVP_ZONE_START_R),
+                "r_start": float(self.PVP_ZONE_START_R),
+                "phase": 0,
+                "timer": 0.0,
+                "dps": 0.0,
+                "warned": False,
+            }
+        except Exception:
+            self.pvp_zone = None
+
+    def _update_pvp_zone(self, dt):
+        """v2.5.7 PvP 毒圈更新：逐阶段收缩 + 圈外持续伤害 + 收缩预警"""
+        z = getattr(self, 'pvp_zone', None)
+        if not z:
+            return
+        try:
+            phases = self.PVP_ZONE_PHASES
+            _ph = int(z.get("phase", 0))
+            if _ph < len(phases):
+                _target_r, _shrink_time, _dps = phases[_ph]
+                z["dps"] = _dps
+                if not z.get("r_start"):
+                    z["r_start"] = float(z["r"])
+                z["timer"] = float(z.get("timer", 0.0)) + dt
+                _t = min(1.0, z["timer"] / max(0.1, _shrink_time))
+                z["r"] = float(z["r_start"]) + (_target_r - float(z["r_start"])) * _t
+                # 收缩前 10 秒预警
+                if not z.get("warned") and (_shrink_time - z["timer"]) <= 10.0:
+                    z["warned"] = True
+                    for _p in self._alive_players():
+                        try:
+                            self.floating_texts.append(FloatingText(
+                                _p.x, _p.y - 70, "毒圈即将收缩！", color=(255, 120, 150), lifetime=2.5))
+                        except Exception:
+                            pass
+                if _t >= 1.0:
+                    # 进入下一阶段：新中心必须在当前圈内（否则新圈会瞬间盖住整张图）
+                    z["phase"] = _ph + 1
+                    z["timer"] = 0.0
+                    z["r_start"] = 0.0
+                    z["r"] = _target_r
+                    z["warned"] = False
+                    try:
+                        _nx = z["cx"] + random.uniform(-0.35, 0.35) * _target_r
+                        _ny = z["cy"] + random.uniform(-0.35, 0.35) * _target_r
+                        _ms2 = getattr(getattr(self, 'world', None), 'map_size', 12000) or 12000
+                        z["cx"] = max(280.0, min(float(_ms2) - 280.0, _nx))
+                        z["cy"] = max(280.0, min(float(_ms2) - 280.0, _ny))
+                    except Exception:
+                        pass
+            else:
+                z["dps"] = phases[-1][2]
+            # 圈外持续伤害（环境伤害：直接结算，不占用玩家的无敌帧，
+            #  否则每帧 take_damage 会被 invincible_timer 吞掉 → 实际不掉血）
+            _dps = float(z.get("dps", 0.0))
+            if _dps > 0:
+                for _p in self._alive_players():
+                    try:
+                        if math.hypot(_p.x - z["cx"], _p.y - z["cy"]) <= z["r"]:
+                            continue
+                        _acc = getattr(_p, '_zone_dmg_acc', 0.0) + _dps * dt
+                        if _acc >= 1.0:
+                            _dmg = int(_acc)
+                            _p._zone_dmg_acc = _acc - _dmg
+                            _red = 1.0 - min(0.9, float(getattr(_p, 'armor', 0.0) or 0.0))
+                            _dr = float(getattr(_p, 'dmg_reduce', 0.0) or 0.0)
+                            if _dr > 0:
+                                _red *= (1.0 - _dr)
+                            try:
+                                _red *= float(_p.buff_manager.get_damage_taken_mult())
+                            except Exception:
+                                pass
+                            _final = max(1, int(_dmg * _red))
+                            _p.hp -= _final
+                            if _p.hp <= 0:
+                                _p.hp = 0
+                                _p.alive = False
+                            try:
+                                self.floating_texts.append(FloatingText(
+                                    _p.x + random.uniform(-12, 12), _p.y - 24,
+                                    f"-{_final}", color=(255, 110, 140), lifetime=0.6))
+                            except Exception:
+                                pass
+                        else:
+                            _p._zone_dmg_acc = _acc
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+
+    # ==================== v2.5.7 多人房间配置持久化 ====================
+    def _ensure_throwable_stock(self, player):
+        """统一投掷物库存规则（P1/P2 完全一致）
+
+        v2.5.7 修复：此前只有 P2 有开局保底库存（燃烧弹+烟雾弹各 2），
+        P1 开局一个都没有 → 同一局里两人规则不同（用户反馈"P2 开局有异常投掷物"）。
+        现在 P1/P2 都走这一个函数：首次使用时给同样的保底库存，之后靠地图拾取补充。
+        """
+        try:
+            if player is None:
+                return
+            if not hasattr(player, 'throwables') or not isinstance(getattr(player, 'throwables', None), dict):
+                player.throwables = {}
+            if not getattr(player, '_throwables_init', False):
+                player._throwables_init = True
+                if player.throwables.get("incendiary", 0) <= 0:
+                    player.throwables["incendiary"] = 2
+                if player.throwables.get("smoke", 0) <= 0:
+                    player.throwables["smoke"] = 2
+        except Exception:
+            pass
+
+    def _load_room_cfgs_from_config(self):
+        """从 config.json 恢复同屏多人房间配置（名字/武器/角色/阵营）。
+
+        修复：此前每次进入房间配置页都是空白，必须重选一遍；现在自动恢复上次配置。
+        """
+        try:
+            saved = getattr(self.config, 'mp_room_cfgs', {}) or {}
+            if not saved:
+                return
+            cfgs = {1: {}, 2: {}, 3: {}, 4: {}}
+            for i in range(1, 5):
+                sc = saved.get(str(i)) or saved.get(i) or {}
+                if not isinstance(sc, dict):
+                    continue
+                d = {}
+                nm = sc.get("name")
+                if isinstance(nm, str) and nm.strip():
+                    d["name"] = nm.strip()[:12]
+                wn = sc.get("weapon")
+                if isinstance(wn, str) and wn:
+                    try:
+                        from weapons import WeaponType
+                        d["weapon"] = WeaponType[wn]
+                    except Exception:
+                        pass
+                ch = sc.get("char")
+                if isinstance(ch, str) and ch:
+                    d["char"] = ch
+                tm = sc.get("team")
+                if isinstance(tm, int):
+                    d["team"] = tm
+                cfgs[i] = d
+            self.room_player_cfgs = cfgs
+        except Exception:
+            pass
+
+    def _save_room_cfgs_to_config(self):
+        """把同屏多人房间配置写回 config.json（下次进房间配置页自动恢复）"""
+        try:
+            cfgs = getattr(self, 'room_player_cfgs', None) or {}
+            out = {}
+            for i in range(1, 5):
+                c = cfgs.get(i) or {}
+                if not isinstance(c, dict) or not c:
+                    continue
+                d = {}
+                nm = c.get("name")
+                if isinstance(nm, str) and nm.strip():
+                    d["name"] = nm.strip()[:12]
+                w = c.get("weapon")
+                if w is not None:
+                    wn = getattr(w, "name", None)
+                    if isinstance(wn, str) and wn:
+                        d["weapon"] = wn
+                ch = c.get("char")
+                if isinstance(ch, str) and ch:
+                    d["char"] = ch
+                tm = c.get("team")
+                if isinstance(tm, int):
+                    d["team"] = tm
+                if d:
+                    out[str(i)] = d
+            self.config.mp_room_cfgs = out
+            try:
+                self.config.save()
+            except Exception:
+                pass
+        except Exception:
+            pass
+
     def _enemy_players_of(self, player):
         """异阵营存活玩家（可被钩爪勾取+QTE 挣脱）"""
         try:
@@ -1291,6 +1535,10 @@ class GameCore:
                 if _p is player or not getattr(_p, 'alive', True) or getattr(_p, 'downed', False):
                     continue
                 if getattr(_p, 'team_id', 1) == _t:
+                    continue
+                # v2.5.7 修复：载具形态（司机/乘客）的玩家不可被钩爪勾取
+                #（此前会把载具连人一起拖走，位置与状态全乱）
+                if getattr(_p, 'vehicle', None) is not None or getattr(_p, 'riding_vehicle', None) is not None:
                     continue
                 _res.append(_p)
             return _res
