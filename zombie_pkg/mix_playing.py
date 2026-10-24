@@ -675,7 +675,8 @@ class PlayingMixin:
                                             items=getattr(self.world, 'items', None),
                                             aim_angle=_aim_ang, aim_dist=_aim_dist,
                                             players_down=self._downed_teammates_of(self.player),
-                                            players_enemy=self._enemy_players_of(self.player))
+                                            players_enemy=self._enemy_players_of(self.player),
+                                            players_teammate=self._alive_teammates_of(self.player))
             else:
                 _rg_aim.grapple_aiming = False
                 if not _rg_aim.grapple_active:
@@ -697,7 +698,8 @@ class PlayingMixin:
                                               items=getattr(self.world, 'items', None),
                                               aim_angle=_aim_t_ang, aim_dist=_aim_t_dist,
                                               players_down=self._downed_teammates_of(self.player),
-                                              players_enemy=self._enemy_players_of(self.player))
+                                              players_enemy=self._enemy_players_of(self.player),
+                                              players_teammate=self._alive_teammates_of(self.player))
                 else:
                     # v2.2.12 修复：释放帧（up 后 is_aiming=False）不得清 locked_target——
                     # 否则"红色锁定"在松开瞬间被清空，钩爪决策拿不到锁定目标导致未勾取。

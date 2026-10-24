@@ -993,15 +993,17 @@ class GameCore:
                 _sy = _zone_cy + 1000.0
             self.player = Player(_sx, _sy, start_weapon=self.selected_weapon, start_weapon_level=self.selected_weapon_level)
             # v2.0.14：加载 .zmap 时玩家出生对齐地图出生点（默认 0,0）
+            # v2.6.0：PvP 模式下不使用 spawn_points（确保在毒圈内）
             _psp = getattr(self.world, "spawn_points", {}).get("player", [])
-            if _psp:
+            if _psp and not (getattr(self.config, 'pvp_enabled', False) and getattr(self, 'pvp_zone', None)):
                 self.player.x, self.player.y = float(_psp[0][0]), float(_psp[0][1])
             # 双人模式：P1 实际武器/角色来自第一轮选择
             if self.multiplayer_mode in ("same_screen", "network"):
                 if getattr(self, 'selected_weapon_p1', None):
                     self.player = Player(_sx, _sy, start_weapon=self.selected_weapon_p1,
                                          start_weapon_level=self.selected_weapon_level)
-                    if _psp:
+                    # v2.6.0：PvP 模式下不使用 spawn_points
+                    if _psp and not (getattr(self.config, 'pvp_enabled', False) and getattr(self, 'pvp_zone', None)):
                         self.player.x, self.player.y = float(_psp[0][0]), float(_psp[0][1])
                 if getattr(self, 'selected_char_p1', None):
                     self.selected_character = self.selected_char_p1

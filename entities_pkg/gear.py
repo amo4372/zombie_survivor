@@ -407,7 +407,7 @@ class RiotGear:
 
     def update_grapple_lock(self, player_x, player_y, enemies, items=None,
                             aim_angle=None, aim_dist=None,
-                            players_down=None, players_enemy=None):
+                            players_down=None, players_enemy=None, players_teammate=None):
         """v2.2.11 瞄准期间更新锁定圈：蓄力圈由小到大 + 优先锁定特殊道具 + 圈内最近敌人
         锚点=预瞄终点（随瞄准方向/距离实时移动），aim_angle（度）/aim_dist 由触控瞄准传入，
         未传时回退 aim_line_angle 方向 max_range 处。
