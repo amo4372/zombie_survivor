@@ -1492,7 +1492,10 @@ class GameCore:
             _pv = bool(getattr(self.config, 'pvp_enabled', False))
             _t = getattr(player, 'team_id', 0)
             for _p in self._all_players():
-                if _p is player or not getattr(_p, 'alive', True) or not getattr(_p, 'downed', False):
+                if _p is player:
+                    continue
+                # v2.6.5 修复：倒地玩家 alive=False 但 downed=True，应该可以被勾取
+                if not getattr(_p, 'downed', False):
                     continue
                 if _pv and getattr(_p, 'team_id', 1) != _t:
                     continue  # PvP：仅同阵营

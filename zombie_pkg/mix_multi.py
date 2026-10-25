@@ -793,10 +793,13 @@ class MultiplayerMixin:
             lv = self._legendary_skill_level(SkillType.RAILGUN_ANNIHILATION, p2)
             dmg = (300 + 80 * (lv - 1)) * p2.damage_multiplier * p2.buff_manager.get_damage_mult()
             width = {1: 40, 2: 40, 3: 55, 4: 70, 5: 85}[lv]
+            # v2.6.5 修复：传递 laser_angle 参数，确保激光按预瞄方向发射
             proj = Projectile(p2.x, p2.y, math.cos(angle) * 3, math.sin(angle) * 3,
                               dmg, 1200, (140, 200, 245), 15,
                               pierce=99, explosive=True, explosion_radius=90,
-                              is_laser=True, laser_width=width, laser_duration=0.85)
+                              is_laser=True, laser_width=width, laser_duration=0.85,
+                              laser_angle=angle)
+            proj.owner = p2  # v2.6.5: 设置投射物归属
             self.projectiles.append(proj)
             ok = True
         elif skill_type == SkillType.SCYTHE_DANCE:
@@ -836,6 +839,8 @@ class MultiplayerMixin:
             # v2.2.12：长按瞄准释放（触控 was_aiming_on_release / 键盘 u_aim_started）
             _was_aim = bool(getattr(self, '_p2_cast_aimed', False)) or bool(getattr(self, 'u_aim_started', False))
             target = None
+            _direct_pull = False
+            # v2.6.5 修复：优先检查锁定目标，即使长按也优先使用锁定目标
             if locked is not None and getattr(locked, "alive", False) and not getattr(locked, "is_boss", False):
                 # 锁定目标直飞（无视沿途）
                 target = locked

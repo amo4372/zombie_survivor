@@ -543,7 +543,9 @@ class Player:
         except Exception:
             pass
         
-        if self.invincible_timer > 0:
+        # v2.6.5 修复：来自玩家的远程伤害（子弹）跳过无敌帧检查，允许多发子弹连续命中
+        _skip_invincible = (source == "player" and damage_type == "ranged")
+        if not _skip_invincible and self.invincible_timer > 0:
             return
 
         # v2.2.0 载具期间：玩家无敌，伤害转移给载具专属血条（不应用回血）

@@ -1451,7 +1451,8 @@ class SkillsMixin:
             player.upgrade_grace_timer = 0.0
         if _left > 0:
             # 还有下一级：多人 per-player 立即重新进入暂停选卡（恢复会在下一级确认后再执行）
-            _tag = "P1" if player is self.player else ("P2" if player is getattr(self, 'player2', None) else "P3")
+            # v2.6.5 修复：确保 _tag 正确确定（优先使用已知的 tag 值）
+            _tag = tag if tag in ("P1", "P2") else ("P1" if player is self.player else "P2")
             self._upgrade_pause_player = _tag
             player.upgrade_paused = True
             # v2.5.8 修复：确保 pending_upgrade_for 同步更新（防止状态不一致）

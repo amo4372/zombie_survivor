@@ -457,6 +457,8 @@ class SkillCardSelector:
         self.region = region
         self.title = title
         self.subtitle = subtitle
+        # v2.6.5 修复：连升多级时确保卡片矩形列表被清空，避免旧数据干扰
+        self.card_rects = []
 
     def hide(self):
         self.visible = False

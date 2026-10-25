@@ -545,12 +545,12 @@ class PlayMixin:
             # 主 QTE 指示器
             if _is_grappled:
                 _qw = max(0.0, getattr(player, 'qte_window', 0.0))
-                # v2.6.3 修复：环形倒计时基于实际的 QTE 窗口时间（1.5s）而非固定的 0.8s
-                _qte_max_time = 1.5  # 与 gear.py 中的 qte_window 初始值一致
+                # v2.6.5 修复：恢复0.8s反应时间
+                _qte_max_time = 0.8  # 与 gear.py 中的 qte_window 初始值一致
                 _ratio = min(1.0, _qw / _qte_max_time)
                 _cy = int(190 * scale)
                 _R = int(46 * scale)
-                # 环形倒计时（剩余 1.5s，红色越少越急）
+                # 环形倒计时（剩余 0.8s，红色越少越急）
                 _ring_c = (255, 200, 60) if _ratio > 0.35 else (255, 70, 70)
                 _seg = max(0, min(360, int((1.0 - _ratio) * 360)))
                 for _a in range(_seg):
@@ -1569,6 +1569,10 @@ class PlayMixin:
         player = player or self.game.player
         if not player:
             return
+        
+        # v2.6.5 性能优化：倒地玩家不渲染创伤效果
+        if getattr(player, 'downed', False):
+            return
 
         scale = self.game.scale
         sw = self.game.scaled_width
@@ -1751,6 +1755,10 @@ class PlayMixin:
         if not player or not hasattr(player, 'buff_manager'):
             return
         if not self.game.config.render_buff_effects:
+            return
+        
+        # v2.6.5 性能优化：倒地玩家不渲染buff屏幕效果
+        if getattr(player, 'downed', False):
             return
 
         scale = self.game.scale

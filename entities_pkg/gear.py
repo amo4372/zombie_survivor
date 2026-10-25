@@ -683,13 +683,13 @@ class RiotGear:
         self.grapple_head_pos = [player_x, player_y]
         self.grapple_state = "shooting"
         self.grapple_target = target
-        # v2.5.0/v2.5.5 PvP 勾取玩家：初始化打断绳索 QTE（1.5s 内单击绳索对称轴扇形即打断）
-        # v2.6.3 修复：增加反应时间从 0.8s 到 1.5s，给玩家更多反应时间
+        # v2.5.0/v2.5.5 PvP 勾取玩家：初始化打断绳索 QTE（0.8s 内单击绳索对称轴扇形即打断）
+        # v2.6.5 修复：恢复0.8s反应时间
         if target is not None and hasattr(target, 'qte_window'):
             if getattr(target, 'qte_immune_timer', 0) > 0:
                 return False
             target.grappled = True
-            target.qte_window = 1.5  # v2.6.3: 从 0.8s 增加到 1.5s
+            target.qte_window = 0.8  # v2.6.5: 恢复0.8s反应时间
             target.qte_break_tap = None
             target.qte_break_hint = 1.0
             target.qte_hit_flash = 0.0

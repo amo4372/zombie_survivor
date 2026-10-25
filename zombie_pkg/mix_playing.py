@@ -1253,7 +1253,7 @@ class PlayingMixin:
                 ))
 
         # 双人/联机：额外刷新频率（难度随玩家数调整）
-        if self.is_multiplayer_active():
+        if self.is_multiplayer_active() and not _spawn_disabled:
             self._mp_spawn_timer = getattr(self, '_mp_spawn_timer', 0) + dt
             if self._mp_spawn_timer >= 0.35 and len(self.enemies) < max_enemies:
                 self._mp_spawn_timer -= 0.35
