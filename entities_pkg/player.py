@@ -583,7 +583,10 @@ class Player:
                 blocked = from_front
         actual_damage = self.riot_gear.take_damage(damage, damage_type, from_front, attack_x, attack_y, blocked=blocked)
         self.hp -= actual_damage
-        self.invincible_timer = 0.3
+        # v2.6.4 修复：来自玩家的远程伤害（子弹）不设置无敌帧，允许多发子弹连续命中
+        # 只有僵尸伤害或近战伤害才设置无敌帧
+        if source != "player" or damage_type != "ranged":
+            self.invincible_timer = 0.3
 
         # 创伤效果 - 增强
         trauma_add = min(0.7, actual_damage / self.max_hp * 3)
