@@ -29,7 +29,7 @@ class RiotGear:
         self.bash_cooldown = 0
         self.bash_max_cooldown = 0.5
         self.grapple_cooldown = 0
-        self.grapple_max_cooldown = 0.8
+        self.grapple_max_cooldown = 8.0  # v2.6.4: 全模式统一8秒CD
         self.melee_reduction = 0.5
         self.ranged_reduction = 0.7
         self.magic_immunity = True

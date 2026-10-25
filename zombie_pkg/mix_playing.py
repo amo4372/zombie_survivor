@@ -1981,10 +1981,15 @@ class PlayingMixin:
                         continue
                     if getattr(_pp, 'team_id', 1) == getattr(proj.owner, 'team_id', 0):
                         continue
+                    # v2.6.4 修复：检查是否已经命中过该玩家（穿透效果）
+                    if _pp in proj.hits:
+                        continue
                     # v2.5.6：扫掠碰撞（防高速弹丸穿透玩家）
                     if proj.swept_hit_rect(_pp.get_rect()):
-                        proj.alive = False
                         proj.hits.append(_pp)
+                        # v2.6.4 修复：只有当穿透次数用尽时才销毁子弹
+                        if len(proj.hits) >= proj.pierce:
+                            proj.alive = False
                         _pvp_d = self._pvp_dmg_to_player(proj.damage, proj)
                         _pp.take_damage(_pvp_d, damage_type='ranged', attack_x=proj.x, attack_y=proj.y, bypass_dodge=True, source='player')
                         self.damage_numbers.append(DamageNumber(_pp.x, _pp.y, _pvp_d, color=RED))

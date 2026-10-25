@@ -324,7 +324,14 @@ class MultiplayerMixin:
                     self.u_aim_started = True
                     c2["skill_caster"].is_aiming = True
                 # v2.2.6：P2 钩爪瞄准锁定圈更新（键控 U 长按）
-                self._update_p2_grapple_lock(p2, bool(self.u_aim_started))
+                # v2.6.4 修复：仅在选择了钩爪技能时才更新锁定圈
+                if self.p2_selected_skill == SkillType.GRAPPLE_PULL:
+                    self._update_p2_grapple_lock(p2, bool(self.u_aim_started))
+                else:
+                    rg = p2.riot_gear
+                    rg.grapple_aiming = False
+                    if not rg.grapple_active:
+                        rg.grapple_locked_target = None
                 if getattr(self, 'u_aim_started', False):
                     aim_ang = math.radians(self._p2_auto_aim_angle(p2))
                     c2["skill_caster"].set_aim_angle(aim_ang)
@@ -355,7 +362,15 @@ class MultiplayerMixin:
                 except Exception:
                     pass
                 # v2.2.6/11：P2 钩爪瞄准锁定圈更新（触控长按，锚点跟随瞄准移动）
-                self._update_p2_grapple_lock(p2, bool(c2sc.is_aiming), caster=c2sc)
+                # v2.6.4 修复：仅在选择了钩爪技能时才更新锁定圈
+                if self.p2_selected_skill == SkillType.GRAPPLE_PULL:
+                    self._update_p2_grapple_lock(p2, bool(c2sc.is_aiming), caster=c2sc)
+                else:
+                    # 非钩爪技能时清除瞄准状态
+                    rg = p2.riot_gear
+                    rg.grapple_aiming = False
+                    if not rg.grapple_active:
+                        rg.grapple_locked_target = None
                 if self.p2_controls["skill_caster"].just_released:
                     skill = True
                     # 触控长按/拖拽预瞄状态（handle_touch 会在 up 时重置 is_aiming）
