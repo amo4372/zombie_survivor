@@ -11,7 +11,7 @@ class Skill:
                  level_descriptions=None, effect_key=None, effect_per_level=None,
                  weight=1.0, base_damage=0, damage_per_level=0,
                  base_radius=0, radius_per_level=0, max_level_bonus=None,
-                 is_legendary=False, preserve_requires=False):
+                 is_legendary=False, preserve_requires=False, lore=None):
         self.skill_type = skill_type
         self.name = name
         self.description = description
@@ -38,6 +38,8 @@ class Skill:
         self.radius_per_level = radius_per_level
         # 满级特殊效果描述
         self.max_level_bonus = max_level_bonus
+        # v2.7.0：背景介绍（技能卡详情页可滚动文本框展示）
+        self.lore = lore
 
     def get_effective_damage(self):
         """获取当前等级的技能伤害（AoE技能）"""
@@ -137,6 +139,16 @@ class Skill:
             return (f"+{old_val * 100:.0f}%", f"+{new_val * 100:.0f}%")
         elif key == "combo":
             return (f"每层+{old_val * 100:.0f}%", f"每层+{new_val * 100:.0f}%")
+        elif key == "fearless_duration":
+            # v2.7.0 无畏冲锋：持续时间 + 冷却 一起对比
+            try:
+                _d_old = get_fearless_charge_duration(max(1, self.current_level))
+                _d_new = get_fearless_charge_duration(self.current_level + 1)
+                _c_old = get_fearless_charge_cooldown(max(1, self.current_level))
+                _c_new = get_fearless_charge_cooldown(self.current_level + 1)
+            except Exception:
+                return None
+            return (f"持续{_d_old:.1f}秒·冷却{_c_old:.1f}秒", f"持续{_d_new:.1f}秒·冷却{_c_new:.1f}秒")
         return None
 
 
@@ -309,11 +321,7 @@ class SkillTree:
                   level_descriptions={1: "单轮空袭：1轮轰炸，中等范围", 2: "双轮空袭：2轮轰炸，范围+20%",
                                       3: "地毯式轰炸：3轮轰炸，范围+40%，附带燃烧", 4: "精准打击：4轮轰炸，范围+60%，每轮伤害递增",
                                       5: "超级核爆：5轮持续轰炸+超大范围+屏幕剧烈震动+辐射区域持续伤害"}),
-            Skill(SkillType.SHIELD_BASH, "盾牌肘击", "使用防爆盾进行强力肘击并击退敌人", 5, icon_color=BLUE,
-                  requires=[(SkillType.RIOT_GEAR, 1)], is_active=True,
-                  level_descriptions={1: "盾击：击退敌人，造成基础伤害", 2: "重击：击退距离+50%，伤害+30%",
-                                      3: "盾冲：可蓄力，满蓄力眩晕1秒", 4: "雷霆盾击：攻击附带闪电，连锁3个敌人",
-                                      5: "神圣制裁：超大范围击退+眩晕2秒+伤害+100%+破甲效果"}),
+            # v2.7.0：盾牌肘击技能已从技能池移除（肘击改为防爆套装自带机制，Q/射击键触发）
             Skill(SkillType.GRAPPLE_PULL, "钩爪牵引", "发射钩爪抓取敌人/道具/地形，独立技能无需防爆套装", 5, icon_color=GREEN,
                   requires=[], is_active=True, weight=2.0,
                   level_descriptions={1: "基础钩爪：射程15m，可抓取道具和小型敌人",
@@ -394,13 +402,7 @@ class SkillTree:
                   level_descriptions={1: "医疗站：范围80，每秒回5血，持续8秒", 2: "强化医疗站：范围100，每秒回8血，持续10秒",
                                       3: "急救站：范围120，每秒回12血，持续12秒，回复护甲", 4: "生命之泉：范围150，每秒回18血，持续15秒，清除debuff",
                                       5: "伊甸园：范围200，每秒回25血，持续20秒，清除debuff+复活一次（濒死时回满）"}),
-            Skill(SkillType.SHOCKWAVE, "冲击波", "推开周围所有敌人并造成伤害", 5, icon_color=ORANGE,
-                  requires=[(SkillType.SHIELD_BASH, 1)], is_active=True, weight=1.5,
-                  base_damage=60, damage_per_level=25, base_radius=120, radius_per_level=15,
-                  max_level_bonus="地震波：击退距离翻倍+范围+50%+眩晕1秒",
-                  level_descriptions={1: "冲击波：范围120，击退敌人，基础伤害", 2: "强冲击波：范围140，击退距离+50%，伤害+30%",
-                                      3: "大地震击：范围160，击退距离翻倍，眩晕0.5秒", 4: "裂地波：范围190，击退距离翻倍，眩晕1秒，地面持续伤害",
-                                      5: "天崩地裂：范围250，超大击退，眩晕2秒，范围地震持续3秒+破甲"}),
+            # v2.7.0：冲击波技能已从技能池移除（由无畏冲锋取代）
             # === Buff相关技能 ===
             Skill(SkillType.FLAME_ENCHANT, "火焰附魔", "攻击有20%几率使敌人燃烧", 5, icon_color=ORANGE,
                   requires=[(SkillType.DAMAGE_UP, 1)],
@@ -445,7 +447,21 @@ class SkillTree:
                   level_descriptions={1: "兴奋：装备时体力+25，回复+4/s", 2: "激昂：装备时体力+50，回复+8/s",
                                       3: "狂热：装备时体力+75，回复+12/s", 4: "暴走：装备时体力+100，回复+16/s",
                                       5: "极限：装备时体力+125，回复+20/s"},
-                  effect_key="stamina", effect_per_level=25),
+                  effect_key="stamina", effect_per_level=25,
+                  lore="城北核电站事故后，方舟生物科技的「体能强化剂」流进黑市。幸存者把它灌进防爆套装的注射槽——代价是每一次心跳都像在耳膜上擂鼓。"),
+            # v2.7.0 无畏冲锋：防爆套装 → 肾上腺素 之后解锁的终极冲撞状态
+            Skill(SkillType.FEARLESS_CHARGE, "无畏冲锋", "进入限时冲锋：减伤50%、移速+50%，沿途撞飞并秒杀普通僵尸", 5,
+                  icon_color=(255, 120, 60),
+                  requires=[(SkillType.ADRENALINE, 1)], is_active=True, weight=1.5,
+                  level_descriptions={
+                      1: "无畏·起：持续2.0秒，减伤50%，移速+50%，撞击秒杀普通僵尸",
+                      2: "无畏·驰：持续2.4秒，冷却-1.5秒，撞击伤害提升",
+                      3: "无畏·裂：持续2.8秒，撞击留下爆裂冲击波",
+                      4: "无畏·狂：持续3.2秒，冲锋结束时范围击退",
+                      5: "无畏·绝：持续4.0秒，冲锋结束后获得1秒无敌"},
+                  max_level_bonus="绝境突进：冲锋结束后 1 秒无敌 + 大范围击退",
+                  effect_key="fearless_duration", effect_per_level=1.0,
+                  lore="观察者档案·第13号：「当幸存者不再回头，尸潮便不再可怕。」防爆套装的过载推进器配上肾上腺素，能让人在三秒内忘记恐惧——也忘记怎么停下。"),
             # === 传说级武器专属技能（不出现在技能卡池，持有对应武器自动解锁，等级=武器等级）===
             Skill(SkillType.SCYTHE_DANCE, "死亡轮回", "死神镰刀专属：360°满月斩风暴收割周围敌人；每击杀一个敌人，当前死亡轮回冷却缩短1%", 5,
                   icon_color=(190, 80, 230), requires=[], is_active=True, is_legendary=True,
@@ -507,7 +523,7 @@ class SkillTree:
         """
         melee_boost = set()
         try:
-            for name in ("BERSERK", "PHANTOM_STRIKE", "SHOCKWAVE", "STEEL_WILL", "BLOODLUST", "FLAME_ENCHANT", "FROST_ENCHANT", "POISON_ENCHANT"):
+            for name in ("BERSERK", "PHANTOM_STRIKE", "FEARLESS_CHARGE", "STEEL_WILL", "BLOODLUST", "FLAME_ENCHANT", "FROST_ENCHANT", "POISON_ENCHANT"):
                 s = getattr(SkillType, name, None)
                 if s is not None:
                     melee_boost.add(s)

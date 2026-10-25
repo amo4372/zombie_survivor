@@ -30,6 +30,18 @@ GH_MIRRORS = [
     "https://github.moeyy.xyz/",
 ]
 # v2.5.8：自动测速选最快节点
+# ==================== v2.7.0 下载超时参数（失败要快，不要干等） ====================
+# 更新包主体是代码（几 MB 量级），没必要容忍长时间的半死不活连接：
+#   - 单次 read 超时 15s：15 秒一个字节都读不到，基本可以判定该节点已断
+#   - 停滞超时 20s：连接还在但不再有数据推进，直接放弃换下一个节点
+#   - 单次节点总时长 180s：单个节点拖过 3 分钟就换节点（断点续传会从已下载处继续）
+#   - 整体下载上限 900s：极端弱网兜底，超时抛出由上层提示重试
+DOWNLOAD_READ_TIMEOUT = 15.0
+DOWNLOAD_STALL_TIMEOUT = 20.0
+DOWNLOAD_NODE_TIMEOUT = 180.0
+DOWNLOAD_TOTAL_TIMEOUT = 900.0
+
+
 def _ping_mirror(mirror_url, timeout=3.0):
     """ping 单个镜像节点，返回延迟秒数；失败返回 timeout+1"""
     import socket
@@ -150,7 +162,7 @@ def _gh_proxy_url(url, mirror=None):
     return url
 
 
-def check_for_updates(timeout=10):
+def check_for_updates(timeout=6):
     """
     检查GitHub最新版本
     返回: (latest_version, download_url, changelog) 或 None
@@ -484,7 +496,9 @@ def download_update(download_url, progress_callback=None, version=None):
                     _h["Range"] = f"bytes={resume_from}-"
                 _req = urllib.request.Request(_try_url, headers=_h)
                 UPDATE_STATE["mirror"] = _try_url
-                _resp = urllib.request.urlopen(_req, timeout=60)
+                # v2.7.0：单次 read 超时由 60s 缩短到 15s（几 MB 的代码包，
+                # 15s 读不到任何字节就该换节点，不要原地干等）
+                _resp = urllib.request.urlopen(_req, timeout=DOWNLOAD_READ_TIMEOUT)
                 proxied_url = _try_url
                 break
             except Exception as _e:
@@ -508,13 +522,23 @@ def download_update(download_url, progress_callback=None, version=None):
             chunk_size = 8192
 
             mode = "ab" if (resume_from > 0 and resp.status == 206) else "wb"
+            # v2.7.0 停滞检测：连接还活着但不再推进数据时，果断中止换下一个节点。
+            # 旧逻辑只有「单字节读不到」的 socket 超时，遇到「每秒挤几个字节」的
+            # 假活连接会一直卡在进度条上，表现为下载永远结束不了。
+            _node_start = time.time()
+            _last_bytes = downloaded
+            _last_progress_at = time.time()
+            _stalled = False
             with open(part_path, mode) as f:
                 while True:
                     chunk = resp.read(chunk_size)
-                    if not chunk:
+                    _now = time.time()
+                    if chunk:
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        _last_progress_at = _now
+                    else:
                         break
-                    f.write(chunk)
-                    downloaded += len(chunk)
                     UPDATE_STATE["downloaded_bytes"] = downloaded
                     if total_size > 0:
                         progress = downloaded / total_size
@@ -535,6 +559,25 @@ def download_update(download_url, progress_callback=None, version=None):
                                 _progress_callback(progress, downloaded, total_size)
                             except Exception:
                                 pass
+                    # 停滞 / 单节点超时 / 整体超时 → 中止，交由上层换节点或重试
+                    if _now - _last_progress_at > DOWNLOAD_STALL_TIMEOUT:
+                        _stalled = True
+                        break
+                    if _now - _node_start > DOWNLOAD_NODE_TIMEOUT:
+                        _stalled = True
+                        break
+                    if time.time() - start_time > DOWNLOAD_TOTAL_TIMEOUT:
+                        _stalled = True
+                        break
+                f.flush()
+                try:
+                    os.fsync(f.fileno())
+                except Exception:
+                    pass
+            if _stalled:
+                # 已写入的字节保留在 .part 里，下次走断点续传继续，不浪费流量
+                raise Exception(
+                    f"下载停滞/超时（已下载 {downloaded} 字节），将更换节点续传")
 
         # 3) 完整性校验后重命名
         if not _zip_is_complete(part_path):
@@ -876,7 +919,7 @@ def format_speed(bytes_per_sec):
     return format_size(bytes_per_sec) + "/s"
 
 
-def fetch_release_notes(timeout=10):
+def fetch_release_notes(timeout=6):
     """获取 GitHub 最新 release 的发布说明（版本号 + 正文），失败返回 (None, None)。
 
     仅公开只读接口（经 gh-proxy，无需令牌），供游戏内“更新说明”界面展示。

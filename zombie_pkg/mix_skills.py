@@ -246,8 +246,7 @@ class SkillsMixin:
             SkillType.MEDIC_POD: 150,
             SkillType.CHAIN_LIGHTNING: 350,
             SkillType.DASH: 150,
-            SkillType.SHIELD_BASH: 120,
-            SkillType.SHOCKWAVE: 150,
+            SkillType.FEARLESS_CHARGE: 120,   # v2.7.0 无畏冲锋（沿面朝方向冲撞，不需瞄准）
             # v2.5.7 传说级：湮灭射线（射线长度）/ 死亡轮回（AoE 半径）
             SkillType.RAILGUN_ANNIHILATION: 900,
             SkillType.SCYTHE_DANCE: 400,
@@ -279,6 +278,11 @@ class SkillsMixin:
             return False
         if not self.player.can_act():
             return False
+        # v2.7.0 无畏冲锋期间：无法使用任何技能（冲锋中只能转向）
+        if getattr(self.player, 'fearless_charge_active', False):
+            self.floating_texts.append(FloatingText(
+                self.player.x, self.player.y - 50, "冲锋中无法使用技能!", color=(255, 130, 60), lifetime=1.0))
+            return False
         self._sync_legendary_skill_level()  # 传说专属技能等级与武器同步
 
         skill = self.player.skill_tree.get_skill(skill_type)
@@ -299,6 +303,9 @@ class SkillsMixin:
 
         # 检查并设置冷却（v2.5.7：统一走 config.SKILL_COOLDOWNS，P1/P2/预瞄一致）
         cd = get_skill_cooldown(skill_type, self.player.cooldown_mult)
+        # v2.7.0 无畏冲锋：冷却按技能等级递减
+        if skill_type == SkillType.FEARLESS_CHARGE:
+            cd = get_fearless_charge_cooldown(skill.current_level, self.player.cooldown_mult)
 
         # 执行技能效果
         success = self._execute_skill(skill_type)
@@ -331,6 +338,11 @@ class SkillsMixin:
             return False
         if not self.player.can_act():
             return False
+        # v2.7.0 无畏冲锋期间：无法使用任何技能（冲锋中只能转向）
+        if getattr(self.player, 'fearless_charge_active', False):
+            self.floating_texts.append(FloatingText(
+                self.player.x, self.player.y - 50, "冲锋中无法使用技能!", color=(255, 130, 60), lifetime=1.0))
+            return False
         self._sync_legendary_skill_level()  # 传说专属技能等级与武器同步
 
         skill = self.player.skill_tree.get_skill(skill_type)
@@ -354,8 +366,7 @@ class SkillsMixin:
             SkillType.GRENADE: 8.0,
             SkillType.TURRET: 15.0,
             SkillType.AIRSTRIKE: 20.0,
-            SkillType.SHIELD_BASH: 3.0,
-            SkillType.GRAPPLE_PULL: 2.0, 
+            SkillType.GRAPPLE_PULL: 2.0,
             SkillType.TIME_SLOW: 25.0, 
             SkillType.OVERLOAD: 30.0,
             SkillType.RIOT_GEAR: 30.0,
@@ -366,10 +377,12 @@ class SkillsMixin:
             SkillType.BERSERK: 20.0,
             SkillType.PHANTOM_STRIKE: 18.0,
             SkillType.MEDIC_POD: 30.0,
-            SkillType.SHOCKWAVE: 12.0,
         }
         # v2.5.7：预瞄释放的冷却同样走统一表（原来这里缺传说级技能 → 一律 10s）
         cd = get_skill_cooldown(skill_type, self.player.cooldown_mult)
+        # v2.7.0 无畏冲锋：冷却按技能等级递减
+        if skill_type == SkillType.FEARLESS_CHARGE:
+            cd = get_fearless_charge_cooldown(skill.current_level, self.player.cooldown_mult)
 
         # 根据 distance_ratio 计算实际距离
         max_dist = self._get_skill_max_distance(skill_type)
@@ -598,15 +611,79 @@ class SkillsMixin:
             })
         return True
 
-    def _skill_shield_bash(self):
-        """盾牌肘击技能"""
-        if not self.player.riot_gear.equipped:
-            self.floating_texts.append(FloatingText(
-                self.player.x, self.player.y - 40, 
-                "需要先装备防爆套装!", color=RED, lifetime=1.5
-            ))
+    # v2.7.0：盾牌肘击技能已从技能池移除，改为防爆套装自带机制（Q / 射击键）
+    def _skill_fearless_charge(self, player=None):
+        """v2.7.0 无畏冲锋：进入限时冲撞状态
+        未装备防爆套装时先装备（并强行重置防爆套装技能冷却CD），装备中同样重置CD。
+        冲锋期间：任意伤害减伤50%、移速+50%、无法肘击与使用技能、只能缓慢改变朝向。
+        """
+        pl = player if player is not None else self.player
+        if pl is None:
             return False
-        self._perform_bash()
+        skill = pl.skill_tree.get_skill(SkillType.FEARLESS_CHARGE)
+        if not skill or skill.current_level == 0:
+            self.floating_texts.append(FloatingText(
+                pl.x, pl.y - 40, "未解锁无畏冲锋!", color=RED, lifetime=1.5))
+            return False
+        rg = getattr(pl, 'riot_gear', None)
+        if rg is None:
+            return False
+        # 已在冲锋中：不重复触发
+        if getattr(rg, 'charge_active', False):
+            self.floating_texts.append(FloatingText(
+                pl.x, pl.y - 50, "正在冲锋!", color=GRAY, lifetime=1.0))
+            return False
+        # 载具中禁止
+        if getattr(pl, 'vehicle', None) is not None and getattr(pl.vehicle, 'alive', False):
+            self.floating_texts.append(FloatingText(
+                pl.x, pl.y - 40, "载具中无法冲锋!", color=(255, 160, 60), lifetime=1.2))
+            return False
+        riot_skill = pl.skill_tree.get_skill(SkillType.RIOT_GEAR)
+        if not riot_skill or riot_skill.current_level == 0:
+            self.floating_texts.append(FloatingText(
+                pl.x, pl.y - 40, "需要先解锁防爆套装!", color=RED, lifetime=1.5))
+            return False
+        # 未装备 → 先装备防爆套装（无视冷却）
+        if not getattr(rg, 'equipped', False):
+            try:
+                rg.riot_gear_cd_timer = 0.0
+                rg.equip()
+            except Exception:
+                pass
+            self.floating_texts.append(FloatingText(
+                pl.x, pl.y - 62, "防爆套装·强制装备!", color=(120, 200, 255), lifetime=1.2))
+        # 强行重置防爆套装技能冷却CD
+        pl.riot_gear_cooldown = 0.0
+        try:
+            pl.active_skills.pop(SkillType.RIOT_GEAR, None)
+        except Exception:
+            pass
+        lv = max(1, int(skill.current_level))
+        dur = get_fearless_charge_duration(lv)
+        # 冲锋速度 = 当前实际移动速度 ×1.5
+        try:
+            base_px = pl.speed * getattr(pl, 'speed_mult', 1.0) * 60.0
+            base_px *= pl.buff_manager.get_speed_mult()
+        except Exception:
+            base_px = 270.0
+        rg.charge_active = True
+        rg.charge_timer = dur
+        rg.charge_duration = dur
+        rg.charge_direction = pl.facing_angle
+        rg.charge_speed = base_px * FEARLESS_CHARGE_SPEED_MULT
+        rg.charge_hit_ids = set()
+        rg.fearless_active = True
+        rg.fearless_level = lv
+        pl.fearless_charge_active = True
+        pl.fearless_charge_level = lv
+        self.floating_texts.append(FloatingText(
+            pl.x, pl.y - 50, "无畏冲锋!", color=(255, 130, 60), lifetime=1.5))
+        self.particles.spawn_explosion(pl.x, pl.y, (255, 130, 60), 26)
+        self.camera.shake(7, 0.25)
+        try:
+            self.assets.play_sound("bash")
+        except Exception:
+            pass
         return True
 
     def _skill_grapple(self):
@@ -864,47 +941,7 @@ class SkillsMixin:
         ))
         return True
 
-    def _skill_shockwave(self):
-        """冲击波 - 伤害/半径随技能等级缩放，满级附加眩晕"""
-        sw_skill = self.player.skill_tree.get_skill(SkillType.SHOCKWAVE) if self.player else None
-        if sw_skill and sw_skill.current_level > 0:
-            sw_radius = int(sw_skill.get_effective_radius())
-            sw_damage = int(sw_skill.get_effective_damage())
-            is_max = sw_skill.is_maxed()
-        else:
-            sw_radius = 150
-            sw_damage = 60
-            is_max = False
-        for enemy in self.enemies:
-            dist = math.hypot(enemy.x - self.player.x, enemy.y - self.player.y)
-            if dist < sw_radius and dist > 0:
-                push_force = 200 if is_max else 100
-                push_x = (enemy.x - self.player.x) / dist * push_force
-                push_y = (enemy.y - self.player.y) / dist * push_force
-                enemy.x += push_x
-                enemy.y += push_y
-                enemy.take_damage(sw_damage)
-                self.damage_numbers.append(DamageNumber(enemy.x, enemy.y, sw_damage, color=ORANGE))
-                if is_max:
-                    enemy.apply_buff(BuffType.STUN, duration=1.0)
-                if not enemy.alive:
-                    self._on_enemy_death(enemy)
-        self.particles.spawn_explosion(self.player.x, self.player.y, ORANGE, 40)
-        self.camera.shake(15, 0.5)
-        # 冲击波扩散光环（可视范围提示，更帅）
-        self.slash_arcs.append(SlashArc(
-            self.player.x, self.player.y, 0.0, sw_radius,
-            (255, 150, 40), lifetime=0.5, kind="scythe",
-            start_radius=sw_radius * 0.35, end_angle_offset=6.2))
-        self.slash_arcs.append(SlashArc(
-            self.player.x, self.player.y, math.pi / 3, sw_radius * 1.15,
-            (255, 200, 80), lifetime=0.4, kind="scythe",
-            start_radius=sw_radius * 0.5, end_angle_offset=6.2))
-        label = "地震波!" if is_max else "冲击波!"
-        self.floating_texts.append(FloatingText(
-            self.player.x, self.player.y - 40, label, color=ORANGE, lifetime=1.5
-        ))
-        return True
+    # v2.7.0：冲击波技能已从技能池移除，由无畏冲锋取代
 
     def _skill_war_cry(self):
         """战吼：获得伤害+攻速+护盾三重buff"""
@@ -1085,6 +1122,11 @@ class SkillsMixin:
         v2.2.7：player 参数化，P2 可复用"""
         if player is None:
             player = self.player
+        # v2.7.0 无畏冲锋期间：无法肘击
+        if getattr(player, 'fearless_charge_active', False):
+            self.floating_texts.append(FloatingText(
+                player.x, player.y - 50, "冲锋中无法肘击!", color=(255, 130, 60), lifetime=1.0))
+            return False
         if self.session:
             self.session.add_bash()
         self.assets.play_sound("bash")
@@ -1138,62 +1180,150 @@ class SkillsMixin:
                     "width": 6, "life": 0.35, "max_life": 0.35,
                 })
 
-    def _update_charge(self, dt):
-        """更新盾牌冲撞：移动玩家，检测沿途敌人碰撞"""
-        rg = self.player.riot_gear
-        if not rg.charge_active:
+    def _update_charge(self, dt, player=None):
+        """更新盾牌冲撞 / v2.7.0 无畏冲锋：移动玩家，检测沿途敌人与敌对玩家碰撞"""
+        pl = player if player is not None else self.player
+        rg = getattr(pl, 'riot_gear', None)
+        if rg is None or not getattr(rg, 'charge_active', False):
             return
+        fearless = bool(getattr(rg, 'fearless_active', False))
+        lv = max(1, int(getattr(rg, 'fearless_level', 0) or 1))
         rg.charge_timer -= dt
+        # 无畏冲锋：方向实时跟随玩家朝向（朝向已在 Player.update 中被限速转向）
+        if fearless:
+            rg.charge_direction = pl.facing_angle
         angle_rad = math.radians(rg.charge_direction)
         move_x = math.cos(angle_rad) * rg.charge_speed * dt
         move_y = math.sin(angle_rad) * rg.charge_speed * dt
         # 尝试移动（受世界边界限制）
-        new_x = self.player.x + move_x
-        new_y = self.player.y + move_y
-        clamped_x, clamped_y = self.world.clamp_position(new_x, new_y, self.player.size)
+        new_x = pl.x + move_x
+        new_y = pl.y + move_y
+        try:
+            clamped_x, clamped_y = self.world.clamp_position(new_x, new_y, pl.size)
+        except Exception:
+            clamped_x, clamped_y = new_x, new_y
         # 如果被墙挡住，提前结束冲撞
         if abs(clamped_x - new_x) > 1 or abs(clamped_y - new_y) > 1:
-            rg.charge_timer = 0
-        self.player.x, self.player.y = clamped_x, clamped_y
+            rg.charge_timer = min(rg.charge_timer, 0.0)
+        pl.x, pl.y = clamped_x, clamped_y
         # 检测沿途敌人碰撞
         hit_any = False
-        for enemy in self.enemies:
+        for enemy in list(self.enemies):
+            if not getattr(enemy, 'alive', True):
+                continue
             if id(enemy) in rg.charge_hit_ids:
                 continue
-            dist = math.hypot(enemy.x - self.player.x, enemy.y - self.player.y)
-            hit_radius = self.player.size + enemy.size + 10
-            if dist < hit_radius:
-                rg.charge_hit_ids.add(id(enemy))
-                is_crit = random.random() < self.player.crit_chance
-                actual_damage = rg.charge_damage * self.player.damage_mult * self.player.buff_manager.get_damage_mult() * (self.player.crit_damage if is_crit else 1)
-                enemy.take_damage(actual_damage)
-                self._vampire_heal(actual_damage)
-                # 强控制：眩晕（对 boss 控制效果减半）
-                _is_boss = getattr(enemy, "is_boss", False)
-                enemy.apply_buff(BuffType.STUN, duration=rg.charge_stun_duration * (0.5 if _is_boss else 1.0))
-                enemy.knockdown(1.0 if not _is_boss else 0.5)
-                # 击退（对 boss 大幅减弱）
+            dist = math.hypot(enemy.x - pl.x, enemy.y - pl.y)
+            hit_radius = pl.size + getattr(enemy, 'size', 12) + (16 if fearless else 10)
+            if dist >= hit_radius:
+                continue
+            rg.charge_hit_ids.add(id(enemy))
+            _is_boss = getattr(enemy, "is_boss", False)
+            if fearless and not _is_boss:
+                # 无畏冲锋：沿途普通僵尸直接秒杀（Boss 受常规伤害）
+                _kill = max(99999, int(getattr(enemy, 'max_hp', 100) * 100))
+                enemy.take_damage(_kill, damage_type="melee")
+                enemy._last_hit_player = pl
+                self.damage_numbers.append(DamageNumber(enemy.x, enemy.y, int(getattr(enemy, 'max_hp', 100)),
+                                                        color=(255, 130, 60), damage_type="melee"))
+                self.particles.spawn_blood(enemy.x, enemy.y, 16)
+                self.particles.spawn_explosion(enemy.x, enemy.y, (255, 130, 60), 14)
                 if dist > 0:
-                    _kb = rg.charge_knockback * (0.3 if _is_boss else 1.0)
-                    enemy.x += math.cos(angle_rad) * _kb
-                    enemy.y += math.sin(angle_rad) * _kb
-                self.damage_numbers.append(DamageNumber(enemy.x, enemy.y, actual_damage, is_crit=is_crit, damage_type="melee"))
-                self.particles.spawn_blood(enemy.x, enemy.y, 12)
-                self.particles.spawn_explosion(enemy.x, enemy.y, CYAN, 15)
+                    _kb = rg.charge_knockback * 1.4
+                    enemy.x += (enemy.x - pl.x) / dist * _kb
+                    enemy.y += (enemy.y - pl.y) / dist * _kb
                 hit_any = True
                 if not enemy.alive:
                     self._on_enemy_death(enemy)
+                continue
+            is_crit = random.random() < pl.crit_chance
+            _mult = (1.0 + 0.2 * (lv - 1)) if fearless else 1.0
+            actual_damage = rg.charge_damage * _mult * pl.damage_mult * pl.buff_manager.get_damage_mult() * (pl.crit_damage if is_crit else 1)
+            enemy.take_damage(actual_damage)
+            enemy._last_hit_player = pl
+            self._vampire_heal(actual_damage)
+            # 强控制：眩晕（对 boss 控制效果减半）
+            enemy.apply_buff(BuffType.STUN, duration=rg.charge_stun_duration * (0.5 if _is_boss else 1.0))
+            enemy.knockdown(1.0 if not _is_boss else 0.5)
+            # 击退（对 boss 大幅减弱）
+            if dist > 0:
+                _kb = rg.charge_knockback * (0.3 if _is_boss else 1.0)
+                enemy.x += math.cos(angle_rad) * _kb
+                enemy.y += math.sin(angle_rad) * _kb
+            self.damage_numbers.append(DamageNumber(enemy.x, enemy.y, actual_damage, is_crit=is_crit, damage_type="melee"))
+            self.particles.spawn_blood(enemy.x, enemy.y, 12)
+            self.particles.spawn_explosion(enemy.x, enemy.y, CYAN, 15)
+            hit_any = True
+            if not enemy.alive:
+                self._on_enemy_death(enemy)
+        # v2.7.0 无畏冲锋：撞到敌对阵营玩家 → 强眩晕 + 直接扣除 50% 最大生命
+        if fearless and getattr(self.config, 'pvp_enabled', False):
+            for _pp in self._all_players():
+                if _pp is pl or not getattr(_pp, 'alive', True) or getattr(_pp, 'downed', False):
+                    continue
+                if getattr(_pp, 'team_id', 1) == getattr(pl, 'team_id', 0):
+                    continue
+                _key = ("pl", id(_pp))
+                if _key in rg.charge_hit_ids:
+                    continue
+                _d = math.hypot(_pp.x - pl.x, _pp.y - pl.y)
+                if _d > pl.size + getattr(_pp, 'size', 16) + 18:
+                    continue
+                rg.charge_hit_ids.add(_key)
+                _drain = max(1.0, getattr(_pp, 'max_hp', 100.0) * FEARLESS_PLAYER_HP_DRAIN)
+                try:
+                    _pp.buff_manager.add_buff(BuffType.STUN, duration=FEARLESS_PLAYER_STUN)
+                except Exception:
+                    pass
+                _pp.hp = max(0, getattr(_pp, 'hp', 0) - _drain)
+                self.damage_numbers.append(DamageNumber(_pp.x, _pp.y, int(_drain), color=RED, damage_type="melee"))
+                self.particles.spawn_blood(_pp.x, _pp.y, 14)
+                self.camera.shake(10, 0.3)
+                self.floating_texts.append(FloatingText(
+                    _pp.x, _pp.y - 45, "撞飞!", color=(255, 130, 60), lifetime=1.2))
+                if getattr(_pp, 'hp', 1) <= 0:
+                    # 交由既有救援/倒地系统接管（同屏双人会自动判定倒地）
+                    _pp.alive = False
+                hit_any = True
         if hit_any:
             self.camera.shake(8, 0.3)
         # 冲撞拖尾粒子
-        self.particles.spawn(self.player.x, self.player.y, CYAN, 2, (4, 10), (-3, 3), (0.15, 0.35))
+        _trail = (255, 130, 60) if fearless else CYAN
+        self.particles.spawn(pl.x, pl.y, _trail, 2, (4, 10), (-3, 3), (0.15, 0.35))
         # 冲撞结束
         if rg.charge_timer <= 0:
             rg.charge_active = False
             rg.charge_hit_ids = set()
+            _was_fearless = fearless
+            rg.fearless_active = False
+            pl.fearless_charge_active = False
+            pl.fearless_charge_level = 0
             # 结束冲击波
-            self.particles.spawn_explosion(self.player.x, self.player.y, CYAN, 20)
+            self.particles.spawn_explosion(pl.x, pl.y, _trail, 20)
             self.camera.shake(6, 0.25)
+            if _was_fearless:
+                # 3级起：结束时爆裂冲击波，击退周围敌人
+                if lv >= 3:
+                    try:
+                        self.slash_arcs.append(SlashArc(
+                            pl.x, pl.y, 0.0, 150 + 20 * lv, (255, 150, 60),
+                            lifetime=0.45, kind="scythe", start_radius=40, end_angle_offset=6.2))
+                    except Exception:
+                        pass
+                    for _e in list(self.enemies):
+                        if not getattr(_e, 'alive', True):
+                            continue
+                        _d = math.hypot(_e.x - pl.x, _e.y - pl.y)
+                        if _d < 150 + 20 * lv and _d > 0:
+                            _kb = 130 * (0.3 if getattr(_e, 'is_boss', False) else 1.0)
+                            _e.x += (_e.x - pl.x) / _d * _kb
+                            _e.y += (_e.y - pl.y) / _d * _kb
+                            _e.apply_buff(BuffType.STUN, duration=0.6)
+                # 5级：冲锋结束后 1 秒无敌
+                if lv >= 5:
+                    pl.invincible_timer = max(getattr(pl, 'invincible_timer', 0.0), 1.0)
+                    self.floating_texts.append(FloatingText(
+                        pl.x, pl.y - 60, "绝境突进!", color=GOLD, lifetime=1.4))
 
     def _perform_grapple_aimed(self, angle, max_dist=800):
         """带瞄准方向和距离的钩爪（独立技能，无需防爆套装）"""
@@ -1282,14 +1412,7 @@ class SkillsMixin:
         # v2.5.0 钩爪可勾敌人玩家（PvP）：异阵营玩家作为勾取目标（同敌人一样拉回+QTE 挣脱）
         try:
             if getattr(self.config, 'pvp_enabled', False) and self.is_multiplayer_active():
-                for _ppn in ("player", "player2", "player3", "player4"):
-                    _pp = getattr(self, _ppn, None)
-                    if _pp is None or _pp is self.player:
-                        continue
-                    if not getattr(_pp, 'alive', False) or getattr(_pp, 'downed', False):
-                        continue
-                    if getattr(_pp, 'team_id', 0) == getattr(self.player, 'team_id', 0):
-                        continue  # 同队不勾
+                for _pp in self._enemy_players_of(self.player):
                     _ex = _pp.x - self.player.x
                     _ey = _pp.y - self.player.y
                     _pr = _ex * dir_x + _ey * dir_y
@@ -1300,6 +1423,25 @@ class SkillsMixin:
                     _perp = math.hypot(_px, _py)
                     if _perp < search_radius + 26 and _pr < target_dist:
                         target = _pp
+                        target_dist = _pr
+        except Exception:
+            pass
+        # v2.7.0 修复：P1 也能勾取存活同阵营队友（与 P2 对齐，此前只有 P2 支持 → P1 勾不到 P2）
+        try:
+            if self.is_multiplayer_active():
+                for _pt in self._alive_teammates_of(self.player):
+                    if getattr(_pt, 'downed', False):
+                        continue
+                    _ex = _pt.x - self.player.x
+                    _ey = _pt.y - self.player.y
+                    _pr = _ex * dir_x + _ey * dir_y
+                    if _pr < 0 or _pr > dist:
+                        continue
+                    _px = _ex - _pr * dir_x
+                    _py = _ey - _pr * dir_y
+                    _perp = math.hypot(_px, _py)
+                    if _perp < search_radius + 26 and _pr < target_dist:
+                        target = _pt
                         target_dist = _pr
         except Exception:
             pass
@@ -1431,9 +1573,19 @@ class SkillsMixin:
             try:
                 if hasattr(self, 'skill_card_selector') and self.skill_card_selector:
                     _tag = "P1" if player is self.player else ("P2" if player is getattr(self, 'player2', None) else "P1")
-                    _half = max(320, getattr(self, 'scaled_width', 1280) // 2)
-                    import pygame
-                    _region = pygame.Rect(0 if _tag == "P1" else getattr(self, 'scaled_width', 1280) - _half, 0, _half, getattr(self, 'scaled_height', 720))
+                    # v2.7.0 修复：半屏 region 只用于同屏双人；单机连升多级时若用半屏，
+                    # 第二张及以后的技能卡只会显示在左半屏（与首次全屏不一致）。
+                    try:
+                        _mp_now = (self.is_multiplayer_active()
+                                   and getattr(self, 'multiplayer_mode', None) == "same_screen")
+                    except Exception:
+                        _mp_now = False
+                    _region = None
+                    if _mp_now:
+                        import pygame
+                        _half = max(320, getattr(self, 'scaled_width', 1280) // 2)
+                        _region = pygame.Rect(0 if _tag == "P1" else getattr(self, 'scaled_width', 1280) - _half,
+                                              0, _half, getattr(self, 'scaled_height', 720))
                     self.skill_card_selector.show(player.skill_cards, region=_region,
                                                   title=f"{_tag} 升级！选择你的强化",
                                                   subtitle=f"{_tag} 等级 {player.level} → 选择技能卡")
@@ -1479,5 +1631,18 @@ class SkillsMixin:
                                          velocity_range=(-60, 60), lifetime_range=(0.2, 0.4))
         except Exception:
             pass
-        self.skill_card_selector.hide()
-        self.state = GameState.PLAYING
+        # v2.7.0 修复：连升多级时不能无条件 hide()+PLAYING。
+        # 上面 _left>0 分支刚为下一级 show() 了新卡片，这里再 hide() 会立刻把它关掉，
+        # 玩家看不到后续升级页（表现为「连升多级选卡异常 / 卡在 PLAYING」）。
+        if _left <= 0:
+            self.skill_card_selector.hide()
+            self.state = GameState.PLAYING
+        else:
+            # 还有剩余级数：保持选择器可见，并把状态切回选卡（避免中间帧漏掉输入）
+            try:
+                _mp_now = (self.is_multiplayer_active()
+                           and getattr(self, 'multiplayer_mode', None) == "same_screen")
+            except Exception:
+                _mp_now = False
+            if not _mp_now and not getattr(self, '_upgrade_pause_player', None):
+                self.state = GameState.SKILL_SELECT

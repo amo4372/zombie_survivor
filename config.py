@@ -727,6 +727,7 @@ class SkillType(Enum):
     PURIFY = auto()            # 净化 - 清除debuff并短暂无敌
     ELEMENTAL_MASTERY = auto() # 元素精通 - 增强debuff效果
     ADRENALINE = auto()        # 肾上腺素 - 装备防爆套装时体力上限和回复提升
+    FEARLESS_CHARGE = auto()   # v2.7.0 无畏冲锋 - 防爆套装→肾上腺素后解锁的限时冲撞状态
     # 传说级武器专属技能（持有对应武器自动解锁，等级随武器等级成长）
     SCYTHE_DANCE = auto()      # 死神镰刀·死亡轮回 - 360°满月斩收割周围一切
     MINIGUN_OVERDRIVE = auto() # 加特林·过热倾泻 - 射速暴增+弹药无限
@@ -745,7 +746,6 @@ SKILL_COOLDOWNS = {
     SkillType.GRENADE: 8.0,
     SkillType.TURRET: 15.0,
     SkillType.AIRSTRIKE: 20.0,
-    SkillType.SHIELD_BASH: 3.0,
     SkillType.GRAPPLE_PULL: 2.0,
     SkillType.TIME_SLOW: 25.0,
     SkillType.OVERLOAD: 30.0,
@@ -758,7 +758,7 @@ SKILL_COOLDOWNS = {
     SkillType.BERSERK: 20.0,
     SkillType.PHANTOM_STRIKE: 18.0,
     SkillType.MEDIC_POD: 30.0,
-    SkillType.SHOCKWAVE: 12.0,
+    SkillType.FEARLESS_CHARGE: 18.0,   # v2.7.0 无畏冲锋（实际按等级递减，见 _fearless_cd_for）
     # Buff 系
     SkillType.WAR_CRY: 25.0,
     SkillType.PURIFY: 35.0,
@@ -781,6 +781,44 @@ def get_skill_cooldown(skill_type, cooldown_mult=1.0):
     if mult < 0:
         mult = 1.0
     return base * mult
+
+
+# ==================== v2.7.0 无畏冲锋参数 ====================
+# 防爆套装 → 肾上腺素 → 无畏冲锋 解锁链的最后一级：限时冲撞状态
+FEARLESS_CHARGE_DURATION = {1: 2.0, 2: 2.4, 3: 2.8, 4: 3.2, 5: 4.0}   # 各等级持续时间（秒）
+FEARLESS_CHARGE_DAMAGE_REDUCTION = 0.50   # 冲锋期间任意伤害减伤 50%
+FEARLESS_CHARGE_SPEED_MULT = 1.50         # 冲锋期间移速 +50%
+FEARLESS_CHARGE_TURN_RATE = 70.0          # 冲锋期间转向速度（度/秒，正常为瞬时转向）
+FEARLESS_CHARGE_CD_BASE = 18.0            # 1级冷却，每级 -1.5s（最低 10s）
+FEARLESS_CHARGE_CD_PER_LEVEL = 1.5
+FEARLESS_CHARGE_CD_MIN = 10.0
+FEARLESS_PLAYER_HP_DRAIN = 0.50           # 撞到敌对玩家：直接扣除其 50% 最大生命
+FEARLESS_PLAYER_STUN = 2.0                # 撞到敌对玩家：强眩晕秒数
+
+
+def get_fearless_charge_duration(level=1):
+    """无畏冲锋持续秒数（按技能等级）"""
+    try:
+        lv = int(level)
+    except Exception:
+        lv = 1
+    return FEARLESS_CHARGE_DURATION.get(lv, FEARLESS_CHARGE_DURATION[1])
+
+
+def get_fearless_charge_cooldown(level=1, cooldown_mult=1.0):
+    """无畏冲锋冷却（按技能等级递减，再乘冷却缩减）"""
+    try:
+        lv = max(1, int(level))
+    except Exception:
+        lv = 1
+    try:
+        mult = float(cooldown_mult) if cooldown_mult else 1.0
+    except Exception:
+        mult = 1.0
+    if mult < 0:
+        mult = 1.0
+    cd = FEARLESS_CHARGE_CD_BASE - (lv - 1) * FEARLESS_CHARGE_CD_PER_LEVEL
+    return max(FEARLESS_CHARGE_CD_MIN, cd) * mult
 
 
 # ==================== 局外商店：武器价格（金币） ====================

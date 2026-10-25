@@ -60,6 +60,11 @@ class Player:
         self.skill_tree = SkillTree()
         self.active_skills = {}
 
+        # v2.7.0 修复：玩家必须显式初始化 team_id（合作模式全队 0）
+        # 此前 Player 从未设置该属性，而队友判定用 getattr(_p,'team_id',1) 取默认 1、
+        # 自身用默认 0 —— 双方永远不同队，导致钩爪永远勾不到队友（P2 勾不到 P1）。
+        self.team_id = 0
+
         # 角色加成（局外角色特殊能力）
         self.damage_multiplier = 1.0   # 射击伤害倍率加成
         self.crit_bonus_add = 0.0       # 额外暴击率
@@ -69,6 +74,9 @@ class Player:
         self.riot_gear = RiotGear()
         self.riot_gear_cooldown = 0
         self.riot_gear_equip_cooldown = 30.0
+        # v2.7.0 无畏冲锋限时状态（减伤/加速/禁技能，由防爆套装冲撞系统驱动）
+        self.fearless_charge_active = False
+        self.fearless_charge_level = 0
 
         # 加特林专属技能·过热倾泻 buff（射速暴增+弹药无限）
         self.overdrive_timer = 0
@@ -331,6 +339,9 @@ class Player:
             self.qte_immune_timer = max(0.0, self.qte_immune_timer - dt)
         if getattr(self, 'qte_break_hint', 0) > 0:
             self.qte_break_hint = max(0.0, self.qte_break_hint - dt)
+        # v2.7.0 无畏冲锋：冲锋期间位移完全由冲撞系统接管（玩家只能转向）
+        if getattr(self, 'fearless_charge_active', False):
+            move_x, move_y = 0.0, 0.0
         new_x = self.x + move_x * self.speed * self.speed_mult * speed_mult * dt * 60
         new_y = self.y + move_y * self.speed * self.speed_mult * speed_mult * dt * 60
 
@@ -349,7 +360,18 @@ class Player:
         self._inp_dx = self.x - _ox
         self._inp_dy = self.y - _oy
 
-        self.facing_angle = math.degrees(mouse_angle)
+        # v2.7.0 无畏冲锋：冲锋期间玩家仅能改变方向，且转向速度大幅降低
+        if getattr(self, 'fearless_charge_active', False):
+            _target = math.degrees(mouse_angle)
+            _diff = (_target - self.facing_angle + 180) % 360 - 180
+            _max_step = FEARLESS_CHARGE_TURN_RATE * dt
+            if abs(_diff) <= _max_step:
+                self.facing_angle = _target
+            else:
+                self.facing_angle += _max_step if _diff > 0 else -_max_step
+            self.facing_angle = (self.facing_angle + 360) % 360
+        else:
+            self.facing_angle = math.degrees(mouse_angle)
 
         for w in self.weapons:
             w.reload_speed_mult = self.reload_speed_mult
@@ -521,6 +543,9 @@ class Player:
         dmg_reduce = getattr(self, 'dmg_reduce', 0.0)
         if dmg_reduce > 0:
             damage = max(0, damage * (1.0 - dmg_reduce))
+        # v2.7.0 无畏冲锋：冲锋期间任意伤害减伤 50%
+        if getattr(self, 'fearless_charge_active', False):
+            damage = max(0, damage * (1.0 - FEARLESS_CHARGE_DAMAGE_REDUCTION))
         # Mod 钩子：玩家受伤 - 允许 mod 修改伤害值
         try:
             import mod_loader
@@ -612,9 +637,8 @@ class Player:
             SkillType.DASH: 5.0, 
             SkillType.GRENADE: 8.0, 
             SkillType.TURRET: 15.0,
-            SkillType.AIRSTRIKE: 20.0, 
-            SkillType.SHIELD_BASH: 3.0,
-            SkillType.GRAPPLE_PULL: 6.0, 
+            SkillType.AIRSTRIKE: 20.0,
+            SkillType.GRAPPLE_PULL: 6.0,
             SkillType.TIME_SLOW: 25.0, 
             SkillType.OVERLOAD: 30.0,
             SkillType.RIOT_GEAR: 30.0,
@@ -625,7 +649,7 @@ class Player:
             SkillType.BERSERK: 20.0,
             SkillType.PHANTOM_STRIKE: 18.0,
             SkillType.MEDIC_POD: 30.0,
-            SkillType.SHOCKWAVE: 12.0,
+            SkillType.FEARLESS_CHARGE: 18.0,
         }
         cd = cooldowns.get(skill_type, 10.0) * self.cooldown_mult
         self.active_skills[skill_type] = cd

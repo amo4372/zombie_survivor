@@ -282,24 +282,18 @@ class InputMixin:
                 _sel = None
                 for event in all_events:
                     if event.type == pygame.KEYDOWN and event.key in (pygame.K_1, pygame.K_2, pygame.K_3):
+                        # v2.7.0：数字键只切换选项，回车/空格才确认升级
                         _idx = {pygame.K_1: 0, pygame.K_2: 1, pygame.K_3: 2}[event.key]
                         if 0 <= _idx < len(_up_pl.skill_cards):
-                            _sel = _up_pl.skill_cards[_idx]
-                    elif event.type in (pygame.FINGERDOWN, pygame.MOUSEBUTTONDOWN):
-                        if event.type == pygame.FINGERDOWN:
-                            _x = event.x * self.scaled_width
-                            _y = event.y * self.scaled_height
-                            _fid = event.finger_id
-                        else:
-                            _x, _y = event.pos
-                            _fid = -1
-                        _in_half = (_x < _half) if _upw == "P1" else (_x >= _half)
-                        if _in_half:
-                            _sel = self.skill_card_selector.handle_input(
-                                (0, 0), (0, 0, 0),
-                                [{"type": "down", "pos": (_x, _y), "id": _fid}],
-                                self.scale
-                            )
+                            self.skill_card_selector.select_tab(_idx)
+                    elif event.type == pygame.KEYDOWN and event.key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_SPACE):
+                        _sel = self.skill_card_selector.confirm()
+                        break
+                if _sel is None:
+                    # 触控/鼠标：半屏内的点击、切换、滑动统一交给选择器（region 已限制在半屏）
+                    _sel = self.skill_card_selector.handle_input(
+                        (0, 0), (0, 0, 0), list(self.touch_events), self.scale
+                    )
                 if _sel is not None:
                     self._apply_skill_card(_sel)
             # 无论是否选中：不 return，另一玩家输入继续正常流程

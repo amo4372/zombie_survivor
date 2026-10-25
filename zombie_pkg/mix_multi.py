@@ -678,6 +678,13 @@ class MultiplayerMixin:
             return
         # v2.5.7：P2 冷却同样走统一表（与 P1 一致）
         cd = get_skill_cooldown(skill_type, p2.cooldown_mult)
+        # v2.7.0 无畏冲锋：冷却按等级递减；冲锋中禁止再次施放
+        if skill_type == SkillType.FEARLESS_CHARGE:
+            if getattr(p2, 'fearless_charge_active', False):
+                self.floating_texts.append(FloatingText(p2.x, p2.y - 50, "正在冲锋!", color=GRAY, lifetime=1.0))
+                return
+            _fc = p2.skill_tree.get_skill(SkillType.FEARLESS_CHARGE)
+            cd = get_fearless_charge_cooldown(_fc.current_level if _fc else 1, p2.cooldown_mult)
         # 简易执行
         ok = False
         if skill_type == SkillType.DASH:
@@ -688,15 +695,7 @@ class MultiplayerMixin:
         elif skill_type == SkillType.GRENADE:
             ok = True
             self._spawn_grenade(p2.x, p2.y, p2.facing_angle, p2)
-        elif skill_type == SkillType.SHOCKWAVE:
-            ok = True
-            for e in self.enemies:
-                if not getattr(e, 'alive', True): continue
-                if math.hypot(e.x - p2.x, e.y - p2.y) <= 200:
-                    e.take_damage(60 * p2.damage_multiplier, damage_type="aoe")
-                    e.knockdown_timer = 0.8
-            self.slash_arcs.append(SlashArc(p2.x, p2.y, 0, 200, (255, 220, 100), lifetime=0.4, kind="scythe",
-                                            start_radius=150, end_angle_offset=3.0))
+        # v2.7.0：冲击波技能已移除
         elif skill_type == SkillType.VEHICLE_SUMMON:
             # v2.2.0 P2 载具召唤（与 P1 并行）
             # v2.5.7 修复：原来 cd 被写成 12.0（覆盖了 60s 载具冷却）→ 与 P1 统一为 60s
@@ -748,13 +747,9 @@ class MultiplayerMixin:
             else:
                 rg.equip()
                 self.floating_texts.append(FloatingText(p2.x, p2.y - 40, "装备防爆套装", color=(120, 200, 255), lifetime=1.0))
-        elif skill_type == SkillType.SHIELD_BASH:
-            # v2.2.7：P2 肘击（防爆套装近战）
-            ok = True
-            try:
-                self._skill_shield_bash_for(p2)
-            except Exception:
-                self.floating_texts.append(FloatingText(p2.x, p2.y - 40, "需装备防爆套装", color=GRAY, lifetime=1.2))
+        elif skill_type == SkillType.FEARLESS_CHARGE:
+            # v2.7.0：P2 无畏冲锋（与 P1 同规则：未装备则强制装备并重置套装CD）
+            ok = self._skill_fearless_charge(p2)
         else:
             self.floating_texts.append(FloatingText(p2.x, p2.y - 40, "该技能暂不支持双人", color=GRAY, lifetime=1.2))
             return
@@ -762,14 +757,7 @@ class MultiplayerMixin:
             p2.active_skills[skill_type] = cd
             self.floating_texts.append(FloatingText(p2.x, p2.y - 45, "技能释放!", color=GOLD, lifetime=1.5))
 
-    def _skill_shield_bash_for(self, p):
-        """P2 肘击：需先装备防爆套装，盾牌前方扇形区域伤害（与 P1 共用 _perform_bash）"""
-        if not getattr(p, 'riot_gear', None) or not p.riot_gear.equipped:
-            self.floating_texts.append(FloatingText(
-                p.x, p.y - 40, "需要先装备防爆套装!", color=RED, lifetime=1.5))
-            return False
-        self._perform_bash(p.facing_angle, player=p)
-        return True
+    # v2.7.0：盾牌肘击技能已从技能池移除（肘击保留为防爆套装自带机制）
 
     def _use_skill_p2_aimed(self, skill_type, angle, distance_ratio=1.0):
         """P2 带瞄准方向/距离的技能释放（触控长按拖拽/键控长按）"""
@@ -810,16 +798,9 @@ class MultiplayerMixin:
             p2.overdrive_mult = {1: 2.5, 2: 3.0, 3: 3.5, 4: 4.0, 5: 4.5}.get(_odlv, 3.0)
             p2.overdrive_burn = (_odlv >= 4)
             ok = True
-        elif skill_type == SkillType.SHOCKWAVE:
-            ok = True
-            for e in self.enemies:
-                if not getattr(e, 'alive', True):
-                    continue
-                if math.hypot(e.x - p2.x, e.y - p2.y) <= 200:
-                    e.take_damage(60 * p2.damage_multiplier, damage_type="aoe")
-                    e.knockdown_timer = 0.8
-            self.slash_arcs.append(SlashArc(p2.x, p2.y, 0, 200, (255, 220, 100), lifetime=0.4, kind="scythe",
-                                            start_radius=150, end_angle_offset=3.0))
+        elif skill_type == SkillType.FEARLESS_CHARGE:
+            # v2.7.0：P2 无畏冲锋（预瞄释放同样生效）
+            ok = self._skill_fearless_charge(p2)
         elif skill_type == SkillType.GRAPPLE_PULL:
             # v2.2.6：P2 钩爪施放（支持锁定直飞/路径勾取/自我拉拽，与 P1 一致）
             rg = p2.riot_gear

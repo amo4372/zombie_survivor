@@ -35,11 +35,12 @@ class PlayMixin:
         if not viewports:
             return
         render_split_viewports(self, self.game, viewports)
-        # P2 键控技能 U 长按预瞄（右半屏；照 P1 G 键模板）——分屏特有交互，保留在原渲染器
-        if len(viewports) > 1 and self.game.config.control_mode == ControlMode.KEYBOARD:
-            c2 = self.game.p2_controls
-            if c2 and c2["skill_caster"].is_aiming:
-                c2["skill_caster"]._draw_aim_preview(self.screen, self.game.p2_selected_skill or SkillType.GRENADE, self.game.scale)
+        # v2.7.0 修复：此处原有的「P2 键控 U 长按预瞄」绘制已删除。
+        # 原因：render_split_viewports 内部已经以 aim_owner="P2" 在 P2 视口的 subsurface
+        # （右半屏）中绘制过一次预瞄线（draw_play.py 的 aim_owner 分支）。这里再用
+        # self.screen（全屏、无裁剪）画一遍，而 _draw_aim_preview 用的是「相对视口的局部
+        # 坐标」，于是 P2 的预瞄线被画到了左半屏 —— 也就是 P1 能看见 P2 的预瞄线。
+        # 该绘制属于重复且漏出视口，直接移除即可（P2 预瞄仍由视口内那次绘制负责）。
 
     def _draw_hud_split(self, player, label, rect, content_h=None):
         """双人分屏 HUD：完整迷你HUD（血条/经验/武器弹药/技能/时间/得分/键位提示/倒地救援/触控控件）

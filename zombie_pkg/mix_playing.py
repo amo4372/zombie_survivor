@@ -865,9 +865,14 @@ class PlayingMixin:
                         self.player.hp = min(self.player.max_hp, self.player.hp + regen * dt)
         # speed_mult 已乘符文加成，无论暂停与否都必须恢复
         self.player.speed_mult = orig_speed_mult
-        # 盾牌冲撞更新（移动+碰撞伤害；P1 升级暂停时不更新）
+        # 盾牌冲撞 / v2.7.0 无畏冲锋更新（移动+碰撞伤害；P1 升级暂停时不更新）
         if not _p1_paused:
             self._update_charge(dt)
+        # v2.7.0：同屏双人时同步更新 P2 的冲撞/无畏冲锋
+        _p2c = getattr(self, 'player2', None)
+        if _p2c is not None and getattr(_p2c, 'riot_gear', None) is not None:
+            if getattr(_p2c.riot_gear, 'charge_active', False):
+                self._update_charge(dt, player=_p2c)
         # 过热倾泻：计时 + 射速加成（冷却额外递减）+ 灼烧枪口特效
         # v2.5.7：抽成 P1/P2 共用函数（此前 P2 只被赋值，计时器从不递减 → 永久过热）
         self._update_overdrive(self.player, dt)

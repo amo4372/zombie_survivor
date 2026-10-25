@@ -77,6 +77,9 @@ class RiotGear:
         self.charge_damage = 160
         self.charge_stun_duration = 1.2
         self.charge_knockback = 150
+        # === v2.7.0 无畏冲锋（FEARLESS_CHARGE 限时状态） ===
+        self.fearless_active = False       # 是否为无畏冲锋（而非普通盾冲）
+        self.fearless_level = 0            # 释放时的技能等级（影响时长/撞击特效）
         self.equip_time = 0
         self.debuff_threshold = 60.0
         self.has_debuff = False
@@ -115,6 +118,8 @@ class RiotGear:
         self.bash_auto = False
         self.charge_active = False
         self.charge_hit_ids = set()
+        self.fearless_active = False
+        self.fearless_level = 0
         self.has_debuff = False
         self.aim_line_active = False
         # 卸下瞬间开启冷却

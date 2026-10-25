@@ -1271,8 +1271,8 @@ class GameCore:
             return self._skill_turret()
         elif skill_type == SkillType.AIRSTRIKE:
             return self._skill_airstrike()
-        elif skill_type == SkillType.SHIELD_BASH:
-            return self._skill_shield_bash()
+        elif skill_type == SkillType.FEARLESS_CHARGE:
+            return self._skill_fearless_charge()
         elif skill_type == SkillType.GRAPPLE_PULL:
             return self._skill_grapple()
         elif skill_type == SkillType.TIME_SLOW:
@@ -1287,8 +1287,6 @@ class GameCore:
             return self._skill_berserk()
         elif skill_type == SkillType.PHANTOM_STRIKE:
             return self._skill_phantom_strike()
-        elif skill_type == SkillType.SHOCKWAVE:
-            return self._skill_shockwave()
         elif skill_type == SkillType.WAR_CRY:
             return self._skill_war_cry()
         elif skill_type == SkillType.PURIFY:
@@ -1497,7 +1495,7 @@ class GameCore:
                 # v2.6.5 修复：倒地玩家 alive=False 但 downed=True，应该可以被勾取
                 if not getattr(_p, 'downed', False):
                     continue
-                if _pv and getattr(_p, 'team_id', 1) != _t:
+                if _pv and getattr(_p, 'team_id', 0) != _t:
                     continue  # PvP：仅同阵营
                 _res.append(_p)
             return _res
@@ -1737,7 +1735,8 @@ class GameCore:
             for _p in self._all_players():
                 if _p is player or not getattr(_p, 'alive', True) or getattr(_p, 'downed', False):
                     continue
-                if getattr(_p, 'team_id', 1) == _t:
+                # v2.7.0 修复：默认值统一为 0（原来自身默认 0、他人默认 1 → 永远不同队）
+                if getattr(_p, 'team_id', 0) == _t:
                     continue
                 # v2.5.7 修复：载具形态（司机/乘客）的玩家不可被钩爪勾取
                 #（此前会把载具连人一起拖走，位置与状态全乱）
@@ -1756,7 +1755,8 @@ class GameCore:
             for _p in self._all_players():
                 if _p is player or not getattr(_p, 'alive', True):
                     continue
-                if getattr(_p, 'team_id', 1) != _t:
+                # v2.7.0 修复：默认值统一为 0（原来他人默认 1 → 合作模式永远勾不到队友）
+                if getattr(_p, 'team_id', 0) != _t:
                     continue
                 # 载具形态不可被钩爪勾取
                 if getattr(_p, 'vehicle', None) is not None or getattr(_p, 'riding_vehicle', None) is not None:
