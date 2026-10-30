@@ -176,15 +176,23 @@ def build_split_viewports(game):
     """由游戏状态推导同屏视口列表（数据驱动，N 人扩展点）"""
     sw = game.scaled_width
     sh = game.scaled_height
-    players = [("P1", game.player, game.camera)]
-    if getattr(game, "player2", None):
-        players.append(("P2", game.player2, game.camera2))
-    # v2.2.7：N 人支持——3/4 号玩家（网络联机补位）同屏分屏渲染
-    for _i in (3, 4):
+    # v2.7.1：改为从玩家注册表推导——任意数量的玩家都能拿到自己的视口，
+    # 摄像机由注册表惰性创建（此前 P3/P4 缺 camera3/camera4 就没有视口）
+    _ensure_cam = getattr(game, "camera_for", None)
+    players = []
+    if getattr(game, "player", None) is not None:
+        _cam = game.camera
+        if _cam is None and _ensure_cam:
+            _cam = _ensure_cam(game.player)
+        players.append(("P1", game.player, _cam))
+    for _i in (2, 3, 4):
         _pn = getattr(game, f"player{_i}", None)
+        if _pn is None:
+            continue
         _cam = getattr(game, f"camera{_i}", None)
-        if _pn is not None and _cam is not None:
-            players.append((f"P{_i}", _pn, _cam))
+        if _cam is None and _ensure_cam:
+            _cam = _ensure_cam(_pn)
+        players.append((f"P{_i}", _pn, _cam))
     n = len(players)
     half = sw // n
     viewports = []

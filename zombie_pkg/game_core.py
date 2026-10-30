@@ -315,6 +315,17 @@ class GameCore:
         self.projectiles = []
         self.special_items = []  # 场景道具（武器箱/宝箱/生命/弹药等）
         self.text_items = []  # 可拾取文本资料
+        # v2.7.1 修复：剧情收集物此前只在「故事模式」分支里初始化，
+        # 其它模式（无尽/限时/争分夺秒）下该属性根本不存在，
+        # 渲染层无条件遍历它就会抛 AttributeError（表现为刷 Boss 时报错/卡死）。
+        # 这里无条件初始化，所有模式都有这个容器。
+        self.story_fragment_items = []  # 地图上的剧情收集物
+        self.story_pending_fragments = []
+        self.story_collected_fragments = set()
+        # v2.7.1 BOSS 台词字幕（非阻塞，全模式通用）
+        self.subtitle_queue = []
+        self.subtitle_current = None
+        self.subtitle_timer = 0.0
         self.collected_texts = set()  # 已收集的文本ID
         self.current_viewing_text = None  # 当前查看的文本
         self._load_collected_texts()
@@ -948,6 +959,19 @@ class GameCore:
             else:
                 self.current_map = MapType.SCHOOL
                 self.map_config = MAP_CONFIGS[MapType.SCHOOL]
+                # v2.7.1 修复：这些字段此前只在故事模式分支初始化。
+                # 一旦玩家中途切到故事模式（或从存档恢复、模式切换），
+                # 渲染层访问 map_time_elapsed 等就会抛 AttributeError，
+                # 整帧渲染中断 —— 表现为"刷 Boss 时报错/卡死"。
+                # 现在所有模式一律初始化同一套字段，数据层平等。
+                self.current_map_index = 0
+                self.story_collected_fragments = set()
+                self.story_pending_fragments = []
+                self.story_fragment_items = []
+                self.special_event_triggered = False
+                self.special_event_active = False
+                self.map_time_elapsed = 0.0
+                self.map_transition_timer = 0.0
             # v2.2.0 争分夺秒：随机地图（替代原固定校园）
             if self.config.game_mode == GameMode.TIMED:
                 self.current_map = random.choice([
@@ -1949,6 +1973,11 @@ class GameCore:
         elif self.state == GameState.SKILL_SELECT:
             if self.particles:
                 self.particles.update(dt)
+            # v2.7.1：BOSS 字幕在选卡时也继续推进（非阻塞设计，不该被任何状态冻住）
+            try:
+                self._update_subtitles(dt)
+            except Exception:
+                pass
             # v2.5.6：选卡界面也推进「升级保护/超时自动选卡」计时
             # （单机切全局 SKILL_SELECT 后 _update_playing 不再跑，计时器必须在这里走）
             try:

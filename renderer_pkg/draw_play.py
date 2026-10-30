@@ -26,6 +26,7 @@ class PlayMixin:
             return
         self._draw_playing_core(self.game.player, self.game.camera)
         self._draw_hud()
+        self._draw_subtitles()
 
     def _draw_playing_split(self):
         """同屏双人：左右分屏，各玩家一个视口（v2.1.3 结构化：编排下沉到
@@ -431,7 +432,9 @@ class PlayMixin:
                 tag = self.game.font.render("幸存者", True, (120, 220, 255))
                 self.screen.blit(tag, (nix - tag.get_width() // 2, niy - np_size - int(18 * scale)))
 
-            for item in self.game.story_fragment_items:
+            # v2.7.1 防御：剧情收集物容器在部分模式下可能未初始化（见 game_core 修复），
+            # 这里再兜一层 getattr，杜绝 AttributeError 打断整帧渲染。
+            for item in getattr(self.game, 'story_fragment_items', []) or []:
                 ix = int((item["x"] - cam_x) * scale)
                 iy = int((item["y"] - cam_y) * scale)
                 # 脉冲动画
@@ -1140,6 +1143,50 @@ class PlayMixin:
             dist_text = f"{int(dist)}m"
             dt_surf = pygame.font.SysFont("arial", max(10, int(12 * scale))).render(dist_text, True, (255, 180, 0))
             self.screen.blit(dt_surf, (int(tx) + 10, int(ty) - 20))
+        except Exception:
+            pass
+
+    def _draw_subtitles(self):
+        """v2.7.1 BOSS 台词字幕条（非阻塞，全模式通用）
+
+        画在屏幕底部中央的半透明条上，不拦截输入、不冻结世界。
+        """
+        g = self.game
+        _cur = getattr(g, "subtitle_current", None)
+        if not _cur:
+            return
+        try:
+            scale = g.scale
+            sw, sh = g.scaled_width, g.scaled_height
+            _txt = _cur.get("text", "")
+            if not _txt:
+                return
+            _spk = _cur.get("speaker", "")
+            _full = f"{_spk}：{_txt}" if _spk else _txt
+            # 淡入淡出
+            _t = getattr(g, "subtitle_timer", 0.0)
+            _dur = float(getattr(g, "SUBTITLE_DURATION", 3.2))
+            _fade = float(getattr(g, "SUBTITLE_FADE", 0.35))
+            _alpha = 255
+            if _t > _dur - _fade:
+                _alpha = int(255 * max(0.0, (_dur - _t) / _fade))
+            elif _t < _fade:
+                _alpha = int(255 * max(0.0, _t / _fade))
+            _alpha = max(0, min(255, _alpha))
+            font = getattr(g, "font_large", None) or g.font
+            _surf = font.render(_full, True, (255, 240, 210))
+            _pad_x, _pad_y = int(18 * scale), int(10 * scale)
+            _bw = _surf.get_width() + _pad_x * 2
+            _bh = _surf.get_height() + _pad_y * 2
+            _bx = (sw - _bw) // 2
+            _by = sh - _bh - int(90 * scale)
+            _bg = pygame.Surface((_bw, _bh), pygame.SRCALPHA)
+            _bg.fill((10, 8, 14, int(200 * _alpha / 255)))
+            self.screen.blit(_bg, (_bx, _by))
+            pygame.draw.rect(self.screen, (200, 170, 90),
+                             (_bx, _by, _bw, _bh), max(1, int(2 * scale)))
+            _surf.set_alpha(_alpha)
+            self.screen.blit(_surf, (_bx + _pad_x, _by + _pad_y))
         except Exception:
             pass
 

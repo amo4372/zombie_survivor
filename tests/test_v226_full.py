@@ -153,7 +153,10 @@ _srcg = open("zombie_pkg/game_core.py", encoding="utf-8").read()
 check("self.dialogue is None or not getattr(self.dialogue, \"active\", False)" in _srcg,
       "DIALOGUE 分支：对话非活跃自动恢复 PLAYING")
 _srcs = open("zombie_pkg/mix_story.py", encoding="utf-8").read()
-check("self.dialogue.active = False" in _srcs, "_boss_dialogue 开头防御（重复触发先重置）")
+# v2.7.1：BOSS 台词改为非阻塞字幕，不再切 DIALOGUE，也就不再需要"重复触发先重置"
+# 的防御（旧防御反而是卡死根源：只置 active=False 却不清索引/选项、不回调 on_complete）
+check("_push_subtitles" in _srcs and "非阻塞" in _srcs,
+      "_boss_dialogue 改为非阻塞字幕（不再冻结世界）")
 
 # 真实逻辑验证：dialogue.active=False 而 state=DIALOGUE → update 回 PLAYING
 from game import Game

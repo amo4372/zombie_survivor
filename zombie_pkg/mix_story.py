@@ -486,9 +486,69 @@ class StoryMixin:
         self.state = GameState.DIALOGUE
 
     def _boss_dialogue(self, boss_type):
-        # v2.2.6 防御：已在对话状态时避免重复触发覆盖（防索引错乱卡死）
+        """BOSS 登场台词
+
+        v2.7.1 重大修复：改为**非阻塞字幕**，不再把游戏切到 GameState.DIALOGUE。
+
+        旧实现的两个致命问题：
+        1) 任何模式（无尽/限时/故事/争分夺秒）刷出 Boss 都会强制进入 DIALOGUE
+           状态并冻结整个世界——玩家不能动、另一位玩家也被冻住，
+           表现为「一刷 Boss 游戏就卡死」。
+        2) 对话中途若又刷出一只 Boss，旧代码只是把 `dialogue.active = False`
+           而没有清索引/选项，也不回调 on_complete —— 对话状态机被打断，
+           结局对话被顶掉时永远回不到 PLAYING，彻底卡死。
+
+        现在改为屏幕底部字幕条逐句自动播放，游戏全程正常运行。
+        """
+        _dlg = self._boss_dialogue_lines(boss_type)
+        try:
+            self._push_subtitles(_dlg)
+        except Exception:
+            pass
+        # 兼容旧行为：若仍有人在 DIALOGUE 中（例如正在看结局抉择），绝不打断它
         if getattr(self.dialogue, "active", False):
-            self.dialogue.active = False
+            return
+
+    # ------------------------------------------------------------------
+    # v2.7.1 非阻塞字幕系统
+    # ------------------------------------------------------------------
+    SUBTITLE_DURATION = 3.2      # 每句停留时长（秒）
+    SUBTITLE_FADE = 0.35         # 淡入淡出
+
+    def _ensure_subtitle_state(self):
+        if not hasattr(self, "subtitle_queue"):
+            self.subtitle_queue = []
+        if not hasattr(self, "subtitle_current"):
+            self.subtitle_current = None
+        if not hasattr(self, "subtitle_timer"):
+            self.subtitle_timer = 0.0
+
+    def _push_subtitles(self, lines):
+        """把一组台词压入字幕队列（speaker/text）"""
+        self._ensure_subtitle_state()
+        for _e in lines or []:
+            self.subtitle_queue.append({
+                "speaker": _e.get("speaker", ""),
+                "text": _e.get("text", ""),
+            })
+        # 上限保护：Boss 被反复刷新时不要让队列无限堆积
+        if len(self.subtitle_queue) > 24:
+            self.subtitle_queue = self.subtitle_queue[-24:]
+
+    def _update_subtitles(self, dt):
+        """推进字幕（在 PLAYING 更新循环中调用）"""
+        self._ensure_subtitle_state()
+        if self.subtitle_current is None:
+            if self.subtitle_queue:
+                self.subtitle_current = self.subtitle_queue.pop(0)
+                self.subtitle_timer = self.SUBTITLE_DURATION
+            return
+        self.subtitle_timer -= dt
+        if self.subtitle_timer <= 0:
+            self.subtitle_current = None
+            self.subtitle_timer = 0.0
+
+    def _boss_dialogue_lines(self, boss_type):
         # v2.0.19 六位 BOSS 专属台词（含交互式选项问答）
         _d = {
             EnemyType.BOSS_LONG: [
@@ -569,22 +629,16 @@ class StoryMixin:
             {"speaker": "？？？", "text": "呃啊啊啊！"},
             {"speaker": "你", "text": "坚持住！我会找到办法的！"},
         ])
-        def on_complete():
-            self.state = GameState.PLAYING
-        # v2.2.7 加固：对话系统异常不得卡死游戏（任何异常 → 跳过对话继续 PLAYING）
-        try:
-            if self.dialogue is None:
-                self.state = GameState.PLAYING
-                return
-            self.dialogue.start_dialogue(dialogues, on_complete)
-            self.state = GameState.DIALOGUE
-        except Exception as _e:
-            try:
-                from logger import logger
-                logger.warning(f"BOSS对话启动异常已跳过: {_e}")
-            except Exception:
-                pass
-            self.state = GameState.PLAYING
+        # v2.7.1：带 choices 的那句改为「台词 + 选项提示」，不再阻塞等待玩家选择
+        _flat = []
+        for _e in dialogues:
+            _txt = _e.get("text", "")
+            _ch = _e.get("choices") or []
+            if _ch:
+                _opts = " / ".join(str(c.get("text", "")) for c in _ch)
+                _txt = f"{_txt}（{'、'.join(_opts)}）"
+            _flat.append({"speaker": _e.get("speaker", ""), "text": _txt})
+        return _flat
 
     def _final_dialogue(self):
         """v2.5.6 故事结局抉择：疫苗到底救谁？

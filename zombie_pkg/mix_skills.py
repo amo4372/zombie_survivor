@@ -1370,81 +1370,20 @@ class SkillsMixin:
         dir_x = dx / dist if dist > 0 else 1
         dir_y = dy / dist if dist > 0 else 0
 
-        # 搜索路径上的敌人
+        # v2.7.1：目标解算统一走通用实现（倒地队友 > 异阵营玩家 > 同阵营玩家 > 僵尸）
+        # P1/P2、键控/触控、单人/多人共用同一份逻辑，避免两套实现行为分叉。
         target = None
         target_dist = dist
         search_radius = 30  # 搜索半径
-
-        # v2.5.2 最高优先级：路径上的同阵营倒地队友（勾取救援，拉回身边）
         try:
-            for _pd in self._downed_teammates_of(self.player):
-                _ex = _pd.x - self.player.x
-                _ey = _pd.y - self.player.y
-                _pr = _ex * dir_x + _ey * dir_y
-                if _pr < 0 or _pr > dist:
-                    continue
-                _px = _ex - _pr * dir_x
-                _py = _ey - _pr * dir_y
-                if math.hypot(_px, _py) < search_radius + 26 and _pr < target_dist:
-                    target = _pd
-                    target_dist = _pr
+            _t = self.resolve_grapple_target(self.player, dir_x, dir_y, dist, search_radius)
+            if _t is not None:
+                target = _t
+                _ex = _t.x - self.player.x
+                _ey = _t.y - self.player.y
+                target_dist = _ex * dir_x + _ey * dir_y
         except Exception:
-            pass
-
-        for enemy in self.enemies:
-            if not enemy.alive:
-                continue
-            # 计算敌人到钩爪路径的距离
-            ex = enemy.x - self.player.x
-            ey = enemy.y - self.player.y
-            # 投影到方向向量
-            proj = ex * dir_x + ey * dir_y
-            if proj < 0 or proj > dist:
-                continue
-            # 垂直距离
-            perp_x = ex - proj * dir_x
-            perp_y = ey - proj * dir_y
-            perp_dist = math.hypot(perp_x, perp_y)
-            if perp_dist < search_radius + enemy.size and proj < target_dist:
-                target = enemy
-                target_dist = proj
-
-        # v2.5.0 钩爪可勾敌人玩家（PvP）：异阵营玩家作为勾取目标（同敌人一样拉回+QTE 挣脱）
-        try:
-            if getattr(self.config, 'pvp_enabled', False) and self.is_multiplayer_active():
-                for _pp in self._enemy_players_of(self.player):
-                    _ex = _pp.x - self.player.x
-                    _ey = _pp.y - self.player.y
-                    _pr = _ex * dir_x + _ey * dir_y
-                    if _pr < 0 or _pr > dist:
-                        continue
-                    _px = _ex - _pr * dir_x
-                    _py = _ey - _pr * dir_y
-                    _perp = math.hypot(_px, _py)
-                    if _perp < search_radius + 26 and _pr < target_dist:
-                        target = _pp
-                        target_dist = _pr
-        except Exception:
-            pass
-        # v2.7.0 修复：P1 也能勾取存活同阵营队友（与 P2 对齐，此前只有 P2 支持 → P1 勾不到 P2）
-        try:
-            if self.is_multiplayer_active():
-                for _pt in self._alive_teammates_of(self.player):
-                    if getattr(_pt, 'downed', False):
-                        continue
-                    _ex = _pt.x - self.player.x
-                    _ey = _pt.y - self.player.y
-                    _pr = _ex * dir_x + _ey * dir_y
-                    if _pr < 0 or _pr > dist:
-                        continue
-                    _px = _ex - _pr * dir_x
-                    _py = _ey - _pr * dir_y
-                    _perp = math.hypot(_px, _py)
-                    if _perp < search_radius + 26 and _pr < target_dist:
-                        target = _pt
-                        target_dist = _pr
-        except Exception:
-            pass
+            target = None
         # 搜索经验球
         for orb in self.exp_orbs:
             if not orb.alive:

@@ -702,6 +702,9 @@ class RiotGear:
             target.qte_fail_timer = 0.0
         self.grapple_pull_impact_hit = set()
         self.grapple_direct_pull = bool(direct_pull)
+        # v2.7.1 抗穿透：新一次发射清掉上一发的钩爪头轨迹缓存，
+        # 否则新钩爪首帧会拿上一发的终点当起点，扫出一条不存在的超长线段。
+        self._collision_prev_head = None
         return True
 
     def start_aim(self, angle):

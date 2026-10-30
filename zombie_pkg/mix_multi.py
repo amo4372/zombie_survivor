@@ -832,73 +832,19 @@ class MultiplayerMixin:
                 tx, ty = p2.x + math.cos(angle) * actual_dist, p2.y + math.sin(angle) * actual_dist
                 _direct_pull = True
             else:
-                # 短按直发：路径搜索（优先级：同阵营倒地队友 > 敌对玩家 > 普通僵尸）
+                # 短按直发：路径搜索
+                # v2.7.1：统一走通用解算（倒地队友 > 异阵营玩家 > 同阵营玩家 > 僵尸），
+                # 与 P1 完全同一份实现，消除两套搜索逻辑的行为差异。
                 _dx = math.cos(angle)
                 _dy = math.sin(angle)
                 best = None
-                best_proj = actual_dist
-                # v2.5.8 修复：P2 短按勾取同阵营倒地队友（救援拉回，优先级最高）
                 try:
-                    for _pd in self._downed_teammates_of(p2):
-                        _ex = _pd.x - p2.x
-                        _ey = _pd.y - p2.y
-                        _pr = _ex * _dx + _ey * _dy
-                        if _pr < 0 or _pr > actual_dist:
-                            continue
-                        _px = _ex - _pr * _dx
-                        _py = _ey - _pr * _dy
-                        if math.hypot(_px, _py) < 30 + 26 and _pr < best_proj:
-                            best = _pd
-                            best_proj = _pr
+                    best = self.resolve_grapple_target(p2, _dx, _dy, actual_dist, 30)
                 except Exception:
-                    pass
-                # v2.5.8 修复：P2 短按勾取存活同阵营队友（含P1，支持救援拉回/自拉）
-                try:
-                    for _pa in self._alive_teammates_of(p2):
-                        if getattr(_pa, 'downed', False):
-                            continue  # 倒地已由上面处理
-                        _ex = _pa.x - p2.x
-                        _ey = _pa.y - p2.y
-                        _pr = _ex * _dx + _ey * _dy
-                        if _pr < 0 or _pr > actual_dist:
-                            continue
-                        _px = _ex - _pr * _dx
-                        _py = _ey - _pr * _dy
-                        if math.hypot(_px, _py) < 30 + 26 and _pr < best_proj:
-                            best = _pa
-                            best_proj = _pr
-                except Exception:
-                    pass
-                # v2.5.5 P2 短按勾取敌对玩家（PvP，与 P1 对齐）
-                try:
-                    if getattr(self.config, 'pvp_enabled', False):
-                        for _pp in self._enemy_players_of(p2):
-                            _ex = _pp.x - p2.x
-                            _ey = _pp.y - p2.y
-                            _pr = _ex * _dx + _ey * _dy
-                            if _pr < 0 or _pr > actual_dist:
-                                continue
-                            _px = _ex - _pr * _dx
-                            _py = _ey - _pr * _dy
-                            if math.hypot(_px, _py) < 30 + 26 and _pr < best_proj:
-                                best = _pp
-                                best_proj = _pr
-                except Exception:
-                    pass
-                for e in self.enemies:
-                    if not getattr(e, "alive", False):
-                        continue
-                    if getattr(e, "is_boss", False):
-                        continue
-                    ex = e.x - p2.x
-                    ey = e.y - p2.y
-                    proj = ex * _dx + ey * _dy
-                    if proj < 0 or proj > actual_dist:
-                        continue
-                    perp = math.hypot(ex - proj * _dx, ey - proj * _dy)
-                    if perp < 30 + getattr(e, "size", 20) and proj < best_proj:
-                        best = e
-                        best_proj = proj
+                    best = None
+                # Boss 免控：不作为直发目标（仍可被沿途碰撞命中僵直）
+                if best is not None and getattr(best, "is_boss", False):
+                    best = None
                 if best is not None:
                     target = best
                     tx, ty = best.x, best.y

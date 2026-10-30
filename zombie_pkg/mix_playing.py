@@ -989,6 +989,11 @@ class PlayingMixin:
 
         # v2.5.6：升级选卡保护倒计时 + 超时自动选卡（防卡界面无限无敌）
         self._update_upgrade_pause(dt)
+        # v2.7.1：BOSS 台词字幕（非阻塞，游戏全程继续运行）
+        try:
+            self._update_subtitles(dt)
+        except Exception:
+            pass
 
         # 自动射击 / 盾肘击【修改】
         auto_shoot = False
@@ -1935,7 +1940,9 @@ class PlayingMixin:
                     self._spawn_enemy_throwable(throw_result)
 
         # 更新钩爪碰撞检测
-        self._update_grapple_collision()
+        # v2.7.1：改为逐玩家执行（旧版只跑 self.player → P2 及后续玩家
+        # 的钩爪飞行碰撞从不触发，表现为「P2 勾不到僵尸/道具/玩家」）
+        self.update_grapple_collisions()
 
         # 更新按钮CD显示
         if self.config.control_mode == ControlMode.TOUCH:
@@ -2719,6 +2726,10 @@ class PlayingMixin:
             target["obj"].take_damage(damage, damage_type=damage_type, attack_x=attack_x, attack_y=attack_y)
 
     def _update_grapple_collision(self):
+        # v2.7.1 委托给通用实现（以 player 为参数），旧名保留以兼容其它调用点。
+        # 通用实现见 mix_players.PlayerRegistryMixin._update_grapple_collision_for
+        return self._update_grapple_collision_for(self.player)
+
         # v2.2.12 直拉模式：长按未锁定钩爪不勾取路径上任何僵尸/道具，
         # 直接飞向锚点后自我拉拽（碰撞勾取整体跳过，齿轮 _update_grapple 处理到点 self_pull）
         if getattr(self.player.riot_gear, 'grapple_direct_pull', False):
