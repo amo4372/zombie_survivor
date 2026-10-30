@@ -41,6 +41,11 @@ class RiotGear:
         self.grapple_target_pos = None
         self.grapple_head_pos = None
         self.grapple_state = "idle"
+        # v2.7.2 数据层完整：这两个字段此前只在 _reset_grapple 里创建，
+        # 新建实例拿不到（各处只能靠 getattr 兜底）。构造时即初始化，
+        # 保证每位玩家的钩爪状态机字段一致。
+        self.grapple_direct_pull = False
+        self._collision_prev_head = None
         self.grapple_speed = 150
         self.grapple_pull_speed = 55
         self.grapple_hit_stun_timer = 0
@@ -565,6 +570,11 @@ class RiotGear:
         self.grapple_target_pos = None
         self.grapple_head_pos = None
         self.grapple_state = "idle"
+        # v2.7.2 数据层完整：直拉标志此前只在 _reset_grapple 里创建，
+        # 新建的 RiotGear 实例拿不到这个属性（各处只能靠 getattr 兜底）。
+        # 这里在构造时就初始化，保证每位玩家的钩爪状态机字段一致。
+        self.grapple_direct_pull = False
+        self._collision_prev_head = None
         # v2.2.5：清理自我拉拽/锁定状态
         self.self_pull_active = False
         self.self_pull_immune = False

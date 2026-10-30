@@ -15,6 +15,7 @@
 """
 
 import math
+from contextlib import contextmanager
 
 try:
     from buff import BuffType
@@ -661,6 +662,138 @@ class PlayerRegistryMixin:
                 continue
             _out.append(_p)
         return _out
+
+    # ==================================================================
+    # 4) 施法上下文切换 —— 让 P2..Pn 复用 P1 的完整技能实现
+    # ==================================================================
+    @contextmanager
+    def acting_as(self, player):
+        """临时把「当前操作玩家」切换为指定玩家（P1..Pn 通用）
+
+        历史技能代码全部以 `self.player` 为操作对象（mix_skills 里 200+ 处）。
+        与其给 P2 复制一套残缺实现（这正是 P2 少技能、钩爪短按失效的原因），
+        不如临时切换上下文，让所有玩家直接复用 P1 的完整技能逻辑 ——
+        能力天然平等，且不会 behaviour 分叉。
+
+        用法：
+            with self.acting_as(p2):
+                self._execute_skill(SkillType.BLACK_HOLE)
+        """
+        if player is None:
+            yield self.player
+            return
+        _op = getattr(self, "player", None)
+        _oc = getattr(self, "camera", None)
+        if player is _op:
+            yield player
+            return
+        self.player = player
+        try:
+            self.camera = self.camera_for(player) or _oc
+        except Exception:
+            pass
+        try:
+            yield player
+        finally:
+            self.player = _op
+            try:
+                self.camera = _oc
+            except Exception:
+                pass
+
+    def cast_skill_for(self, player, skill_type, angle=None, ratio=1.0, aimed=False):
+        """统一施法入口：任意玩家（P1..Pn）共用同一套解锁/冷却/执行流程
+
+        P1 走原有 `_use_skill` / `_use_skill_aimed`；
+        其它玩家先尝试 `_use_skill_p2_aimed`（钩爪等已针对玩家参数化），
+        再回落到「切上下文 + P1 执行器」，从而具备与 P1 完全一致的全部技能。
+        """
+        if player is None or skill_type is None:
+            return False
+        try:
+            _unlocked = self._get_unlocked_skills_for(player)
+            if _unlocked and skill_type not in _unlocked:
+                self.floating_texts.append(self._float_text_obj(
+                    player.x, player.y - 40, "技能未解锁", (128, 128, 128), 1.0))
+                return False
+        except Exception:
+            pass
+        try:
+            if skill_type in getattr(player, "active_skills", {}):
+                return False
+        except Exception:
+            pass
+
+        _is_p1 = (player is getattr(self, "player", None) and not aimed)
+        if _is_p1:
+            try:
+                return bool(self._use_skill(skill_type))
+            except Exception:
+                pass
+        # 已针对玩家参数化的实现（钩爪/无畏冲锋等）
+        try:
+            _a = angle
+            if _a is None:
+                _a = math.radians(self.auto_aim_angle_for(player))
+            if bool(self._use_skill_p2_aimed(skill_type, _a, ratio)):
+                return True
+        except Exception:
+            pass
+        # 回落：切上下文复用 P1 执行器 → P2..Pn 拥有 P1 的全部技能
+        try:
+            with self.acting_as(player):
+                _ok = bool(self._execute_skill(skill_type))
+            if _ok:
+                self._apply_skill_cd(player, skill_type)
+            return _ok
+        except Exception:
+            return False
+
+    def _apply_skill_cd(self, player, skill_type):
+        """统一写技能冷却（与 P1 同一张表）"""
+        try:
+            from config import get_skill_cooldown, SkillType
+            _cd = get_skill_cooldown(skill_type, getattr(player, "cooldown_mult", 1.0))
+            if skill_type == SkillType.RIOT_GEAR or skill_type == SkillType.VEHICLE_SUMMON:
+                return
+            player.active_skills[skill_type] = _cd
+        except Exception:
+            pass
+
+    def auto_aim_angle_for(self, player):
+        """通用自动瞄准角度：敌人 + 可勾取玩家（P1..Pn 同一份）
+
+        旧版 P2 的自动瞄准只看敌人，所以 P2 永远锁不到 P1 —— 这是
+        "P2 不能自动锁定 P1" 的直接原因。现在所有玩家共用这一份。
+        """
+        best = None
+        best_d = 1e18
+        try:
+            for _e in getattr(self, "enemies", []) or []:
+                if not getattr(_e, "alive", True):
+                    continue
+                _d = (_e.x - player.x) ** 2 + (_e.y - player.y) ** 2
+                if _d < best_d:
+                    best_d, best = _d, _e
+        except Exception:
+            pass
+        try:
+            for _p in self._grapple_player_targets(player):
+                _d = (_p.x - player.x) ** 2 + (_p.y - player.y) ** 2
+                if _d < best_d:
+                    best_d, best = _d, _p
+        except Exception:
+            pass
+        if best is not None:
+            return math.degrees(math.atan2(best.y - player.y, best.x - player.x))
+        return getattr(player, "facing_angle", 0.0)
+
+    def _float_text_obj(self, x, y, text, color, lifetime=1.0):
+        try:
+            from entities import FloatingText
+            return FloatingText(x, y, text, color=color, lifetime=lifetime)
+        except Exception:
+            return None
 
     # ---------------- 小工具（避免各处重复 import） ----------------
     def _grapple_level_of(self, player):

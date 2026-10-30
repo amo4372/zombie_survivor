@@ -693,10 +693,14 @@ class SkillsMixin:
         self._perform_grapple()
         return True
 
-    def _is_wielding_scythe(self):
-        """判断玩家当前武器是否为死神镰刀（切换钩爪索引为死神钩爪）"""
+    def _is_wielding_scythe(self, player=None):
+        """判断玩家当前武器是否为死神镰刀（切换钩爪索引为死神钩爪）
+
+        v2.7.2：支持传入任意玩家；不传则默认 P1（兼容旧调用）。
+        """
         try:
-            _w = self.player.get_current_weapon()
+            _pl = player if player is not None else self.player
+            _w = _pl.get_current_weapon()
             if _w is None:
                 return False
             _wt = getattr(_w, "weapon_type", None)
@@ -1339,33 +1343,57 @@ class SkillsMixin:
         target_y = self.player.y + math.sin(angle_rad) * max_grapple_range
         return self._perform_grapple_at(target_x, target_y)
 
-    def _perform_grapple_at(self, target_x, target_y):
-        """在指定位置执行钩爪核心逻辑 - 新逻辑（独立技能）"""
+    def _perform_grapple_at(self, target_x, target_y, player=None, force_self_pull=False):
+        """在指定位置执行钩爪核心逻辑 - 新逻辑（独立技能）
+
+        v2.7.2 重构：**唯一**的钩爪核心实现，P1..Pn 共用。
+          player=None → 作用于 self.player（旧调用全部兼容）
+          player=p2    → 作用于 P2，行为与 P1 逐条一致
+        force_self_pull=True → 强制自我拉拽到锚点（不做路径勾取）
+        """
+        _p = player if player is not None else self.player
         # v2.5.0 锚点钳制到地图界内（修复钩爪锚点出界）
+        # v2.7.2 修复方向歪斜：旧写法对 x/y 各自独立 clamp，当玩家位于边界外侧时
+        #   （例如被击退到地图边缘）会把某个轴硬抬到 lo，导致锚点方向相对玩家偏转，
+        #   表现为"朝敌人发射却勾到旁边的空气"。
+        #   改为：仅在锚点越界时**沿原方向按比例缩短**到边界交点，方向恒定不变。
         try:
             _b = getattr(getattr(self, 'world', None), 'bounds', None)
             if _b:
-                target_x = max(_b[0], min(_b[1], target_x))
-                target_y = max(_b[0], min(_b[1], target_y))
+                _lo, _hi = float(_b[0]), float(_b[1])
+                _dx0 = target_x - _p.x
+                _dy0 = target_y - _p.y
+                _scale = 1.0
+                if _dx0 > 0 and target_x > _hi:
+                    _scale = min(_scale, (_hi - _p.x) / _dx0)
+                elif _dx0 < 0 and target_x < _lo:
+                    _scale = min(_scale, (_lo - _p.x) / _dx0)
+                if _dy0 > 0 and target_y > _hi:
+                    _scale = min(_scale, (_hi - _p.y) / _dy0)
+                elif _dy0 < 0 and target_y < _lo:
+                    _scale = min(_scale, (_lo - _p.y) / _dy0)
+                _scale = max(0.0, min(1.0, _scale))
+                target_x = _p.x + _dx0 * _scale
+                target_y = _p.y + _dy0 * _scale
         except Exception:
             pass
         # v2.2.7 载具中禁用钩爪
-        _v = getattr(self.player, 'vehicle', None)
+        _v = getattr(_p, 'vehicle', None)
         if _v is not None and getattr(_v, 'alive', False):
             self.floating_texts.append(FloatingText(
-                self.player.x, self.player.y - 40, "载具中无法使用钩爪", color=GRAY, lifetime=1.2))
+                _p.x, _p.y - 40, "载具中无法使用钩爪", color=GRAY, lifetime=1.2))
             return False
         # 寻找钩爪路径上的目标
-        dx = target_x - self.player.x
-        dy = target_y - self.player.y
+        dx = target_x - _p.x
+        dy = target_y - _p.y
         dist = math.hypot(dx, dy)
-        if dist > self.player.riot_gear.grapple_max_range:
-            ratio = self.player.riot_gear.grapple_max_range / dist
+        if dist > _p.riot_gear.grapple_max_range:
+            ratio = _p.riot_gear.grapple_max_range / dist
             dx *= ratio
             dy *= ratio
-            target_x = self.player.x + dx
-            target_y = self.player.y + dy
-            dist = self.player.riot_gear.grapple_max_range
+            target_x = _p.x + dx
+            target_y = _p.y + dy
+            dist = _p.riot_gear.grapple_max_range
 
         dir_x = dx / dist if dist > 0 else 1
         dir_y = dy / dist if dist > 0 else 0
@@ -1376,11 +1404,11 @@ class SkillsMixin:
         target_dist = dist
         search_radius = 30  # 搜索半径
         try:
-            _t = self.resolve_grapple_target(self.player, dir_x, dir_y, dist, search_radius)
+            _t = self.resolve_grapple_target(_p, dir_x, dir_y, dist, search_radius)
             if _t is not None:
                 target = _t
-                _ex = _t.x - self.player.x
-                _ey = _t.y - self.player.y
+                _ex = _t.x - _p.x
+                _ey = _t.y - _p.y
                 target_dist = _ex * dir_x + _ey * dir_y
         except Exception:
             target = None
@@ -1388,8 +1416,8 @@ class SkillsMixin:
         for orb in self.exp_orbs:
             if not orb.alive:
                 continue
-            ex = orb.x - self.player.x
-            ey = orb.y - self.player.y
+            ex = orb.x - _p.x
+            ey = orb.y - _p.y
             proj = ex * dir_x + ey * dir_y
             if proj < 0 or proj > dist:
                 continue
@@ -1406,8 +1434,8 @@ class SkillsMixin:
         for item in self.world.items:
             if not item.alive:
                 continue
-            ex = item.x - self.player.x
-            ey = item.y - self.player.y
+            ex = item.x - _p.x
+            ey = item.y - _p.y
             proj = ex * dir_x + ey * dir_y
             if proj < 0 or proj > dist:
                 continue
@@ -1422,22 +1450,22 @@ class SkillsMixin:
         # 2) 长按瞄准但未锁定（force_self_pull）→ 直接自我拉拽到锚点，不检查路径上是否有僵尸
         # 3) 短按直发：路径上检测到敌人 → 勾取拉回
         # 4) 其余 → 自我拉拽（把自己拉向目标点；死神钩爪沿途旋转镰刀伤害）
-        scythe = self._is_wielding_scythe()
-        rg = self.player.riot_gear
+        scythe = self._is_wielding_scythe(_p)
+        rg = _p.riot_gear
         locked = getattr(rg, "grapple_locked_target", None)
         if locked is not None and getattr(locked, "alive", False) and not getattr(locked, "is_boss", False):
-            success = rg.use_grapple(locked.x, locked.y, self.player.x, self.player.y, locked, scythe=scythe)
+            success = rg.use_grapple(locked.x, locked.y, _p.x, _p.y, locked, scythe=scythe)
             _locked_name = "锁定直飞"
-        elif getattr(rg, 'grapple_direct_pull', False):
+        elif force_self_pull or getattr(rg, 'grapple_direct_pull', False):
             # v2.4.0 修复：force_self_pull 残留未定义引用 → 改用钩爪直拉标志
-            success = rg.use_grapple(target_x, target_y, self.player.x, self.player.y, None, scythe=scythe,
+            success = rg.use_grapple(target_x, target_y, _p.x, _p.y, None, scythe=scythe,
                                      direct_pull=True)
             _locked_name = "拉拽自身"
         elif target:
-            success = rg.use_grapple(target.x, target.y, self.player.x, self.player.y, target, scythe=scythe)
+            success = rg.use_grapple(target.x, target.y, _p.x, _p.y, target, scythe=scythe)
             _locked_name = "勾取拉回"
         else:
-            success = rg.use_grapple(target_x, target_y, self.player.x, self.player.y, None, scythe=scythe)
+            success = rg.use_grapple(target_x, target_y, _p.x, _p.y, None, scythe=scythe)
             _locked_name = "自我拉拽"
 
         # 发射后关闭瞄准锁定态
@@ -1452,7 +1480,7 @@ class SkillsMixin:
             self.assets.play_sound("grapple")
             _txt = "死神钩爪·" + _locked_name if scythe else "钩爪·" + _locked_name
             self.floating_texts.append(FloatingText(
-                self.player.x, self.player.y - 40, _txt,
+                _p.x, _p.y - 40, _txt,
                 color=(200, 120, 255) if scythe else GREEN, lifetime=1.2
             ))
         return success

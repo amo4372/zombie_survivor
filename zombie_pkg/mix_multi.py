@@ -587,19 +587,12 @@ class MultiplayerMixin:
         p2.buff_damage_events = []
 
     def _p2_auto_aim_angle(self, p2):
-        """P2 自动瞄准：朝向最近敌人"""
-        best = None
-        best_d = 1e9
-        for e in self.enemies:
-            if not getattr(e, 'alive', True):
-                continue
-            d = (e.x - p2.x) ** 2 + (e.y - p2.y) ** 2
-            if d < best_d:
-                best_d = d
-                best = e
-        if best is not None:
-            return math.degrees(math.atan2(best.y - p2.y, best.x - p2.x))
-        return p2.facing_angle
+        """P2 自动瞄准：朝向最近敌人 / 可勾取玩家
+
+        v2.7.1：改为委托通用实现 auto_aim_angle_for（敌人 + 玩家）。
+        此前只看敌人 —— P1 就站在面前也锁不上，这正是「P2 不能自动锁定 P1」的原因。
+        """
+        return self.auto_aim_angle_for(p2)
 
     def _update_ai_companion(self, p, dt):
         """3/4 号玩家（网络联机补位）：有网络输入用网络输入（idx=2→P3, 3→P4），
@@ -750,9 +743,25 @@ class MultiplayerMixin:
         elif skill_type == SkillType.FEARLESS_CHARGE:
             # v2.7.0：P2 无畏冲锋（与 P1 同规则：未装备则强制装备并重置套装CD）
             ok = self._skill_fearless_charge(p2)
+        elif skill_type == SkillType.GRAPPLE_PULL:
+            # v2.7.2：短按钩爪此前完全没有分支，直接落到
+            # "该技能暂不支持双人" —— 这是 P2 钩爪在实机上失效的主因。
+            # 短按 = 自动瞄准方向 + 满距离，与 P1 短按同规则（走共用核心）。
+            _aa = self.auto_aim_angle_for(p2) if hasattr(self, 'auto_aim_angle_for') else p2.facing_angle
+            return self._use_skill_p2_aimed(skill_type, math.radians(_aa), 1.0)
         else:
-            self.floating_texts.append(FloatingText(p2.x, p2.y - 40, "该技能暂不支持双人", color=GRAY, lifetime=1.2))
-            return
+            # v2.7.1 全技能平等：不再提示"暂不支持双人"。
+            # P1 的执行器以 self.player 为操作对象，临时切换上下文即可让 P2
+            # 复用同一套完整实现（黑洞/连锁闪电/狂暴/幻影打击/医疗舱/空袭…全部可用）。
+            try:
+                with self.acting_as(p2):
+                    ok = bool(self._execute_skill(skill_type))
+            except Exception:
+                ok = False
+            if not ok:
+                self.floating_texts.append(FloatingText(
+                    p2.x, p2.y - 40, "技能释放失败", color=GRAY, lifetime=1.2))
+                return
         if ok:
             p2.active_skills[skill_type] = cd
             self.floating_texts.append(FloatingText(p2.x, p2.y - 45, "技能释放!", color=GOLD, lifetime=1.5))
@@ -802,7 +811,17 @@ class MultiplayerMixin:
             # v2.7.0：P2 无畏冲锋（预瞄释放同样生效）
             ok = self._skill_fearless_charge(p2)
         elif skill_type == SkillType.GRAPPLE_PULL:
-            # v2.2.6：P2 钩爪施放（支持锁定直飞/路径勾取/自我拉拽，与 P1 一致）
+            # v2.7.2 重构：P2 钩爪**完全复用 P1 的同一份核心实现**。
+            #
+            # 旧实现的两大缺陷（即本次报的 bug）：
+            #  1) 长按（_was_aim）分支被硬编码为 `_direct_pull = True`——
+            #     无论路径上有没有僵尸/道具/玩家，都只会把自己拉到锚点，
+            #     "长按无论如何都只能放置锚点"就是这么来的。
+            #     P1 长按走的是 _perform_grapple_at，会正常做路径勾取。
+            #  2) 短按分支另写了一套路径搜索，与 P1 的两套逻辑长期分叉。
+            #
+            # 现在 P1/P2 走同一个 _perform_grapple_at(player=...)，
+            # 决策链完全一致：锁定直飞 → 路径勾取 → 自我拉拽。
             rg = p2.riot_gear
             # v2.2.7 载具中禁用钩爪
             _v2 = getattr(p2, 'vehicle', None)
@@ -812,51 +831,16 @@ class MultiplayerMixin:
             if rg.grapple_cooldown > 0 or rg.grapple_active:
                 self.floating_texts.append(FloatingText(p2.x, p2.y - 40, "冷却中...", color=GRAY, lifetime=1.0))
                 return False
-            scythe = self._is_wielding_scythe_for(p2)
-            locked = getattr(rg, "grapple_locked_target", None)
             actual_dist = rg.grapple_max_range * max(0.1, distance_ratio)
             tx = p2.x + math.cos(angle) * actual_dist
             ty = p2.y + math.sin(angle) * actual_dist
-            # v2.2.12：长按瞄准释放（触控 was_aiming_on_release / 键盘 u_aim_started）
-            _was_aim = bool(getattr(self, '_p2_cast_aimed', False)) or bool(getattr(self, 'u_aim_started', False))
-            target = None
-            _direct_pull = False
-            # v2.6.5 修复：优先检查锁定目标，即使长按也优先使用锁定目标
-            if locked is not None and getattr(locked, "alive", False) and not getattr(locked, "is_boss", False):
-                # 锁定目标直飞（无视沿途）
-                target = locked
-                tx, ty = locked.x, locked.y
-            elif _was_aim:
-                # 长按未锁定：直接拉拽自身到锚点（不勾取路径上任何僵尸/道具）
-                target = None
-                tx, ty = p2.x + math.cos(angle) * actual_dist, p2.y + math.sin(angle) * actual_dist
-                _direct_pull = True
-            else:
-                # 短按直发：路径搜索
-                # v2.7.1：统一走通用解算（倒地队友 > 异阵营玩家 > 同阵营玩家 > 僵尸），
-                # 与 P1 完全同一份实现，消除两套搜索逻辑的行为差异。
-                _dx = math.cos(angle)
-                _dy = math.sin(angle)
-                best = None
-                try:
-                    best = self.resolve_grapple_target(p2, _dx, _dy, actual_dist, 30)
-                except Exception:
-                    best = None
-                # Boss 免控：不作为直发目标（仍可被沿途碰撞命中僵直）
-                if best is not None and getattr(best, "is_boss", False):
-                    best = None
-                if best is not None:
-                    target = best
-                    tx, ty = best.x, best.y
-            if rg.use_grapple(tx, ty, p2.x, p2.y, target, scythe=scythe,
-                              direct_pull=locals().get('_direct_pull', False)):
-                ok = True
-                # v2.5.7 统一钩爪 CD（与 P1 同一套：技能 CD 与装备 CD 取大者）
-                cd = self._grapple_cd_for(p2)
-                self.floating_texts.append(FloatingText(p2.x, p2.y - 45, "钩爪发射!", color=GOLD, lifetime=1.2))
-                # v2.2.12：发射后清理瞄准锁定态（避免残留红色锁定误导）
-                rg.grapple_aiming = False
-                rg.grapple_locked_target = None
+            # force_self_pull：仅当玩家明确处于「直拉模式」标志时才强制自我拉拽，
+            # 不再因为"是长按"就跳过路径勾取（与 P1 同规则）。
+            ok = bool(self._perform_grapple_at(
+                tx, ty, player=p2,
+                force_self_pull=bool(getattr(rg, 'grapple_direct_pull', False))))
+            if ok:
+                cd = self._grapple_cd_for(p2)   # 与 P1 同一套：技能CD与装备CD取大者
             else:
                 return False
         else:
