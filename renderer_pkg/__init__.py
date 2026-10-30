@@ -7,11 +7,12 @@ from .render_core import RenderCore
 from .draw_ui import UiMixin
 from .draw_play import PlayMixin
 from .draw_dev import DevMixin
+from .draw_replay import ReplayRenderMixin
 
 
-class Renderer(RenderCore, UiMixin, PlayMixin, DevMixin):
+class Renderer(RenderCore, ReplayRenderMixin, UiMixin, PlayMixin, DevMixin):
     """完整渲染器（聚合拆分后的全部绘制 Mixin，逻辑与拆分前等价）"""
     pass
 
 
-__all__ = ["Camera", "Renderer", "RenderCore"]
+__all__ = ["Camera", "Renderer", "RenderCore", "ReplayRenderMixin"]

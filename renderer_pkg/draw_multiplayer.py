@@ -238,6 +238,11 @@ def render_split_viewports(renderer, game, viewports):
         aim_owner = "P2" if (i == 1 and vp.label == "P2") else "P1"
         renderer.screen = orig_screen.subsurface(vp.rect)
         renderer._draw_playing_core(vp.player, vp.camera, viewport_x=vp.rect.x, aim_owner=aim_owner)
+        # v2.8.0 打击反馈：命中标记按本视口摄像机绘制（双人各自看到自己的命中）
+        try:
+            renderer._draw_hit_markers(camera=vp.camera, viewport=vp.rect)
+        except Exception:
+            pass
         # v2.1.3：队友方位指示（对方不在本视口内时边缘箭头，倒地仍显示）
         draw_teammate_indicators(renderer, game, viewports, vp)
         # v2.2.9：PvP 敌方玩家位置揭示（开局 8s + 每 45s 闪 3s）

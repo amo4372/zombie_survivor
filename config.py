@@ -197,6 +197,8 @@ class GameState(Enum):
     NET_MULTIPLAYER = auto()  # 新增：网络联机（创建/加入房间）
     NET_WAIT = auto()  # 新增：网络等待（主机等待客户端/客户端连接中）
     NET_CLIENT_PLAY = auto()  # 新增：客户端游玩（渲染主机快照）
+    DYING = auto()    # v2.8.0：死亡反应时间（不立刻结算，慢动作展示死亡瞬间）
+    REPLAY = auto()   # v2.8.0：全局回放（自由摄像机 + 数据面板）
 
 
 class ControlMode(Enum):

@@ -332,6 +332,64 @@ class InputMixin:
                         self._apply_skill_card(selected)
             return mouse_pos, mouse_pressed
 
+        # v2.8.0 回放：键盘控制（空格/逐帧/倍速/缩放/跟随/退出）
+        if self.state == GameState.REPLAY:
+            for event in all_events:
+                if event.type == pygame.QUIT:
+                    logger.info("收到退出事件")
+                    self.running = False
+                elif event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_ESCAPE:
+                        self.exit_replay()
+                        return mouse_pos, mouse_pressed
+                    elif event.key == pygame.K_SPACE:
+                        self.replay_toggle_play()
+                    elif event.key == pygame.K_LEFT:
+                        self.replay_step(-1)
+                    elif event.key == pygame.K_RIGHT:
+                        self.replay_step(1)
+                    elif event.key == pygame.K_f:
+                        self.replay_follow = not getattr(self, 'replay_follow', True)
+                    elif event.key in (pygame.K_1, pygame.K_2, pygame.K_3, pygame.K_4):
+                        _sp = {pygame.K_1: 0.5, pygame.K_2: 1.0,
+                               pygame.K_3: 2.0, pygame.K_4: 4.0}[event.key]
+                        if getattr(self, 'replay_data', None) is not None:
+                            self.replay_data.speed = _sp
+                elif event.type == pygame.MOUSEWHEEL:
+                    if getattr(self, 'replay_cam', None) is not None:
+                        self.replay_cam.zoom_by(1.15 if event.y > 0 else 1 / 1.15)
+                elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    # 点击时间轴跳转
+                    try:
+                        sw, sh = self.scaled_width, self.scaled_height
+                        _th = int(26 * self.scale)
+                        _ty = sh - _th - int(10 * self.scale)
+                        if _ty <= event.pos[1] <= _ty + _th:
+                            _tw = sw - int(40 * self.scale)
+                            _tx = int(20 * self.scale)
+                            self.replay_seek((event.pos[0] - _tx) / max(1.0, _tw))
+                    except Exception:
+                        pass
+            return mouse_pos, mouse_pressed
+
+        # v2.8.0 死亡反应时间：任意键/点击跳过
+        if self.state == GameState.DYING:
+            for event in all_events:
+                if event.type == pygame.QUIT:
+                    logger.info("收到退出事件")
+                    self.running = False
+                elif event.type == pygame.KEYDOWN:
+                    if event.key in (pygame.K_SPACE, pygame.K_RETURN, pygame.K_ESCAPE):
+                        self.skip_death_reaction()
+                        return mouse_pos, mouse_pressed
+                elif event.type == pygame.MOUSEBUTTONDOWN:
+                    self.skip_death_reaction()
+                    return mouse_pos, mouse_pressed
+                elif event.type == pygame.FINGERDOWN:
+                    self.skip_death_reaction()
+                    return mouse_pos, mouse_pressed
+            return mouse_pos, mouse_pressed
+
         if self.state == GameState.DIALOGUE and self.dialogue.active:
             for event in all_events:
                 if event.type == pygame.QUIT:

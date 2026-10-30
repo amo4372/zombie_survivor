@@ -994,6 +994,15 @@ class PlayingMixin:
             self._update_subtitles(dt)
         except Exception:
             pass
+        # v2.8.0 全局回放采样 + 打击反馈推进
+        try:
+            self._replay_tick(dt)
+        except Exception:
+            pass
+        try:
+            self._feedback_tick(dt)
+        except Exception:
+            pass
 
         # 自动射击 / 盾肘击【修改】
         auto_shoot = False
@@ -2417,18 +2426,11 @@ class PlayingMixin:
 
         if self.is_multiplayer_active():
             # 双人/联机：救援系统——全部倒地才游戏结束
+            # v2.8.0：不再立刻结算，先进死亡反应时间（慢放+镜头），给玩家反应余地
             if self._update_rescue(dt):
-                # v2.6.0：争分夺秒模式下全部倒地应先结算再结束（而非直接游戏结束）
-                if self.config.game_mode == GameMode.TIMED:
-                    self._settle_race_auto()
-                else:
-                    self._trigger_multiplayer_game_over()
+                self._begin_death_reaction()
         elif self.player.hp <= 0:
-            # v2.6.0：单人争分夺秒模式下死亡也应先结算
-            if self.config.game_mode == GameMode.TIMED:
-                self._settle_race_auto()
-            else:
-                self._trigger_multiplayer_game_over()
+            self._begin_death_reaction()
         # v2.2.0 争分夺秒：倒计时耗尽 → 挑战结算（非死亡）
         if self.config.game_mode == GameMode.TIMED and self.state == GameState.PLAYING:
             try:

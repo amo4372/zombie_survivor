@@ -5,6 +5,7 @@
 import pygame
 import math
 import random
+import time
 from config import *
 from .gear import RiotGear
 from weapons import Weapon, Projectile
@@ -131,6 +132,11 @@ class Player:
 
         # 创伤效果 - 增强
         self.trauma = 0.0
+        # v2.8.0 死亡详情：最近受到的伤害来源流水（环形缓冲）
+        # 记录于 take_damage 的统一扣血出口，因此自动覆盖
+        # 僵尸 / 敌对玩家 / 技能 / AOE / DOT 等全部来源，无需改各处调用点。
+        self.damage_log = []
+        self.MAX_DAMAGE_LOG = 40
         self.trauma_decay = 1.5
         self.recoil_offset = [0, 0]
         self.recoil_recovery = 3.0
@@ -610,6 +616,9 @@ class Player:
                 blocked = from_front
         actual_damage = self.riot_gear.take_damage(damage, damage_type, from_front, attack_x, attack_y, blocked=blocked)
         self.hp -= actual_damage
+        # v2.8.0 死亡详情：登记本次伤害来源（actual_damage 为格挡/护甲后的真实扣血）
+        if actual_damage > 0:
+            self._log_damage(actual_damage, damage_type, source, attack_x, attack_y)
         # v2.6.4 修复：来自玩家的远程伤害（子弹）不设置无敌帧，允许多发子弹连续命中
         # 只有僵尸伤害或近战伤害才设置无敌帧
         if source != "player" or damage_type != "ranged":
@@ -622,6 +631,48 @@ class Player:
         if self.hp <= 0:
             self.hp = 0
             self.alive = False
+
+    def _log_damage(self, amount, dtype, source, attack_x, attack_y):
+        """v2.8.0 死亡详情：登记一条伤害记录（环形缓冲，最多 MAX_DAMAGE_LOG 条）"""
+        try:
+            self.damage_log.append({
+                "t": time.monotonic(),
+                "amount": round(float(amount), 1),
+                "type": str(dtype),
+                "source": str(source),
+                "x": attack_x, "y": attack_y,
+                "hp": max(0, float(self.hp)),
+            })
+            if len(self.damage_log) > self.MAX_DAMAGE_LOG:
+                del self.damage_log[:len(self.damage_log) - self.MAX_DAMAGE_LOG]
+        except Exception:
+            pass
+
+    def death_detail(self, window=12.0, limit=20):
+        """v2.8.0 死亡详情面板数据：最近 window 秒内对本人造成伤害的来源与数值
+
+        返回 [(距死亡秒数, 伤害值, 类型, 来源描述, 剩余HP)]，按时间倒序（最近在前）。
+        """
+        try:
+            _now = time.monotonic()
+            _out = []
+            for _r in reversed(self.damage_log):
+                _ago = _now - _r.get("t", _now)
+                if _ago > window:
+                    break
+                _out.append({
+                    "ago": round(_ago, 2),
+                    "amount": _r.get("amount", 0.0),
+                    "type": _r.get("type", ""),
+                    "source": _r.get("source", ""),
+                    "hp": _r.get("hp", 0),
+                    "x": _r.get("x"), "y": _r.get("y"),
+                })
+                if len(_out) >= limit:
+                    break
+            return _out
+        except Exception:
+            return []
 
     def heal(self, amount):
         self.hp = min(self.hp + amount, self.max_hp)

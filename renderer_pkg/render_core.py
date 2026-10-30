@@ -124,6 +124,13 @@ class RenderCore:
         elif state == GameState.DIALOGUE:
             self._draw_playing()
             self._draw_dialogue()
+        elif state == GameState.DYING:
+            # v2.8.0 死亡反应时间：仍画世界（定格/慢放）+ 死亡提示
+            self._draw_playing()
+            self._draw_dying()
+        elif state == GameState.REPLAY:
+            # v2.8.0 全局回放：自由摄像机重看战况
+            self._draw_replay()
         elif state == GameState.GAME_OVER:
             self._draw_game_over()
         elif state == GameState.VICTORY:

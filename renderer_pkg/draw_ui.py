@@ -10,6 +10,7 @@ import mod_loader
 import math
 import random
 import time
+import os
 from config import *
 from buff import BuffType
 from codex import codex_unlock_manager
@@ -3317,15 +3318,36 @@ class UiMixin:
         ach_rect = ach_text.get_rect(center=(sw // 2, y))
         self.screen.blit(ach_text, ach_rect)
 
+        # v2.8.0：死亡详情 / 观看回放 按钮
+        mouse_pos = pygame.mouse.get_pos()
+        mouse_pressed = pygame.mouse.get_pressed()
+        _db = self.game.gameover_death_btn
+        _rb = self.game.gameover_replay_btn
+        _db.visible = True
+        _rb.visible = True
+        if _db.update(mouse_pos, mouse_pressed, self.game.touch_events, scale):
+            self.game.toggle_death_detail()
+        # 回放：优先播放本局刚存的死亡回放，否则播放最近一份
+        if _rb.update(mouse_pos, mouse_pressed, self.game.touch_events, scale):
+            _path = getattr(self.game, 'replay_last_saved', None)
+            if not _path or not os.path.exists(_path):
+                _lst = self.game.list_replays()
+                _path = _lst[0]["path"] if _lst else None
+            if _path:
+                self.game.enter_replay(_path)
+        _db.draw(self.screen, self.game.font_large, scale)
+        _rb.draw(self.screen, self.game.font_large, scale)
+
         # 返回按钮
         btn = self.game.gameover_back_btn
         btn.visible = True
-        mouse_pos = pygame.mouse.get_pos()
-        mouse_pressed = pygame.mouse.get_pressed()
         if btn.update(mouse_pos, mouse_pressed, self.game.touch_events, scale):
             self.game.logger.info("游戏结束返回菜单")
             self.game.state = GameState.MENU
         btn.draw(self.screen, self.game.font_large, scale)
+
+        # v2.8.0 死亡详情面板（浮在最上层）
+        self._draw_death_detail()
 
     def _draw_victory(self):
         """故事模式通关界面"""

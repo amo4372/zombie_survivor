@@ -476,6 +476,11 @@ class GameCore:
         from ui import Button
         self.tutorial_back_btn = Button(640 - 100, 720 - 80, 200, 50, "返回", color=DARK_RED)
         self.gameover_back_btn = Button(640 - 100, 720 - 150, 200, 50, "返回菜单", color=DARK_RED)
+        # v2.8.0 结算页：死亡详情（查看最近伤害来源）+ 观看回放
+        self.gameover_death_btn = Button(640 - 235, 720 - 218, 215, 48, "死亡详情",
+                                         color=(70, 40, 40), hover_color=(110, 60, 60))
+        self.gameover_replay_btn = Button(640 + 20, 720 - 218, 215, 48, "观看回放",
+                                          color=(40, 55, 80), hover_color=(60, 85, 120))
 
         self.story_progress = 0
         self.boss_kills = {"long": 0, "xiang": 0}
@@ -984,6 +989,10 @@ class GameCore:
             self.world = GameWorld(map_type=self.current_map, limited=True)
             # v2.4.0 新局重置阵营胜负状态
             self.victory_team = None
+            # v2.8.0 全局回放 / 打击反馈：新局重置并立即开始录制
+            self._replay_init()
+            self._feedback_init()
+            self.start_replay_recording()
             # v2.5.6 结算页标题（争分夺秒：挑战完成/挑战失败）
             self.result_title = None
             self._team_race_inited = False
@@ -1970,6 +1979,12 @@ class GameCore:
                 self.state = GameState.PLAYING
             else:
                 self.dialogue.update(dt)
+        elif self.state == GameState.DYING:
+            # v2.8.0 死亡反应时间：慢放 + 镜头拉近，不立刻结算
+            self._update_dying(dt)
+        elif self.state == GameState.REPLAY:
+            # v2.8.0 全局回放：自由摄像机重看当时的战况
+            self._update_replay(dt)
         elif self.state == GameState.SKILL_SELECT:
             if self.particles:
                 self.particles.update(dt)

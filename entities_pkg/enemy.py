@@ -21,6 +21,8 @@ class Enemy:
         self.wave = wave
         self.difficulty = difficulty
         self.alive = True
+        # v2.8.0 命中反馈：本敌人受到的命中事件（由 take_damage 统一出口登记）
+        self._hit_events = []
         self.knockdown_timer = 0
         self.frozen_timer = 0
         self.grappled = False
@@ -1342,6 +1344,19 @@ class Enemy:
         except Exception:
             pass
         self.hp -= damage
+        # v2.8.0 命中反馈：这里是**所有伤害的统一出口**（射击 / 近战 / 技能 /
+        # AOE / DOT 全都经过），在此登记命中事件，游戏侧每帧消费并生成
+        # 命中标记，从而让技能命中也有一致的打击反馈。
+        try:
+            if damage > 0:
+                _ev = getattr(self, "_hit_events", None)
+                if _ev is None:
+                    _ev = self._hit_events = []
+                _ev.append((float(damage), str(damage_type)))
+                if len(_ev) > 8:
+                    del _ev[:len(_ev) - 8]
+        except Exception:
+            pass
         if self.hp <= 0:
             self.alive = False
             return True

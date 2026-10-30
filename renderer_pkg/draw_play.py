@@ -27,6 +27,9 @@ class PlayMixin:
         self._draw_playing_core(self.game.player, self.game.camera)
         self._draw_hud()
         self._draw_subtitles()
+        # v2.8.0 打击反馈：命中标记 + 受伤红晕
+        self._draw_hit_markers()
+        self._draw_damage_feedback()
 
     def _draw_playing_split(self):
         """同屏双人：左右分屏，各玩家一个视口（v2.1.3 结构化：编排下沉到
