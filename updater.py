@@ -216,6 +216,15 @@ def check_for_updates(timeout=6):
         if download_url:
             download_url = _gh_proxy_url(download_url, mirror=UPDATE_STATE.get("mirror"))
 
+        # v2.8.1 增量更新：记录 manifest.json 资产地址（用于只下载变化的文件）
+        _manifest_url = None
+        for asset in assets:
+            if asset.get("name", "").lower() == "manifest.json":
+                _manifest_url = _gh_proxy_url(asset.get("browser_download_url"),
+                                              mirror=UPDATE_STATE.get("mirror"))
+                break
+        UPDATE_STATE["manifest_url"] = _manifest_url
+
         if not download_url:
             UPDATE_STATE["error"] = "未找到更新包"
             return None
@@ -777,6 +786,219 @@ def restart_game():
         UPDATE_STATE["restarting"] = False
 
 
+# ==================== v2.8.1 增量更新 ====================
+# 不再每次都下载 76MB 全量包：先下几 KB 的 manifest.json，
+# 与本地文件 MD5 比对，只下载真正变化的文件。失败自动回退全量包。
+INCREMENTAL_MAX_FILES = 400      # 单次增量最多下载的文件数（超出则回退全量）
+INCREMENTAL_FILE_TIMEOUT = 15    # 单文件下载超时（秒）
+
+
+def _raw_file_url(rel_path, tag):
+    """构造 GitHub raw 单文件地址（经代理加速）"""
+    _t = tag if str(tag).startswith("v") else f"v{tag}"
+    _u = ("https://raw.githubusercontent.com/"
+          f"{GITHUB_USER}/{GITHUB_REPO}/{_t}/{rel_path}")
+    return _gh_proxy_url(_u, mirror=UPDATE_STATE.get("mirror"))
+
+
+def _http_get_bytes(url, timeout=15, retries=2):
+    """带重试的 GET，返回 bytes（失败返回 None）"""
+    for _i in range(retries + 1):
+        try:
+            _req = urllib.request.Request(url, headers={
+                "User-Agent": "ZombieSurvivor-Updater/1.0"})
+            with urllib.request.urlopen(_req, timeout=timeout) as _r:
+                return _r.read()
+        except Exception:
+            if _i >= retries:
+                return None
+            time.sleep(1.0)
+    return None
+
+
+def fetch_update_manifest(manifest_url, timeout=15):
+    """下载并解析远端 manifest.json，返回 {rel: {"md5":..,"size":..}} 或 None"""
+    _raw = _http_get_bytes(manifest_url, timeout=timeout)
+    if not _raw:
+        UPDATE_STATE["error"] = "增量清单下载失败"
+        return None
+    try:
+        _m = json.loads(_raw.decode('utf-8'))
+        _files = _m.get("files", _m)
+        if not isinstance(_files, dict) or not _files:
+            return None
+        # 过滤用户数据与运行产物
+        _out = {}
+        for _rel, _info in _files.items():
+            if _rel in USER_DATA_FILES:
+                continue
+            if _rel.startswith(("_update_cache", "_update_backup", "__pycache__",
+                                "releases", "dist_encrypted", "replays", "data", "mods_data")):
+                continue
+            if isinstance(_info, dict):
+                _out[_rel] = {"md5": str(_info.get("md5", "")).lower(),
+                              "size": int(_info.get("size", 0) or 0)}
+            else:
+                _out[_rel] = {"md5": str(_info).lower(), "size": 0}
+        return _out
+    except Exception:
+        UPDATE_STATE["error"] = "增量清单解析失败"
+        return None
+
+
+def compute_changed_files(manifest, game_dir=None):
+    """比对本地文件 MD5，返回需要下载的相对路径列表"""
+    if game_dir is None:
+        game_dir = os.path.dirname(os.path.abspath(__file__))
+    _need = []
+    for _rel, _info in manifest.items():
+        # 双保险：即便清单里混入了用户数据/运行产物，也绝不覆盖
+        if _rel in USER_DATA_FILES or _rel.startswith(
+                ("_update_cache", "_update_backup", "__pycache__", "releases",
+                 "dist_encrypted", "replays", "data", "mods_data")):
+            continue
+        _local = os.path.join(game_dir, _rel)
+        if not os.path.isfile(_local):
+            _need.append(_rel)
+            continue
+        try:
+            if _compute_md5(_local) != _info["md5"]:
+                _need.append(_rel)
+        except Exception:
+            _need.append(_rel)
+    return _need
+
+
+def download_incremental_files(rel_list, tag, game_dir=None, progress_cb=None):
+    """逐文件下载到缓存目录，返回 {rel: 本地缓存路径}"""
+    if game_dir is None:
+        game_dir = os.path.dirname(os.path.abspath(__file__))
+    _cache = os.path.join(game_dir, CACHE_DIR, "incremental")
+    try:
+        if os.path.exists(_cache):
+            shutil.rmtree(_cache, ignore_errors=True)
+        os.makedirs(_cache, exist_ok=True)
+    except Exception:
+        return None
+    _got = {}
+    _total = max(1, len(rel_list))
+    for _i, _rel in enumerate(rel_list):
+        _data = _http_get_bytes(_raw_file_url(_rel, tag), timeout=INCREMENTAL_FILE_TIMEOUT)
+        if _data is None:
+            UPDATE_STATE["error"] = f"增量下载失败: {_rel}"
+            return None
+        _dst = os.path.join(_cache, _rel)
+        try:
+            os.makedirs(os.path.dirname(_dst), exist_ok=True)
+            with open(_dst, "wb") as _f:
+                _f.write(_data)
+        except Exception:
+            UPDATE_STATE["error"] = f"增量写入失败: {_rel}"
+            return None
+        _got[_rel] = _dst
+        if progress_cb:
+            try:
+                progress_cb((_i + 1) / _total)
+            except Exception:
+                pass
+    return _got
+
+
+def apply_incremental_files(file_map, game_dir=None):
+    """把增量下载的文件应用到游戏目录（备份 .py 供回滚）"""
+    global UPDATE_STATE
+    if game_dir is None:
+        game_dir = os.path.dirname(os.path.abspath(__file__))
+    _backup = os.path.join(game_dir, BACKUP_DIR)
+    try:
+        if os.path.exists(_backup):
+            shutil.rmtree(_backup, ignore_errors=True)
+        os.makedirs(_backup, exist_ok=True)
+    except Exception:
+        pass
+    _applied = 0
+    _pending = 0
+    for _rel, _src in file_map.items():
+        _dst = os.path.join(game_dir, _rel)
+        try:
+            os.makedirs(os.path.dirname(_dst), exist_ok=True)
+            # 备份旧 .py / version.txt
+            if _rel.endswith(".py") or _rel in ("version.txt", "manifest.json"):
+                if os.path.isfile(_dst):
+                    _bk = os.path.join(_backup, _rel)
+                    os.makedirs(os.path.dirname(_bk), exist_ok=True)
+                    shutil.copy2(_dst, _bk)
+            if not _write_retry(_dst, open(_src, "rb").read()):
+                _pend = _dst + ".pending_update"
+                with open(_pend, "wb") as _f:
+                    _f.write(open(_src, "rb").read())
+                _pending += 1
+                continue
+            _applied += 1
+        except Exception:
+            _pend = _dst + ".pending_update"
+            try:
+                shutil.copy2(_src, _pend)
+                _pending += 1
+            except Exception:
+                pass
+    UPDATE_STATE["pending_count"] = _pending
+    return _applied, _pending
+
+
+def try_incremental_update(latest_version, progress_cb=None, status_cb=None):
+    """尝试增量更新。返回 (是否成功, 已应用文件数, pending数)
+
+    失败时（拿不到 manifest / 下载异常 / 变化文件过多）返回 (False, 0, 0)，
+    由调用方回退到全量包。
+    """
+    global UPDATE_STATE
+    _murl = UPDATE_STATE.get("manifest_url")
+    if not _murl:
+        return False, 0, 0
+    _game_dir = os.path.dirname(os.path.abspath(__file__))
+
+    if status_cb:
+        status_cb("正在获取增量清单...")
+    _manifest = fetch_update_manifest(_murl)
+    if not _manifest:
+        return False, 0, 0
+
+    if status_cb:
+        status_cb("正在比对本地文件...")
+    _need = compute_changed_files(_manifest, _game_dir)
+    UPDATE_STATE["incremental_files"] = len(_need)
+    UPDATE_STATE["incremental_total"] = len(_manifest)
+    if not _need:
+        # 没有文件变化：只更新版本号
+        try:
+            with open(os.path.join(_game_dir, "version.txt"), "w", encoding="utf-8") as _f:
+                _f.write(str(latest_version))
+        except Exception:
+            pass
+        return True, 0, 0
+    if len(_need) > INCREMENTAL_MAX_FILES:
+        # 变化太多，增量未必更快 → 回退全量
+        UPDATE_STATE["error"] = None
+        return False, 0, 0
+
+    if status_cb:
+        status_cb(f"仅 {len(_need)} 个文件有变化，开始下载...")
+    _file_map = download_incremental_files(_need, latest_version, _game_dir, progress_cb)
+    if not _file_map:
+        return False, 0, 0
+
+    if status_cb:
+        status_cb("正在应用增量更新...")
+    _applied, _pending = apply_incremental_files(_file_map, _game_dir)
+    try:
+        with open(os.path.join(_game_dir, "version.txt"), "w", encoding="utf-8") as _f:
+            _f.write(str(latest_version))
+    except Exception:
+        pass
+    return True, _applied, _pending
+
+
 def perform_full_update(progress_cb=None, status_cb=None):
     """
     执行完整更新流程：检查 -> 下载 -> 应用 -> 重启
@@ -808,7 +1030,26 @@ def perform_full_update(progress_cb=None, status_cb=None):
         if status_cb:
             status_cb(f"发现新版本 v{latest_version}，开始下载...")
 
-        # 2. 下载（复用缓存/断点续传）
+        # 2. v2.8.1：优先增量更新（只下载真正变化的文件）
+        _inc_ok, _inc_applied, _inc_pending = try_incremental_update(
+            latest_version, progress_cb=progress_cb, status_cb=status_cb)
+        if _inc_ok:
+            if status_cb:
+                _n = UPDATE_STATE.get("incremental_files", 0)
+                if _n == 0:
+                    status_cb(f"无需下载，已是最新文件，新版本 v{latest_version}")
+                else:
+                    status_cb(f"增量更新成功！下载 {_n} 个文件，应用 {_inc_applied} 个，"
+                              f"新版本 v{latest_version}，即将重启...")
+            cleanup_cache()
+            time.sleep(2)
+            restart_game()
+            return
+        # 增量不可用 → 回退全量包
+        UPDATE_STATE["error"] = None
+        if status_cb:
+            status_cb("增量更新不可用，改为下载完整更新包...")
+
         zip_path = download_update(download_url, progress_callback=progress_cb, version=latest_version)
         if not zip_path:
             if status_cb:

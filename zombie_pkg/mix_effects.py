@@ -398,7 +398,8 @@ class EffectsMixin:
             dist = random.uniform(20, explosion_radius * 0.7)
             sx = x + math.cos(angle) * dist
             sy = y + math.sin(angle) * dist
-            self.particles.spawn(sx, sy, SMOKE_GRAY, 1, (20, 40), (-3, 3), (2.0, 4.0))
+            if getattr(self, 'particles', None) is not None:
+                    self.particles.spawn(sx, sy, SMOKE_GRAY, 1, (20, 40), (-3, 3), (2.0, 4.0))
 
         # 火焰粒子
         fire_count = 50 if has_nuke else 25
@@ -407,7 +408,8 @@ class EffectsMixin:
             dist = random.uniform(10, explosion_radius * 0.5)
             fx = x + math.cos(angle) * dist
             fy = y + math.sin(angle) * dist
-            self.particles.spawn(fx, fy, FIRE_ORANGE, 1, (10, 25), (-4, 4), (1.0, 2.5))
+            if getattr(self, 'particles', None) is not None:
+                    self.particles.spawn(fx, fy, FIRE_ORANGE, 1, (10, 25), (-4, 4), (1.0, 2.5))
 
         # 火花
         for _ in range(30):
@@ -600,7 +602,8 @@ class EffectsMixin:
                 dist = random.uniform(0, 100)
                 sx = x + math.cos(angle) * dist
                 sy = y + math.sin(angle) * dist
-                self.particles.spawn(sx, sy, SMOKE_GRAY, 1, (15, 30), (-3, 3), (3.0, 6.0))
+                if getattr(self, 'particles', None) is not None:
+                    self.particles.spawn(sx, sy, SMOKE_GRAY, 1, (15, 30), (-3, 3), (3.0, 6.0))
             self.floating_texts.append(FloatingText(x, y - 30, "烟雾弹!", color=SMOKE_GRAY, lifetime=2.0))
 
         elif gtype == "cluster":
@@ -904,16 +907,19 @@ class EffectsMixin:
         if not hasattr(self, 'fire_zones'):
             self.fire_zones = []
         for zone in self.fire_zones[:]:
-            zone["timer"] -= dt
-            zone["damage_timer"] -= dt
+            zone["timer"] = zone.get("timer", 0.0) - dt
+            # v2.8.1 兜底：历史存档/部分创建点可能缺 damage_timer，用 get 防御
+            zone["damage_timer"] = zone.get("damage_timer", 0.0) - dt
             # 持续火焰粒子
             if random.random() < 0.5:
                 angle = random.uniform(0, math.pi * 2)
                 dist = random.uniform(0, zone["radius"])
                 fx = zone["x"] + math.cos(angle) * dist
                 fy = zone["y"] + math.sin(angle) * dist
-                self.particles.spawn(fx, fy, FIRE_ORANGE, 1, (8, 16), (-3, 3), (0.8, 1.5))
-                self.particles.spawn(fx, fy, FIRE_YELLOW, 1, (5, 10), (-2, 2), (0.5, 1.0))
+                if getattr(self, 'particles', None) is not None:
+                    self.particles.spawn(fx, fy, FIRE_ORANGE, 1, (8, 16), (-3, 3), (0.8, 1.5))
+                if getattr(self, 'particles', None) is not None:
+                    self.particles.spawn(fx, fy, FIRE_YELLOW, 1, (5, 10), (-2, 2), (0.5, 1.0))
             # 伤害（v2.5.0：踩上持续高伤害——区域内单位每 0.5s 高额伤害）
             if zone["damage_timer"] <= 0:
                 zone["damage_timer"] = 0.5
@@ -935,15 +941,17 @@ class EffectsMixin:
         if not hasattr(self, 'smoke_zones'):
             self.smoke_zones = []
         for zone in self.smoke_zones[:]:
-            zone["timer"] -= dt
-            zone["damage_timer"] -= dt
+            zone["timer"] = zone.get("timer", 0.0) - dt
+            # v2.8.1 兜底：历史存档/部分创建点可能缺 damage_timer，用 get 防御
+            zone["damage_timer"] = zone.get("damage_timer", 0.0) - dt
             # 持续烟雾粒子
             if random.random() < 0.3:
                 angle = random.uniform(0, math.pi * 2)
                 dist = random.uniform(0, zone["radius"])
                 sx = zone["x"] + math.cos(angle) * dist
                 sy = zone["y"] + math.sin(angle) * dist
-                self.particles.spawn(sx, sy, SMOKE_GRAY, 1, (10, 20), (-2, 2), (2.0, 4.0))
+                if getattr(self, 'particles', None) is not None:
+                    self.particles.spawn(sx, sy, SMOKE_GRAY, 1, (10, 20), (-2, 2), (2.0, 4.0))
             # 减速效果
             if zone["damage_timer"] <= 0:
                 zone["damage_timer"] = 1.0

@@ -914,13 +914,16 @@ class PlayingMixin:
                 _wpos.append((_pp.x, _pp.y))
         except Exception:
             _wpos = []
-        self.world.update(dt, self.player.x, self.player.y, _wpos)
+        # v2.8.1 防御：world 缺失时不要抛 NoneType 异常打断整帧
+        if getattr(self, 'world', None) is not None:
+            self.world.update(dt, self.player.x, self.player.y, _wpos)
 
         # === Buff视觉效果 ===
         self._update_buff_visuals(dt)
 
         # 更新尸潮管理器
-        self.horde_manager.update(dt)
+        if getattr(self, 'horde_manager', None) is not None:
+            self.horde_manager.update(dt)
 
         # 尸潮音乐切换
         if self.horde_manager.is_horde_active():
@@ -1643,9 +1646,12 @@ class PlayingMixin:
                 # 向某烟雾弹：在玩家位置生成减速烟雾区域
                 if not hasattr(self, 'smoke_zones'):
                     self.smoke_zones = []
+                # v2.8.1 修复：此区域此前缺 damage_timer 字段，
+                # _update_smoke_zones 里 zone["damage_timer"] -= dt 直接抛
+                # KeyError: 'damage_timer'（向某烟雾弹一命中就崩）。
                 self.smoke_zones.append({
                     "x": self.player.x, "y": self.player.y,
-                    "radius": 120, "timer": 5.0
+                    "radius": 120, "timer": 5.0, "damage_timer": 0.0
                 })
                 self.particles.spawn_explosion(self.player.x, self.player.y, GRAY, 40)
 
@@ -2379,7 +2385,8 @@ class PlayingMixin:
             if not text_item.alive:
                 self.text_items.remove(text_item)
 
-        self.particles.update(dt)
+        if getattr(self, 'particles', None) is not None:
+            self.particles.update(dt)
         for dn in self.damage_numbers[:]:
             dn.update(dt)
             if not dn.is_alive():
@@ -2516,6 +2523,14 @@ class PlayingMixin:
             return None
         _players = [p for p in self._all_players() if p is not None]
         if not _players:
+            return None
+        # v2.8.1 关键修复：合作模式（所有玩家同一阵营）不做『阵营胜负』判定。
+        # 旧逻辑在争分夺秒下：合作时全场只有 team 0 一个阵营，
+        # _active 长度恒为 1 → 开局第一帧就返回 0 判为"阵营 0 胜利"
+        # → 立刻 GAME_OVER。这就是"合作模式争分夺秒一打开就结束"。
+        # 阵营胜负只在真正多阵营（PvP）时有意义。
+        _all_teams = {int(getattr(_pp, 'team_id', 0) or 0) for _pp in _players}
+        if len(_all_teams) <= 1 and not getattr(self.config, 'pvp_enabled', False):
             return None
         _alive_teams = set()
         for _pp in _players:

@@ -2067,8 +2067,9 @@ class GameCore:
         except Exception:
             self.pvp_scan_active = 0.0
         # 双人救援：每帧结算倒地/救援（全倒地时在此结束游戏）
+        # v2.8.1：与 mix_playing 保持一致——先给死亡反应时间，不立刻结算
         if self.is_multiplayer_active() and self._update_rescue(dt):
-            self._trigger_multiplayer_game_over()
+            self._begin_death_reaction()
         else:
             # v2.4.0 阵营胜负判定：只剩一阵营/计时耗尽 → 阵营胜利结算
             try:
