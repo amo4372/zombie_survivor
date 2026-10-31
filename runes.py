@@ -85,6 +85,17 @@ RUNE_CONFIG = {
     },
 }
 
+# v2.8.3 数据与行为分离：以数据库 runes 表为准合并（缺行/异常则保留内置值）
+try:
+    from gamedata import db as _gdb
+    for _rk in list(RUNE_CONFIG.keys()):
+        try:
+            RUNE_CONFIG[_rk] = _gdb.rune(_rk, fallback=RUNE_CONFIG[_rk])
+        except Exception:
+            pass
+except Exception:
+    pass
+
 # 稀有度权重（用于随机抽取）
 RARITY_WEIGHTS = {
     "common": 40,

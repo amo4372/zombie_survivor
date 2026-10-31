@@ -546,6 +546,13 @@ class Weapon:
         }
 
         config = configs.get(self.weapon_type, configs[WeaponType.PISTOL])
+        # v2.8.3 数据与行为分离：以数据库 game_data.db 的 weapons 表为准。
+        # 数据库缺失/无此行时，原样使用上面的代码内置值（绝不因数据库问题崩溃）。
+        try:
+            from gamedata import db as _gdb
+            config = _gdb.weapon(self.weapon_type, fallback=config)
+        except Exception:
+            pass
         for k, v in config.items():
             setattr(self, k, v)
         self.shake_intensity = config.get("shake", 2)

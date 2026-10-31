@@ -295,6 +295,12 @@ class Enemy:
         }
 
         config = base_configs.get(self.enemy_type, base_configs[EnemyType.ZOMBIE_NORMAL])
+        # v2.8.3 数据与行为分离：以数据库 enemies 表为准，缺失时回退内置值
+        try:
+            from gamedata import db as _gdb
+            config = _gdb.enemy(self.enemy_type, fallback=config)
+        except Exception:
+            pass
         for k, v in config.items():
             setattr(self, k, v)
 

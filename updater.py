@@ -275,6 +275,8 @@ def check_for_updates(timeout=6):
 
 
 USER_DATA_FILES = {
+    # v2.8.3：策划数值库——必须原样保留，否则玩家/策划调的数值会被更新覆盖
+    "game_data.db", "game_data.json",
     "config.json", "game_records.json", "game_records.zss", "savegame.json", "savegame.zss",
     "codex_unlocks.json", "mods_config.json", "skill_tree_unlock.json",
     "game_log.txt", "_update_cache", "_update_backup", "releases", "dist_encrypted",
@@ -1124,7 +1126,9 @@ def download_incremental_files(rel_list, tag, game_dir=None, progress_cb=None):
     """逐文件下载到缓存目录，返回 {rel: 本地缓存路径}"""
     if game_dir is None:
         game_dir = os.path.dirname(os.path.abspath(__file__))
-    _cache = os.path.join(game_dir, CACHE_DIR, "incremental")
+    # v2.8.3 修复：此前写成 CACHE_DIR（未定义）→ NameError 打断更新线程。
+    # 实际常量名是 UPDATE_CACHE_DIR。
+    _cache = os.path.join(game_dir, UPDATE_CACHE_DIR, "incremental")
     try:
         if os.path.exists(_cache):
             shutil.rmtree(_cache, ignore_errors=True)

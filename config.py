@@ -80,6 +80,19 @@ DIFFICULTY_CONFIG = {
     },
 }
 
+# v2.8.3 数据与行为分离：以数据库 difficulty 表为准合并。
+# 数据库缺失/损坏时原样保留上面的内置值（此处必须 try/except 到底，
+# config.py 被最先导入，任何异常都会导致游戏无法启动）。
+try:
+    from gamedata import db as _gdb
+    for _dk in list(DIFFICULTY_CONFIG.keys()):
+        try:
+            DIFFICULTY_CONFIG[_dk] = _gdb.difficulty(_dk, fallback=DIFFICULTY_CONFIG[_dk])
+        except Exception:
+            pass
+except Exception:
+    pass
+
 DIFFICULTY_LIST = ["简单", "普通", "困难", "地狱"]
 DIFFICULTY_WEIGHT = {"简单": 0.5, "普通": 1.0, "困难": 1.8, "地狱": 3.0}
 

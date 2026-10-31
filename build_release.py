@@ -41,6 +41,7 @@ ESSENTIAL_FILES = [
 ESSENTIAL_DIRS = [
     "assets",      # 游戏资源（图片、音效、音乐）
     "mods",        # Mod目录（如果有）
+    "gamedata",        # v2.8.3：数据与行为分离层（SQLite 数值库访问）
     "zombie_pkg",      # v2.0.9：游戏逻辑包（由 game.py 拆分）
     "renderer_pkg",    # v2.0.9：渲染系统包（由 renderer.py 拆分）
     "ui_pkg",          # v2.0.11：UI 组件包（由 ui.py 拆分）
@@ -55,6 +56,7 @@ EXCLUDE_PATTERNS = [
     "__pycache__", ".pyc", ".pyo", ".pyd",
     ".git", ".gitignore", ".svn",
     "game_log.txt", "config.json", "game_records.json",
+    "game_data.db", "game_data.json", "broken_versions.json",  # v2.8.3 数值库/导出/坏版本标记不打包
     "codex_unlocks.json", "mods_config.json", "skill_tree_unlock.json",
     "savegame.json", "savegame.zss",
     "_update_cache", "_update_backup",
