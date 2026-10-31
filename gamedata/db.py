@@ -15,8 +15,18 @@ import time
 
 from .schema import create_all
 from . import defaults as D
+from . import editmode
 
 _ENSURE_LOCK = threading.Lock()
+
+
+def _game_version(root):
+    """读 version.txt（用于判断数据库是否需要补种）"""
+    try:
+        with open(os.path.join(root, "version.txt"), "r", encoding="utf-8") as _f:
+            return _f.read().strip()
+    except Exception:
+        return "0"
 
 
 def _color_to_hex(v):
@@ -215,6 +225,14 @@ def merge_row(row, fallback, skip=("key", "extra")):
     return _out
 
 
+def merge_db_file(src_path, dst_path=None):
+    """合并数据库文件的便捷入口"""
+    if dst_path is None:
+        from . import db_path
+        dst_path = db_path()
+    return GameDatabase(dst_path).merge_from_file(src_path)
+
+
 class GameDatabase:
     def __init__(self, path):
         self.path = path
@@ -225,6 +243,8 @@ class GameDatabase:
         self._lock = threading.RLock()
         self.available = False
         self.last_error = None
+        self._sync_state = "unknown"
+        self._last_sync = None
         try:
             self._ensure_db()
             self.reload(force=True)
@@ -236,6 +256,13 @@ class GameDatabase:
     # 建库 / 播种
     # ------------------------------------------------------------------
     def _ensure_db(self):
+        """v2.8.5：版本感知的"数据库自动更新"
+
+        - 数据库文件不存在 → 建库 + 全量播种（无论什么模式，否则游戏没法跑）
+        - 文件已存在 → 只有版本号变化时才补种新表/新行（INSERT OR IGNORE，
+          只补不覆盖，策划调过的数值不会丢）
+        - **数据编辑模式开启时完全跳过**，让用户自由改数据测试
+        """
         with _ENSURE_LOCK:
             _need_seed = not os.path.exists(self.path)
             try:
@@ -248,8 +275,60 @@ class GameDatabase:
                 create_all(_conn)
                 if _need_seed:
                     self._seed(_conn)
+                    self._sync_state = "seeded"
+                elif editmode.enabled():
+                    self._sync_state = "edit_mode"
+                else:
+                    self._sync_state = self._maybe_sync(_conn)
             finally:
                 _conn.close()
+
+    def _maybe_sync(self, conn):
+        """版本号变化才补种，返回状态字符串"""
+        try:
+            _root = os.path.dirname(self.path) or "."
+            _cur = _game_version(_root)
+            _prev = None
+            try:
+                _r = conn.execute("SELECT value FROM meta WHERE key='seed_version'").fetchone()
+                if _r:
+                    _prev = _r[0]
+            except Exception:
+                pass
+            # v2.8.5：两种情况下需要补种
+            #   1) 版本号变了（新版本新增了表/行）
+            #   2) 关键表行数不足（用户删过行 / 建库时漏了）——只读检查，开销极小
+            _need = (str(_prev) != str(_cur))
+            if not _need:
+                try:
+                    from . import defaults as _D
+                    for _t, _exp in (("weapons", len(_D.extract_weapons())),
+                                     ("enemies", len(_D.extract_enemies())),
+                                     ("runes", len(_D.extract_runes())),
+                                     ("buffs", len(_D.extract_buffs())),
+                                     ("skills", len(_D.extract_skills()))):
+                        if _exp <= 0:
+                            continue
+                        _n = conn.execute(f"SELECT COUNT(*) FROM {_t}").fetchone()[0]
+                        if int(_n) < int(_exp):
+                            _need = True
+                            break
+                except Exception:
+                    _need = True       # 检查失败 → 保守补种
+            if not _need:
+                return "up_to_date"
+            from .seed import seed_tuning, seed_difficulty, seed_all
+            seed_tuning(conn)
+            seed_difficulty(conn)
+            seed_all(conn)
+            conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)",
+                         ("seed_version", str(_cur)))
+            conn.commit()
+            self._last_sync = (_prev, _cur)
+            return f"synced({_prev}->{_cur})"
+        except Exception as _e:
+            self.last_error = f"补种失败: {_e}"
+            return "error"
 
     def _seed(self, conn):
         """用代码默认值播种"""
@@ -260,6 +339,8 @@ class GameDatabase:
             seed_all(conn)
             conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)",
                          ("seeded_at", time.strftime("%Y-%m-%d %H:%M:%S")))
+            conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)",
+                         ("seed_version", str(_game_version(os.path.dirname(self.path) or "."))))
             conn.commit()
         except Exception as _e:
             self.last_error = f"播种失败: {_e}"
@@ -453,6 +534,67 @@ class GameDatabase:
             return {}
 
     # ------------------------------------------------------------------
+    def merge_from_file(self, src_path):
+        """把另一个数据库文件的内容**只补不覆盖**地合并进来（v2.8.5）
+
+        用于策划"改好数据再发布"：把调好的 game_data.db 作为 Release 资产分发，
+        玩家端下载后合并——新增的表/行会补进来，玩家自己改过的行**保持原样**。
+
+        实现上不用 ATTACH（某些文件系统上会 "database is locked"），
+        改为读出行再逐条 INSERT OR IGNORE，数据量仅百余行，开销可忽略。
+
+        返回 (是否成功, 补入行数)
+        """
+        if not src_path or not os.path.exists(src_path):
+            return False, 0
+        try:
+            _src = connect(src_path, timeout=10)
+            _src.row_factory = sqlite3.Row
+            _rows = {}
+            for _t in ("weapons", "enemies", "runes", "buffs", "skills",
+                       "difficulty", "tuning"):
+                try:
+                    _rows[_t] = [dict(_r) for _r in _src.execute(f"SELECT * FROM {_t}")]
+                except Exception:
+                    _rows[_t] = []
+            _src.close()
+        except Exception as _e:
+            self.last_error = f"读取源数据库失败: {_e}"
+            return False, 0
+
+        try:
+            _dst = connect(self.path, timeout=10)
+            _added = 0
+            for _t, _list in _rows.items():
+                if not _list:
+                    continue
+                try:
+                    _cols = [_r[1] for _r in
+                             _dst.execute(f"PRAGMA table_info({_t})").fetchall()]
+                except Exception:
+                    continue
+                _use = [_c for _c in _cols if _c in (_list[0] or {})]
+                if not _use:
+                    continue
+                _ph = ", ".join("?" * len(_use))
+                _cl = ", ".join(_use)
+                for _r in _list:
+                    try:
+                        _before = _dst.total_changes
+                        _dst.execute(
+                            f"INSERT OR IGNORE INTO {_t}({_cl}) VALUES({_ph})",
+                            [_r.get(_c) for _c in _use])
+                        _added += (_dst.total_changes - _before)
+                    except Exception:
+                        continue
+            _dst.commit()
+            _dst.close()
+            self.reload(force=True)
+            return True, _added
+        except Exception as _e:
+            self.last_error = f"合并数据库失败: {_e}"
+            return False, 0
+
     def status(self):
         """用于「数据」页面展示的状态"""
         return {
@@ -460,6 +602,10 @@ class GameDatabase:
             "exists": os.path.exists(self.path),
             "available": self.available,
             "error": self.last_error,
+            "edit_mode": editmode.enabled(),
+            "edit_source": editmode.source(),
+            "sync_state": getattr(self, "_sync_state", "unknown"),
+            "last_sync": getattr(self, "_last_sync", None),
             "tables": {_t: len(self._cache.get(_t, [])) for _t in
                        ("weapons", "enemies", "runes", "buffs", "skills",
                         "difficulty", "tuning")},

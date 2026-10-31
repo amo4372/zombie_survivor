@@ -249,6 +249,14 @@ def check_for_updates(timeout=6):
                 break
         UPDATE_STATE["manifest_url"] = _manifest_url
 
+        # v2.8.5：记录策划数值库资产地址（可选；用于把改好的数值随版本分发）
+        UPDATE_STATE["gamedata_url"] = None
+        for asset in assets:
+            if asset.get("name", "").lower() == "game_data.db":
+                UPDATE_STATE["gamedata_url"] = _gh_proxy_url(
+                    asset.get("browser_download_url"), mirror=UPDATE_STATE.get("mirror"))
+                break
+
         if not download_url:
             UPDATE_STATE["error"] = "未找到更新包"
             return None
@@ -277,6 +285,7 @@ def check_for_updates(timeout=6):
 USER_DATA_FILES = {
     # v2.8.3：策划数值库——必须原样保留，否则玩家/策划调的数值会被更新覆盖
     "game_data.db", "game_data.json",
+    ".db_edit_mode",   # v2.8.5 数据编辑模式开关（不被更新清掉）
     "config.json", "game_records.json", "game_records.zss", "savegame.json", "savegame.zss",
     "codex_unlocks.json", "mods_config.json", "skill_tree_unlock.json",
     "game_log.txt", "_update_cache", "_update_backup", "releases", "dist_encrypted",
@@ -1201,6 +1210,56 @@ def apply_incremental_files(file_map, game_dir=None):
     return _applied, _pending
 
 
+def sync_gamedata(status_cb=None):
+    """v2.8.5 策划数值同步：下载 Release 里的 game_data.db 并**只补不覆盖**合并
+
+    - 新增的表/行会补进本地库
+    - 玩家或策划自己改过的行**保持原样**（INSERT OR IGNORE）
+    - 数据编辑模式开启时**完全跳过**（否则会把测试中的改动补回去）
+    返回 True 表示已同步（或无需同步）
+    """
+    global UPDATE_STATE
+    try:
+        from gamedata import editmode as _em
+        if _em.enabled():
+            if status_cb:
+                status_cb("数据编辑模式：跳过数值库同步")
+            return True
+    except Exception:
+        pass
+
+    _url = UPDATE_STATE.get("gamedata_url")
+    if not _url:
+        return True          # 该版本没有附带数值库，正常
+    try:
+        _raw = _http_get_bytes(_url, timeout=20)
+        if not _raw:
+            return True
+        _game_dir = os.path.dirname(os.path.abspath(__file__))
+        _tmp = os.path.join(_game_dir, UPDATE_CACHE_DIR, "gamedata_incoming.db")
+        try:
+            os.makedirs(os.path.dirname(_tmp), exist_ok=True)
+            with open(_tmp, "wb") as _f:
+                _f.write(_raw)
+        except Exception:
+            return True
+        try:
+            from gamedata.db import merge_db_file
+            _ok, _n = merge_db_file(_tmp)
+            if status_cb:
+                status_cb(f"策划数值已同步（新增 {_n} 行）" if _ok and _n
+                          else "策划数值已是最新")
+        except Exception:
+            pass
+        try:
+            os.remove(_tmp)
+        except Exception:
+            pass
+        return True
+    except Exception:
+        return True          # 数值同步失败不影响版本更新本身
+
+
 def try_incremental_update(latest_version, progress_cb=None, status_cb=None):
     """尝试增量更新。返回 (是否成功, 已应用文件数, pending数)
 
@@ -1296,6 +1355,10 @@ def perform_full_update(progress_cb=None, status_cb=None):
                 else:
                     status_cb(f"增量更新成功！下载 {_n} 个文件，应用 {_inc_applied} 个，"
                               f"新版本 v{latest_version}，即将重启...")
+            try:
+                sync_gamedata(status_cb=status_cb)
+            except Exception:
+                pass
             cleanup_cache()
             time.sleep(2)
             restart_game()
@@ -1328,6 +1391,10 @@ def perform_full_update(progress_cb=None, status_cb=None):
                 status_cb(f"更新成功！已应用 {count} 个文件，{pending_count} 个占用文件将在重启后生效，新版本 v{new_version}，即将重启...")
         elif status_cb:
             status_cb(f"更新成功！已应用 {count} 个文件，新版本 v{new_version}，即将重启...")
+        try:
+            sync_gamedata(status_cb=status_cb)
+        except Exception:
+            pass
 
         # 4. 清理缓存
         cleanup_cache()

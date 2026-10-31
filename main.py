@@ -20,6 +20,21 @@ def resource_path(relative_path):
     return os.path.join(os.path.abspath("."), relative_path)
 
 import pygame
+
+# v2.8.5 数据编辑模式（后门）：python main.py --no-db-sync
+# 开启后游戏不会自动更新 game_data.db，可自由编辑数据测试。
+# 这里同步写入环境变量，确保所有后续模块统一识别。
+if any(_f in sys.argv for _f in ("--no-db-sync", "--db-edit", "--no-db-update")):
+    os.environ["ZS_DB_NO_SYNC"] = "1"
+try:
+    from gamedata import editmode as _editmode
+    _banner = _editmode.banner()
+    if _banner:
+        print(_banner)
+except Exception:
+    pass
+
+import pygame
 from game import Game, logger
 
 _text_input_started = False

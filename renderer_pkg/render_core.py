@@ -2,6 +2,8 @@
 # -*- coding: utf-8 -*-
 """渲染系统模块 - 黑暗色调版：技能卡选择、防爆套装动画、半透明范围圈"""
 
+import time
+
 import pygame
 import mod_loader
 import math
@@ -170,10 +172,41 @@ class RenderCore:
             self._draw_playing()
             self._draw_rune_view()
 
+        # v2.8.5：数据编辑模式角标（提醒当前不会自动更新数据库）
+        self._draw_edit_mode_badge()
+
         # v2.1.7：GLSL 后处理（GL 可用时；不可用/异常静默跳过，pygame 原生渲染完整保留）
         _gl_postprocess(self.game, self.screen, state)
 
         pygame.display.flip()
+
+    def _draw_edit_mode_badge(self):
+        """v2.8.5 数据编辑模式角标：屏幕右上角小字提示
+
+        只在开启时绘制，且每秒闪烁一次，避免玩家忘记关掉后
+        误以为"改了数据没生效/数值不对"。
+        """
+        try:
+            from gamedata import editmode as _em
+            if not _em.enabled():
+                return
+        except Exception:
+            return
+        try:
+            g = self.game
+            _blink = (int(time.time()) % 2 == 0)
+            _col = (255, 190, 80) if _blink else (150, 110, 50)
+            _txt = "DB 编辑模式（不自动更新）"
+            _surf = g.font_small.render(_txt, True, _col)
+            _x = g.scaled_width - _surf.get_width() - int(8 * g.scale)
+            _y = int(4 * g.scale)
+            _pad = int(3 * g.scale)
+            pygame.draw.rect(self.screen, (0, 0, 0),
+                             (_x - _pad, _y - _pad,
+                              _surf.get_width() + _pad * 2, _surf.get_height() + _pad * 2))
+            self.screen.blit(_surf, (_x, _y))
+        except Exception:
+            pass
 
     def _paint_weapon_icon(self, entry_key, x, y, w, h):
         """程序化绘制武器图标（按武器类型画剪影）"""

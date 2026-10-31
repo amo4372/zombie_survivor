@@ -6,6 +6,8 @@
     python -m gamedata export     # 导出 game_data.json（便于对比/版本管理）
     python -m gamedata verify     # 校验完整性
     python -m gamedata show 表名   # 打印某张表
+    python -m gamedata edit on|off # 数据编辑模式开关（开启后游戏不自动更新数据库）
+    python -m gamedata diff        # 对比数据库与内置默认值的差异
 """
 
 import json
@@ -17,6 +19,7 @@ from .schema import create_all, TABLES
 from . import seed as S
 from .db import connect
 from . import defaults as D
+from . import editmode
 
 
 def _path():
@@ -105,6 +108,81 @@ def cmd_verify():
     return 0
 
 
+def cmd_edit(arg=None):
+    """数据编辑模式开关"""
+    if arg in ("on", "1", "true", "open"):
+        editmode.set_enabled(True)
+        print("已开启数据编辑模式（游戏不会自动更新数据库）")
+        return 0
+    if arg in ("off", "0", "false", "close"):
+        editmode.set_enabled(False)
+        print("已关闭数据编辑模式（下次启动恢复正常自动更新）")
+        return 0
+    _on = editmode.enabled()
+    print(f"数据编辑模式: {'开启' if _on else '关闭'}"
+          + (f"（来源：{editmode.source()}）" if _on else ""))
+    print(f"开关文件: {editmode.flag_path()}")
+    print("  开启: python -m gamedata edit on")
+    print("  关闭: python -m gamedata edit off")
+    print("  也可: python main.py --no-db-sync  或  ZS_DB_NO_SYNC=1 python main.py")
+    return 0
+
+
+def cmd_diff():
+    """对比数据库当前值与代码内置默认值的差异（便于确认改了什么再发布）"""
+    _p = _path()
+    if not os.path.exists(_p):
+        print("数据库不存在")
+        return 1
+    _conn = connect(_p)
+    _conn.row_factory = sqlite3.Row
+    _n = 0
+    for _table, _rows in (("weapons", D.extract_weapons()),
+                          ("enemies", D.extract_enemies()),
+                          ("runes", D.extract_runes()),
+                          ("buffs", D.extract_buffs()),
+                          ("skills", D.extract_skills())):
+        try:
+            _db = {_r["key"]: dict(_r) for _r in _conn.execute(f"SELECT * FROM {_table}")}
+        except Exception:
+            continue
+        for _k, _def in _rows.items():
+            if not isinstance(_def, dict):
+                continue
+            _cur = _db.get(_k)
+            if _cur is None:
+                print(f"  [{_table}] {_k}: 数据库中缺失（将由内置默认值兜底）")
+                _n += 1
+                continue
+            for _f, _dv in _def.items():
+                _cv = _cur.get(_f)
+                if _cv is None:
+                    continue
+                # 颜色统一比较：数据库存 hex
+                if isinstance(_dv, (tuple, list)) and len(_dv) >= 3:
+                    from .db import _coerce_color
+                    _cv2 = _coerce_color(_cv)
+                    if _cv2 is not None and tuple(_dv[:3]) != _cv2:
+                        print(f"  [{_table}] {_k}.{_f}: {tuple(_dv[:3])} → {_cv2}")
+                        _n += 1
+                    continue
+                try:
+                    if isinstance(_dv, bool) or isinstance(_cv, bool):
+                        _same = bool(_dv) == bool(_cv)
+                    elif isinstance(_dv, (int, float)):
+                        _same = abs(float(_dv) - float(_cv)) < 1e-9
+                    else:
+                        _same = str(_dv) == str(_cv)
+                except Exception:
+                    _same = True
+                if not _same:
+                    print(f"  [{_table}] {_k}.{_f}: {_dv} → {_cv}")
+                    _n += 1
+    _conn.close()
+    print(f"（共 {_n} 处与内置默认值不同）")
+    return 0
+
+
 def cmd_show(table):
     _p = _path()
     if not os.path.exists(_p):
@@ -140,6 +218,10 @@ def main(argv=None):
         return cmd_verify()
     if _c == "show":
         return cmd_show(_argv[1] if len(_argv) > 1 else "weapons")
+    if _c == "edit":
+        return cmd_edit(_argv[1] if len(_argv) > 1 else None)
+    if _c == "diff":
+        return cmd_diff()
     print(__doc__)
     return 1
 
