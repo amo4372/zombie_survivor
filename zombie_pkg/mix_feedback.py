@@ -156,6 +156,7 @@ class FeedbackMixin:
             # 死亡瞬间：冻结每位玩家的伤害日志（保住真正的死因数据）
             try:
                 self.death_detail_snapshot = {}
+                self.death_detail_base_time = time.monotonic()
                 for _p in self.registered_players():
                     _tag = self.tag_of(_p) if hasattr(self, 'tag_of') else "P1"
                     self.death_detail_snapshot[_tag] = _p.freeze_damage_log() \
@@ -271,7 +272,10 @@ class FeedbackMixin:
         """
         _rows = []
         try:
-            _now = time.monotonic()
+            # v2.8.4：以**死亡瞬间**为基准，不再用实时时钟。
+            # 否则玩家在结算页停留越久，ago 越大，超出窗口后条目被过滤，
+            # 伤害列表会一条条消失。
+            _now = getattr(self, 'death_detail_base_time', None) or time.monotonic()
             _snap = getattr(self, 'death_detail_snapshot', None) or {}
             for _p in self.registered_players():
                 _tag = self.tag_of(_p) if hasattr(self, 'tag_of') else "P1"
@@ -282,7 +286,7 @@ class FeedbackMixin:
                 for _r in reversed(_log):
                     _ago = _now - _r.get("t", _now)
                     if _ago > window:
-                        break
+                        continue
                     _rows.append({
                         "tag": _tag,
                         "ago": round(_ago, 2),

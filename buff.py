@@ -6,6 +6,18 @@ from enum import Enum
 from config import *
 
 
+# v2.8.4：BUFF_CONFIGS 本身也以数据库为准合并（缺行/异常保留内置值）
+try:
+    from gamedata import db as _gdb
+    for _bk in list(BUFF_CONFIGS.keys()):
+        try:
+            BUFF_CONFIGS[_bk] = _gdb.buff(_bk, fallback=BUFF_CONFIGS[_bk])
+        except Exception:
+            pass
+except Exception:
+    pass
+
+
 class BuffType(Enum):
     # === 正面 Buff ===
     SPEED_BOOST = "speed_boost"       # 加速
@@ -204,6 +216,12 @@ class Buff:
     def __init__(self, buff_type, duration=None, stacks=1):
         self.buff_type = buff_type
         self.config = BUFF_CONFIGS[buff_type]
+        # v2.8.4 数据与行为分离：以数据库 buffs 表为准，缺失/异常回退内置值
+        try:
+            from gamedata import db as _gdb
+            self.config = _gdb.buff(buff_type, fallback=self.config)
+        except Exception:
+            pass
         self.name = self.config["name"]
         self.icon = self.config["icon"]
         self.color = self.config["color"]

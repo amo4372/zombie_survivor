@@ -15,6 +15,26 @@ from replay import ReplayRecorder, load_replay, ReplayData, FreeCamera
 REPLAY_DIR = "replays"
 
 
+def _enemy_flag(e, bit):
+    """敌人帧标志位读取（兼容 v1/v2 布局，类型安全）"""
+    try:
+        _n = len(e)
+        _idx = 8 if _n >= 9 else 6      # v2: 下标8；v1: 下标6
+        return bool(int(e[_idx]) & bit)
+    except Exception:
+        return False
+
+
+def _player_flag(p, bit):
+    """玩家帧标志位读取（兼容 v1/v2 布局，类型安全）"""
+    try:
+        _n = len(p)
+        _idx = 5 if _n >= 6 else 4      # v2: 下标5；v1: 下标4
+        return bool(int(p[_idx]) & bit)
+    except Exception:
+        return False
+
+
 class ReplayMixin:
     """回放录制 / 保存 / 播放"""
 
@@ -228,6 +248,20 @@ class ReplayMixin:
         _d.speed = _steps[0]
         return _d.speed
 
+    @staticmethod
+    def _flag_of(seq, idx, bit):
+        """按位取标志（类型安全）：下标越界/类型异常一律返回 False"""
+        try:
+            _v = seq[idx]
+            return bool(int(_v) & bit)
+        except Exception:
+            # 兼容：旧版 7 字段布局 flags 在下标 6
+            try:
+                return bool(int(seq[6]) & bit)
+            except Exception:
+                return False
+
+
     def replay_stats(self):
         """回放数据面板用的统计（当前帧）"""
         _d = getattr(self, 'replay_data', None)
@@ -236,8 +270,12 @@ class ReplayMixin:
         _f = _d.current
         if _f is None:
             return {}
-        _alive = sum(1 for e in _f.enemies if e[6] & 1)
-        _boss = sum(1 for e in _f.enemies if e[6] & 2)
+        # v2.8.4 修复：帧格式为 v2（9 字段），flags 在**下标 8**，
+        # 旧代码按下标 6 取——v2 下那是 angle（float），
+        # 于是 float & 1 直接抛 "unsupported operand type(s) for &: 'float' and 'int'"，
+        # 数据面板一打开就崩。改为按 v2 布局取，并用类型安全的辅助函数兜底。
+        _alive = sum(1 for e in _f.enemies if _enemy_flag(e, 1))
+        _boss = sum(1 for e in _f.enemies if _enemy_flag(e, 2))
         return {
             "time": _f.t,
             "duration": _d.duration,

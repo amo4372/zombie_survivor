@@ -92,6 +92,10 @@ def cmd_verify():
     _have = {_r["key"] for _r in _conn.execute("SELECT key FROM weapons")}
     _miss = [k for k in _w if k not in _have]
     print(f"  武器缺失: {len(_miss)} {_miss[:5]}")
+    _sk = D.extract_skills()
+    _have_s = {_r["key"] for _r in _conn.execute("SELECT key FROM skills")}
+    _miss_s = [k for k in _sk if k not in _have_s]
+    print(f"  技能缺失: {len(_miss_s)} {_miss_s[:5]}")
     _e = D.extract_enemies()
     _have_e = {_r["key"] for _r in _conn.execute("SELECT key FROM enemies")}
     _miss_e = [k for k in _e if k not in _have_e]

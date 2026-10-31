@@ -668,9 +668,10 @@ class Player:
         返回 [(距死亡秒数, 伤害值, 类型, 来源描述, 剩余HP)]，按时间倒序（最近在前）。
         """
         try:
-            _now = time.monotonic()
+            _now = getattr(self, '_damage_log_frozen_at', None) or time.monotonic()
             _out = []
             for _r in reversed(self.damage_log):
+                # v2.8.4：基准是冻结时刻（死亡瞬间），不是实时时钟
                 _ago = _now - _r.get("t", _now)
                 if _ago > window:
                     break
@@ -689,9 +690,17 @@ class Player:
             return []
 
     def freeze_damage_log(self):
-        """v2.8.2：死亡瞬间冻结伤害日志，并返回快照（供死亡详情页面使用）"""
+        """v2.8.2：死亡瞬间冻结伤害日志，并返回快照（供死亡详情页面使用）
+
+        v2.8.4：同时记录**冻结时刻** `_damage_log_frozen_at`。
+        此后所有"距死亡 N 秒"都以这个时刻为基准计算 —— 不再用实时
+        `time.monotonic()`，否则玩家在结算页多停留一会儿，
+        每条伤害的"距死亡"就会一直往后走，超过窗口后被过滤掉，
+        表现为"看一会伤害全没了"。
+        """
         try:
             self._damage_log_frozen = True
+            self._damage_log_frozen_at = time.monotonic()
             return list(self.damage_log)
         except Exception:
             return []

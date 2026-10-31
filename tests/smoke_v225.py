@@ -10,10 +10,11 @@
 5. 更新弹窗：点"稍后"→ updater 全局持久标记置位；自动检查尊重标记
 """
 import os, sys, math
-os.chdir(os.path.dirname(os.path.abspath(__file__)))
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+os.chdir(_ROOT)
 os.environ['SDL_VIDEODRIVER'] = 'dummy'
 os.environ['SDL_AUDIODRIVER'] = 'dummy'
-sys.path.insert(0, os.getcwd())
+sys.path.insert(0, _ROOT)
 import pygame
 pygame.init()
 pygame.display.set_mode((1280, 720))

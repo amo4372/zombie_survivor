@@ -2,10 +2,11 @@
 # -*- coding: utf-8 -*-
 """v2.0.12 冒烟测试：更新弹窗修复/成就实时结算/图鉴中文名"""
 import os, sys, time
-os.chdir(os.path.dirname(os.path.abspath(__file__)))
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+os.chdir(_ROOT)
 os.environ['SDL_VIDEODRIVER'] = 'dummy'
 os.environ['SDL_AUDIODRIVER'] = 'dummy'
-sys.path.insert(0, os.getcwd())
+sys.path.insert(0, _ROOT)
 import pygame
 pygame.init()
 pygame.display.set_mode((1280, 720))

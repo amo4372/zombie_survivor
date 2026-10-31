@@ -32,6 +32,11 @@ _WEAPON_COLS = {"name", "damage", "fire_rate", "range", "speed", "spread", "pier
 
 _ENEMY_COLS = {"name", "hp", "speed", "damage", "size", "color", "desc"}
 
+_BUFF_COLS = {"name", "icon", "color", "is_debuff", "desc"}
+
+_SKILL_COLS = {"name", "desc", "max_level", "effect_key", "effect_per_level", "icon_color"}
+
+
 _RUNE_COLS = {"name", "color", "rarity", "description", "max_stacks"}
 
 
@@ -113,12 +118,51 @@ def seed_runes(conn):
     return _n
 
 
+def seed_buffs(conn):
+    _c = conn.cursor()
+    _n = 0
+    for _k, _v in (D.extract_buffs() or {}).items():
+        if not isinstance(_v, dict):
+            continue
+        _extra = {_kk: _vv for _kk, _vv in _v.items() if _kk not in _BUFF_COLS}
+        _c.execute(
+            "INSERT OR IGNORE INTO buffs(key,name,icon,color,is_debuff,desc,extra) "
+            "VALUES(?,?,?,?,?,?,?)",
+            (_k, _v.get("name"), _v.get("icon"),
+             _color(_v.get("color")) if _v.get("color") is not None else None,
+             1 if _v.get("is_debuff") else 0, _v.get("desc"), _j(_extra)))
+        _n += 1
+    conn.commit()
+    return _n
+
+
+def seed_skills(conn):
+    _c = conn.cursor()
+    _n = 0
+    for _k, _v in (D.extract_skills() or {}).items():
+        if not isinstance(_v, dict):
+            continue
+        _extra = {_kk: _vv for _kk, _vv in _v.items() if _kk not in _SKILL_COLS}
+        _c.execute(
+            "INSERT OR IGNORE INTO skills(key,name,desc,max_level,effect_key,"
+            "effect_per_level,icon_color,extra) VALUES(?,?,?,?,?,?,?,?)",
+            (_k, _v.get("name"), _v.get("desc"), _v.get("max_level"),
+             _v.get("effect_key"), _v.get("effect_per_level"),
+             _color(_v.get("icon_color")) if _v.get("icon_color") is not None else None,
+             _j(_extra)))
+        _n += 1
+    conn.commit()
+    return _n
+
+
 def seed_all(conn):
     """补种所有表（已有行不覆盖）"""
     _r = {
         "weapons": seed_weapons(conn),
         "enemies": seed_enemies(conn),
         "runes": seed_runes(conn),
+        "buffs": seed_buffs(conn),
+        "skills": seed_skills(conn),
     }
     return _r
 
@@ -126,7 +170,7 @@ def seed_all(conn):
 def rebuild(conn):
     """强制重建：清空后用默认值重灌（策划改的数据会丢失，仅用于修复损坏）"""
     _c = conn.cursor()
-    for _t in ("weapons", "enemies", "runes", "difficulty", "tuning"):
+    for _t in ("weapons", "enemies", "runes", "buffs", "skills", "difficulty", "tuning"):
         try:
             _c.execute(f"DELETE FROM {_t}")
         except Exception:

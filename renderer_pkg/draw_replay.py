@@ -17,6 +17,53 @@ import math
 import pygame
 
 
+def _to_f(v, default=0.0):
+    """强制转 float（任何异常回退默认值）"""
+    try:
+        return float(v)
+    except Exception:
+        return float(default)
+
+
+def _to_i(v, default=0):
+    """强制转 int（任何异常回退默认值）"""
+    try:
+        return int(v)
+    except Exception:
+        return int(default)
+
+
+def _unpack_enemy(e):
+    """敌人帧 → (id, type_idx, x, y, hp, max_hp, angle, size, flags)
+
+    兼容 v2（9 字段）与 v1（7 字段）两种布局，全部类型安全。
+    """
+    try:
+        _n = len(e)
+        if _n >= 9:
+            return (_to_i(e[0]), _to_i(e[1]), _to_f(e[2]), _to_f(e[3]), _to_f(e[4]),
+                    _to_f(e[5]), _to_f(e[6]), _to_f(e[7], 12.0), _to_i(e[8]))
+        if _n >= 7:
+            return (_to_i(e[0]), _to_i(e[1]), _to_f(e[2]), _to_f(e[3]), _to_f(e[4]),
+                    0.0, _to_f(e[5]), 12.0, _to_i(e[6]))
+    except Exception:
+        pass
+    return (0, 0, 0.0, 0.0, 0.0, 0.0, 0.0, 12.0, 0)
+
+
+def _unpack_player(p):
+    """玩家帧 → (x, y, hp, max_hp, angle, flags)，兼容 v2/v1，类型安全"""
+    try:
+        _n = len(p)
+        if _n >= 6:
+            return (_to_f(p[0]), _to_f(p[1]), _to_f(p[2]), _to_f(p[3], 100.0), _to_f(p[4]), _to_i(p[5]))
+        if _n >= 5:
+            return (_to_f(p[0]), _to_f(p[1]), _to_f(p[2]), 100.0, _to_f(p[3]), _to_i(p[4]))
+    except Exception:
+        pass
+    return (0.0, 0.0, 0.0, 100.0, 0.0, 0)
+
+
 # 敌人类型 → (主体色, 描边色, 幽光色或None, 体型倍率)
 def _enemy_style(type_name):
     _n = str(type_name or "").upper()
@@ -307,7 +354,10 @@ class ReplayRenderMixin:
 
         # --- 敌人（按类型着色 + 幽光 + 体型）---
         for _e in _f.enemies:
-            _eid, _ti, _ex, _ey, _ehp, _emax, _ea, _esize, _ef = _e
+            # v2.8.4 类型安全：帧字段一律强制转换，并兼容 v1 的 7 字段布局。
+            # 此前直接 & 运算，字段一旦是 float（v2 布局下标错位/异常数据）
+            # 就抛 "unsupported operand type(s) for &: 'float' and 'int'"。
+            _eid, _ti, _ex, _ey, _ehp, _emax, _ea, _esize, _ef = _unpack_enemy(_e)
             if not (_ef & 1):
                 continue
             _sx, _sy = w2s(_ex, _ey)
@@ -315,7 +365,8 @@ class ReplayRenderMixin:
                 continue
             _name = _types[_ti] if _ti < len(_types) else ""
             _body, _edge, _glow, _mult = _enemy_style(_name)
-            _r = max(3, int((_esize if _esize > 0 else 12.0) * 0.55 * _mult * _cam.zoom * _s))
+            _mult = _to_f(_mult, 1.0)
+            _r = max(3, int((_esize if _esize > 0 else 12.0) * 0.55 * _mult * _to_f(_cam.zoom) * _to_f(_s)))
             # 幽光
             if _glow:
                 _gs = _r * 3
@@ -349,12 +400,12 @@ class ReplayRenderMixin:
         # --- 玩家（带朝向、血条、标签）---
         _pcols = [(110, 225, 255), (255, 205, 110), (175, 255, 175), (255, 155, 215)]
         for _pi, _p in enumerate(_f.players):
-            _px2, _py2, _php, _pmax, _pa, _pf = _p
+            _px2, _py2, _php, _pmax, _pa, _pf = _unpack_player(_p)
             _sx, _sy = w2s(_px2, _py2)
             _alive = bool(_pf & 1)
             _downed = bool(_pf & 2)
-            _col = _pcols[_pi % 4] if _alive else (115, 115, 120)
-            _r = max(5, int(13 * _cam.zoom * _s))
+            _col = tuple(_pcols[_pi % 4]) if _alive else (115, 115, 120)
+            _r = max(5, int(13 * _to_f(_cam.zoom) * _to_f(_s)))
             pygame.draw.ellipse(self.screen, (8, 8, 10),
                                 (_sx - _r, _sy + int(_r * 0.6), _r * 2, max(2, int(_r * 0.5))))
             pygame.draw.circle(self.screen, _col, (_sx, _sy), _r)

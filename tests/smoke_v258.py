@@ -14,10 +14,11 @@ import os
 import sys
 import math
 
-os.chdir(os.path.dirname(os.path.abspath(__file__)))
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+os.chdir(_ROOT)
 os.environ['SDL_VIDEODRIVER'] = 'dummy'
 os.environ['SDL_AUDIODRIVER'] = 'dummy'
-sys.path.insert(0, os.getcwd())
+sys.path.insert(0, _ROOT)
 
 import pygame
 pygame.init()

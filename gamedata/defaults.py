@@ -213,7 +213,9 @@ def _build_namespace(path):
     # 枚举全部定义在 config.py（v2.8.3 文件结构整理后集中于此）
     for _rel, _cls in (("config.py", "WeaponType"),
                        ("config.py", "EnemyType"),
-                       ("config.py", "RuneType")):
+                       ("config.py", "RuneType"),
+                       ("buff.py", "BuffType"),
+                       ("skills.py", "SkillType")):
         _members = _enum_members_from_source(_os.path.join(_root, _rel), _cls)
         if not _members:
             continue
@@ -239,6 +241,76 @@ def extract_enemies():
     _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     return _extract_dict_from_source(os.path.join(_root, "entities_pkg", "enemy.py"),
                                      func_name=None, var_name="base_configs")
+
+
+def extract_buffs():
+    """从 buff.py 抽取 BUFF_CONFIGS"""
+    import os
+    _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return _extract_dict_from_source(os.path.join(_root, "buff.py"),
+                                     func_name=None, var_name="BUFF_CONFIGS")
+
+
+def extract_skills():
+    """从 skills.py 抽取技能卡数值
+
+    技能不是字典字面量，而是 `Skill(SkillType.XXX, 名称, 描述, 上限, ...)`
+    的调用列表，所以用 AST 解析 Call 的关键字参数。
+    """
+    import ast
+    import os as _os
+    _root = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+    _src_path = _os.path.join(_root, "skills.py")
+    try:
+        with open(_src_path, "r", encoding="utf-8") as _f:
+            _tree = ast.parse(_f.read())
+    except Exception:
+        return {}
+    _ns = _build_namespace(_src_path)
+    _out = {}
+    for _n in ast.walk(_tree):
+        if not isinstance(_n, ast.Call):
+            continue
+        _fn = _n.func
+        _fname = getattr(_fn, "id", None) or getattr(_fn, "attr", None)
+        if _fname != "Skill":
+            continue
+        if not _n.args or not isinstance(_n.args[0], ast.Attribute):
+            continue
+        _key = _n.args[0].attr
+
+        def _lit(node):
+            try:
+                return ast.literal_eval(node)
+            except Exception:
+                if isinstance(node, ast.Name):
+                    return _ns.get(node.id)
+                if isinstance(node, ast.Attribute):
+                    _b = _ns.get(getattr(node.value, "id", ""))
+                    return getattr(_b, node.attr, None) if _b is not None else None
+                return None
+
+        _row = {"key": _key}
+        if len(_n.args) >= 2:
+            _row["name"] = _lit(_n.args[1]) or _key
+        if len(_n.args) >= 3:
+            _row["desc"] = _lit(_n.args[2]) or ""
+        if len(_n.args) >= 4:
+            try:
+                _row["max_level"] = int(_lit(_n.args[3]))
+            except Exception:
+                pass
+        for _kw in _n.keywords:
+            if _kw.arg in ("effect_key", "effect_per_level"):
+                _row[_kw.arg] = _lit(_kw.value)
+            elif _kw.arg == "icon_color":
+                _row["icon_color"] = _lit(_kw.value)
+            elif _kw.arg == "is_active":
+                _row["is_active"] = 1 if _lit(_kw.value) else 0
+            elif _kw.arg == "level_descriptions":
+                _row["level_descriptions"] = _lit(_kw.value)
+        _out[_key] = _row
+    return _out
 
 
 def extract_runes():

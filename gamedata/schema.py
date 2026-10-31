@@ -75,6 +75,20 @@ SCHEMA = {
             description        TEXT
         )""",
 
+    # Buff 参数：key 为 BuffType 枚举名；extra 存各类倍率（JSON）
+    "buffs": (
+        "CREATE TABLE IF NOT EXISTS buffs ("
+        "key TEXT PRIMARY KEY, name TEXT, icon TEXT, color TEXT,"
+        " is_debuff INTEGER, desc TEXT, extra TEXT)"
+    ),
+
+    # 技能卡数值：key 为 SkillType 枚举名
+    "skills": (
+        "CREATE TABLE IF NOT EXISTS skills ("
+        "key TEXT PRIMARY KEY, name TEXT, desc TEXT, max_level INTEGER,"
+        " effect_key TEXT, effect_per_level REAL, icon_color TEXT, extra TEXT)"
+    ),
+
     # 全局调参：key-value（尸潮间隔、掉落率、玩家基础属性等标量）
     "tuning": """
         CREATE TABLE IF NOT EXISTS tuning (
