@@ -89,6 +89,56 @@ class ReplayMixin:
         except Exception:
             pass
 
+    def finalize_replay(self, tag="death"):
+        """v2.8.7 统一的"局末归档"：冻结伤害日志 + 强制采样 + 保存回放
+
+        此前只有『玩家死亡』路径（`_begin_death_reaction`）做了这些，
+        **PvP 阵营胜利 / 计时结算 / 其他结束路径一律没做** →
+        表现为"多人模式不保存录像""PvP 死亡详情空白"。
+
+        现在任何结束路径都调用本函数，保证：
+        - 每位玩家的伤害日志都被冻结（死亡详情有数据且时间不漂移）
+        - 强制落最后一帧 + 写死亡/结算事件
+        - 自动保存 .zsr 回放
+        可重复调用（第二次起只保存一次，不会重复写文件）。
+        """
+        try:
+            # 1) 冻结所有玩家的伤害日志（死亡详情数据源）
+            try:
+                if getattr(self, 'death_detail_base_time', None) is None:
+                    self.death_detail_base_time = time.monotonic()
+                _snap = getattr(self, 'death_detail_snapshot', None)
+                if not _snap:
+                    self.death_detail_snapshot = {}
+                    for _p in self.registered_players():
+                        _tag = self.tag_of(_p) if hasattr(self, 'tag_of') else "P1"
+                        try:
+                            self.death_detail_snapshot[_tag] = (
+                                _p.freeze_damage_log()
+                                if hasattr(_p, 'freeze_damage_log')
+                                else list(getattr(_p, 'damage_log', []) or []))
+                        except Exception:
+                            self.death_detail_snapshot[_tag] = []
+            except Exception:
+                pass
+
+            # 2) 强制采样最后一帧 + 事件 + 保存
+            try:
+                if getattr(self, 'death_replay_saved', False):
+                    return getattr(self, 'replay_last_saved', None)
+                _r = getattr(self, 'replay_recorder', None)
+                if _r is not None and _r.frames:
+                    _r.force_capture(self.registered_players(), getattr(self, 'enemies', []))
+                    self.replay_event("death", "本局结束", 0, 0, 0, tag=tag)
+                    _saved = self.save_replay(tag=tag)
+                    self.death_replay_saved = bool(_saved)
+                    return _saved
+            except Exception:
+                pass
+            return None
+        except Exception:
+            return None
+
     def save_replay(self, name=None, tag="manual"):
         """把当前环形缓冲存成 .zsr 文件，返回路径（失败返回 None）"""
         try:

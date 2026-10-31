@@ -647,12 +647,17 @@ class PlayMixin:
                     except Exception:
                         pass
                     # v2.2.3 载具期间仍渲染钩爪线（riot_gear.draw 独立于玩家绘制）
+                    # v2.8.7：own_view=False —— 别人的视口里只画已发射的绳索，
+                    # 不画瞄准中的预瞄线/锁定圈（否则等于泄露自己的瞄准意图）
                     try:
-                        p.riot_gear.draw(self.screen, p.x, p.y, cam_x, cam_y, scale)
+                        p.riot_gear.draw(self.screen, p.x, p.y, cam_x, cam_y, scale,
+                                         own_view=False)
                     except Exception:
                         pass
                 else:
-                    p.draw(self.screen, cam_x, cam_y, self.game.font, scale)
+                    # v2.8.7：别人视口 → 不画本玩家的钩爪预瞄/锁定圈
+                    p.draw(self.screen, cam_x, cam_y, self.game.font, scale,
+                           own_view=False)
                 # v2.5.4 头顶状态：血条 + 名字/阵营色（PvP 敌方红、队友绿）
                 try:
                     _px = int((p.x - cam_x) * scale)
@@ -833,12 +838,44 @@ class PlayMixin:
         self.game.particles.draw(self.screen, cam_x, cam_y, scale)
 
         # 绘制伤害数字
+        # v2.8.7：列表中可能混入 None / 无 draw 的对象（第三方 Mod 通过
+        # spawn_damage_number 注入时 import 失败会塞进 None），
+        # 此前直接 dn.draw() → AttributeError 打断整帧渲染，表现为"游戏卡死报错"。
+        # 这里做防御：跳过不可用元素，并在遍历后顺手清理，避免列表无限增长。
+        _bad = False
         for dn in self.game.damage_numbers:
-            dn.draw(self.screen, self.game.font, cam_x, cam_y, scale)
+            if dn is None or not hasattr(dn, "draw"):
+                _bad = True
+                continue
+            try:
+                dn.draw(self.screen, self.game.font, cam_x, cam_y, scale)
+            except Exception:
+                _bad = True
+        if _bad:
+            try:
+                self.game.damage_numbers = [
+                    _d for _d in self.game.damage_numbers
+                    if _d is not None and hasattr(_d, "draw")]
+            except Exception:
+                pass
 
-        # 绘制浮动文字
+        # 绘制浮动文字（同样的防御）
+        _bad2 = False
         for ft in self.game.floating_texts:
-            ft.draw(self.screen, self.game.font, cam_x, cam_y, scale)
+            if ft is None or not hasattr(ft, "draw"):
+                _bad2 = True
+                continue
+            try:
+                ft.draw(self.screen, self.game.font, cam_x, cam_y, scale)
+            except Exception:
+                _bad2 = True
+        if _bad2:
+            try:
+                self.game.floating_texts = [
+                    _f for _f in self.game.floating_texts
+                    if _f is not None and hasattr(_f, "draw")]
+            except Exception:
+                pass
 
         # 绘制刀光弧斩特效（死神镰刀/枪械曳光）
         for sa in getattr(self.game, 'slash_arcs', []):

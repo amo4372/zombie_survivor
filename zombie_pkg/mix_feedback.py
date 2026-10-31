@@ -163,14 +163,15 @@ class FeedbackMixin:
                         if hasattr(_p, 'freeze_damage_log') else list(getattr(_p, 'damage_log', []) or [])
             except Exception:
                 pass
-            # 死亡瞬间：强制落一帧 + 自动保存回放（多人模式同样生效）
+            # 死亡瞬间：统一走局末归档（冻结日志 + 强制采样 + 保存回放）
             try:
-                if getattr(self, 'replay_recorder', None) is not None:
+                if hasattr(self, 'finalize_replay'):
+                    self.finalize_replay(tag="death")
+                elif getattr(self, 'replay_recorder', None) is not None:
                     self.replay_recorder.force_capture(self.registered_players(),
                                                        getattr(self, 'enemies', []))
                     self.replay_event("death", "玩家阵亡", 0, 0, 0, tag="death")
-                    _saved = self.save_replay(tag="death")
-                    self.death_replay_saved = bool(_saved)
+                    self.death_replay_saved = bool(self.save_replay(tag="death"))
             except Exception:
                 pass
             self.state = GameState.DYING

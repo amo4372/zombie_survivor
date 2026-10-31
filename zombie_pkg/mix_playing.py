@@ -2562,6 +2562,14 @@ class PlayingMixin:
         """v2.4.0 阵营胜利结算：显示阵营胜利页面"""
         if self.state != GameState.PLAYING:
             return
+        # v2.8.7：PvP/阵营胜利**此前完全不归档** —— 不冻结伤害日志、不保存回放，
+        # 导致结算页「死亡详情」空白、「观看回放」无录像可用。
+        # 现在与死亡路径统一走 finalize_replay()。
+        try:
+            if hasattr(self, 'finalize_replay'):
+                self.finalize_replay(tag="victory")
+        except Exception:
+            pass
         self.victory_team = int(team or 0)
         self.victory_timer = 3.0
         # v2.5.2 多人胜利统计与成就（mp_first_win / mp_pvp_win / mp_team_win）

@@ -741,7 +741,13 @@ class Player:
         return pygame.Rect(self.x - self.size, self.y - self.size, 
                           self.size * 2, self.size * 2)
 
-    def draw(self, screen, camera_x, camera_y, font, scale=1.0, assets=None):
+    def draw(self, screen, camera_x, camera_y, font, scale=1.0, assets=None,
+             own_view=True):
+        """绘制玩家
+
+        v2.8.7：`own_view=False` 表示"这是别人的视口"。
+        钩爪的瞄准预瞄/锁定圈只在本人的视口绘制（详见 gear.draw 注释）。
+        """
         px = int((self.x - camera_x) * scale)
         py = int((self.y - camera_y) * scale)
         # 用 render_size（泰坦符文体型增大用），碰撞仍用原 size
@@ -785,7 +791,8 @@ class Player:
         except Exception:
             pass
 
-        self.riot_gear.draw(screen, self.x, self.y, camera_x, camera_y, scale)
+        self.riot_gear.draw(screen, self.x, self.y, camera_x, camera_y, scale,
+                             own_view=own_view)
 
         bar_width = int(40 * scale)
         bar_height = max(2, int(6 * scale))

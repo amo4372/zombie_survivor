@@ -745,7 +745,18 @@ class RiotGear:
         if enemy:
             self.grapple_target_pos = (enemy.x, enemy.y)
 
-    def draw(self, screen, player_x, player_y, camera_x, camera_y, scale=1.0):
+    def draw(self, screen, player_x, player_y, camera_x, camera_y, scale=1.0,
+             own_view=True):
+        """绘制钩爪
+
+        v2.8.7：`own_view=False` 表示"这不是该钩爪主人的视口"。
+        此时**只画已发射的绳索/钩头**（对手看得见你在勾谁是合理的），
+        但**不画瞄准中的预瞄线 / 锁定圈 / 蓄力弧** —— 那些是私有信息，
+        漏到别人屏幕上等于暴露你的瞄准意图和锁定目标。
+
+        此前渲染层对"所有玩家"无差别调用本函数，
+        于是 P2 的预瞄线出现在 P1 屏幕、P1 的锁定圈出现在 P2 屏幕。
+        """
         px = int((player_x - camera_x) * scale)
         py = int((player_y - camera_y) * scale)
 
@@ -792,7 +803,8 @@ class RiotGear:
                 pygame.draw.circle(screen, (*((120, 230, 140))[:3], 60), (ex, ey), max(5, int(10 * scale)))
 
         # v2.2.7/11 瞄准锁定圈：中心=锚点（预瞄终点，随瞄准实时移动），半径随蓄力由小到大
-        if self.grapple_aiming and not self.grapple_active:
+        # v2.8.7：只在本人视口绘制
+        if own_view and self.grapple_aiming and not self.grapple_active:
             _anch = getattr(self, 'grapple_aim_anchor', None)
             if _anch is not None:
                 _ax, _ay = _anch

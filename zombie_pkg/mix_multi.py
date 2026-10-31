@@ -325,7 +325,8 @@ class MultiplayerMixin:
                     c2["skill_caster"].is_aiming = True
                 # v2.2.6：P2 钩爪瞄准锁定圈更新（键控 U 长按）
                 # v2.6.4 修复：仅在选择了钩爪技能时才更新锁定圈
-                if self.p2_selected_skill == SkillType.GRAPPLE_PULL:
+                # v2.8.7：装备防爆套装后钩爪即可用，不再要求选中 GRAPPLE_PULL 技能卡
+                if self._p2_grapple_available(p2):
                     self._update_p2_grapple_lock(p2, bool(self.u_aim_started))
                 else:
                     rg = p2.riot_gear
@@ -363,10 +364,11 @@ class MultiplayerMixin:
                     pass
                 # v2.2.6/11：P2 钩爪瞄准锁定圈更新（触控长按，锚点跟随瞄准移动）
                 # v2.6.4 修复：仅在选择了钩爪技能时才更新锁定圈
-                if self.p2_selected_skill == SkillType.GRAPPLE_PULL:
+                # v2.8.7：同上，套装已装备也算钩爪可用
+                if self._p2_grapple_available(p2):
                     self._update_p2_grapple_lock(p2, bool(c2sc.is_aiming), caster=c2sc)
                 else:
-                    # 非钩爪技能时清除瞄准状态
+                    # 钩爪不可用时清除瞄准状态
                     rg = p2.riot_gear
                     rg.grapple_aiming = False
                     if not rg.grapple_active:
@@ -860,6 +862,26 @@ class MultiplayerMixin:
             return _wt is not None and getattr(_wt, "name", "") == "SCYTHE"
         except Exception:
             return False
+
+    def _p2_grapple_available(self, p2):
+        """v2.8.7：P2 当前是否"可用钩爪"
+
+        此前锁定圈只在 `p2_selected_skill == GRAPPLE_PULL` 时更新。
+        但钩爪在 v2.7.0 后已改为**防爆套装自带能力**，不再占技能卡位，
+        只要装备了套装就能用 —— 于是 P2 装备套装后瞄准，
+        选中技能并不是 GRAPPLE_PULL，锁定圈永远不更新，表现为"自动锁定无效"。
+
+        现在两种情况都算可用：选中了钩爪技能，或套装已装备（钩爪随套装解锁）。
+        """
+        try:
+            if self.p2_selected_skill == SkillType.GRAPPLE_PULL:
+                return True
+            _rg = getattr(p2, 'riot_gear', None)
+            if _rg is not None and bool(getattr(_rg, 'equipped', False)):
+                return True
+        except Exception:
+            pass
+        return False
 
     def _update_p2_grapple_lock(self, p2, aiming, caster=None):
         """v2.2.6/11：P2 钩爪瞄准锁定圈更新（瞄准中圈内锁定最近非 Boss 敌人）

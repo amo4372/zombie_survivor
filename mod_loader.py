@@ -511,16 +511,37 @@ class ModAPI:
     def spawn_damage_number(self, x, y, damage, color=(255, 255, 255)):
         """生成伤害数字"""
         if self._game:
-            from entities import DamageNumber
+            # v2.8.7 修复：entities 模块里并没有 DamageNumber（实际在 ui_pkg.fx），
+            # 此前 import 直接 ImportError；即使勉强拿到也会把 None 塞进列表，
+            # 导致渲染时 dn.draw() → AttributeError。改为从正确位置导入并校验。
+            try:
+                from ui import DamageNumber
+            except Exception:
+                try:
+                    from ui_pkg.fx import DamageNumber
+                except Exception:
+                    return None
             dn = DamageNumber(x, y, damage, color)
+            if dn is None:
+                return None
             self._game.damage_numbers.append(dn)
+            return dn
     
     def spawn_floating_text(self, x, y, text, color=(255, 255, 255)):
         """生成浮动文字"""
         if self._game:
-            from ui import FloatingText
+            try:
+                from ui import FloatingText
+            except Exception:
+                try:
+                    from ui_pkg.fx import FloatingText
+                except Exception:
+                    return None
             ft = FloatingText(x, y, text, color)
+            if ft is None:
+                return None
             self._game.floating_texts.append(ft)
+            return ft
     
     def screen_shake(self, intensity=10, duration=0.3):
         """屏幕震动"""

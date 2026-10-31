@@ -91,6 +91,22 @@ class Button:
         self.visible = True
         self.enabled = True
         self.was_pressed = False
+        # v2.8.7 去抖：同一次物理点击只允许生效一次。
+        # 移动端（Pydroid3/Android）触摸会**同时**产生 FINGERDOWN/FINGERUP 和
+        # MOUSEBUTTONDOWN/MOUSEBUTTONUP 两套事件，且两者的抬起往往落在不同帧：
+        #   FINGERUP 在第 N 帧触发一次，MOUSEBUTTONUP 在第 N+1 帧再触发一次
+        # → 表现为"点一下按钮，动作执行了两次"（回放里点播放=播了又停，
+        #   点倍速=跳两档，点退出=连续退出两层）。
+        self._last_click_ms = -10 ** 9
+        self.click_debounce_ms = 180      # 需要极快连点的按钮可自行调小
+
+    def _now_ms(self):
+        try:
+            import pygame
+            return pygame.time.get_ticks()
+        except Exception:
+            import time
+            return int(time.time() * 1000)
 
     def get_scaled_rect(self, scale=1.0):
         return pygame.Rect(
@@ -132,6 +148,13 @@ class Button:
             # 仅重置鼠标按下态；触控按下用独立 touch_pressed 保持，
             # 不会被此处清掉（纯触控设备鼠标光标不在按钮上，原逻辑会吞掉触控点击）
             self.pressed = False
+
+        # v2.8.7 去抖：无论上面由哪条路径判定成功，短时间内只放行一次
+        if clicked:
+            _now = self._now_ms()
+            if _now - self._last_click_ms < self.click_debounce_ms:
+                return False
+            self._last_click_ms = _now
         return clicked
 
     def draw(self, screen, font, scale=1.0):
