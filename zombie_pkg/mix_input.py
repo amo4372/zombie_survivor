@@ -332,6 +332,41 @@ class InputMixin:
                         self._apply_skill_card(selected)
             return mouse_pos, mouse_pressed
 
+        # v2.8.2 死亡详情独立页面：滚动 + 退出
+        if self.state == GameState.DEATH_DETAIL:
+            for event in all_events:
+                if event.type == pygame.QUIT:
+                    logger.info("收到退出事件")
+                    self.running = False
+                elif event.type == pygame.KEYDOWN:
+                    if event.key in (pygame.K_ESCAPE, pygame.K_RETURN, pygame.K_SPACE,
+                                     pygame.K_BACKSPACE):
+                        self.show_death_detail = False
+                        self.death_detail_scroll = 0
+                        self.state = GameState.GAME_OVER
+                        return mouse_pos, mouse_pressed
+                    elif event.key == pygame.K_DOWN:
+                        self.death_detail_scroll = max(0, getattr(self, 'death_detail_scroll', 0) - 0) + 1
+                    elif event.key == pygame.K_UP:
+                        self.death_detail_scroll = max(0, getattr(self, 'death_detail_scroll', 0) - 1)
+                elif event.type == pygame.MOUSEWHEEL:
+                    self.death_detail_scroll = max(
+                        0, getattr(self, 'death_detail_scroll', 0) + (-event.y))
+                elif event.type == pygame.MOUSEBUTTONDOWN:
+                    if event.button in (4, 5):
+                        self.death_detail_scroll = max(
+                            0, getattr(self, 'death_detail_scroll', 0) + (1 if event.button == 5 else -1))
+                elif event.type == pygame.FINGERMOTION:
+                    # 触控滑动滚动列表
+                    try:
+                        _dy = getattr(event, 'dy', 0) or 0
+                        if _dy:
+                            self.death_detail_scroll = max(
+                                0, getattr(self, 'death_detail_scroll', 0) + int(-_dy * 10))
+                    except Exception:
+                        pass
+            return mouse_pos, mouse_pressed
+
         # v2.8.0 回放：键盘控制（空格/逐帧/倍速/缩放/跟随/退出）
         if self.state == GameState.REPLAY:
             for event in all_events:
@@ -350,6 +385,8 @@ class InputMixin:
                         self.replay_step(1)
                     elif event.key == pygame.K_f:
                         self.replay_follow = not getattr(self, 'replay_follow', True)
+                    elif event.key == pygame.K_d:
+                        self.replay_show_data = not getattr(self, 'replay_show_data', False)
                     elif event.key in (pygame.K_1, pygame.K_2, pygame.K_3, pygame.K_4):
                         _sp = {pygame.K_1: 0.5, pygame.K_2: 1.0,
                                pygame.K_3: 2.0, pygame.K_4: 4.0}[event.key]
@@ -358,6 +395,17 @@ class InputMixin:
                 elif event.type == pygame.MOUSEWHEEL:
                     if getattr(self, 'replay_cam', None) is not None:
                         self.replay_cam.zoom_by(1.15 if event.y > 0 else 1 / 1.15)
+                elif event.type == pygame.FINGERMOTION:
+                    # 触控拖动 = 移动自由摄像机
+                    try:
+                        if getattr(self, 'replay_cam', None) is not None:
+                            _dx = getattr(event, 'dx', 0) or 0
+                            _dy = getattr(event, 'dy', 0) or 0
+                            if _dx or _dy:
+                                self.replay_follow = False
+                                self.replay_cam.move(-_dx * 2.2, -_dy * 2.2)
+                    except Exception:
+                        pass
                 elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     # 点击时间轴跳转
                     try:

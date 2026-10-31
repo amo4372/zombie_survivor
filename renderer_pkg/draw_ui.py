@@ -3326,7 +3326,11 @@ class UiMixin:
         _db.visible = True
         _rb.visible = True
         if _db.update(mouse_pos, mouse_pressed, self.game.touch_events, scale):
-            self.game.toggle_death_detail()
+            # v2.8.2：进入独立页面（不再用反人类的结算页浮层）
+            from config import GameState
+            self.game.show_death_detail = True
+            self.game.death_detail_scroll = 0
+            self.game.state = GameState.DEATH_DETAIL
         # 回放：优先播放本局刚存的死亡回放，否则播放最近一份
         if _rb.update(mouse_pos, mouse_pressed, self.game.touch_events, scale):
             _path = getattr(self.game, 'replay_last_saved', None)
@@ -3346,8 +3350,7 @@ class UiMixin:
             self.game.state = GameState.MENU
         btn.draw(self.screen, self.game.font_large, scale)
 
-        # v2.8.0 死亡详情面板（浮在最上层）
-        self._draw_death_detail()
+        # v2.8.2：死亡详情改为独立页面，此处不再绘制浮层
 
     def _draw_victory(self):
         """故事模式通关界面"""

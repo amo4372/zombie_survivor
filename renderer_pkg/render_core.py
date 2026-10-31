@@ -131,6 +131,9 @@ class RenderCore:
         elif state == GameState.REPLAY:
             # v2.8.0 全局回放：自由摄像机重看战况
             self._draw_replay()
+        elif state == GameState.DEATH_DETAIL:
+            # v2.8.2 死亡详情：独立页面（带退出按钮）
+            self._draw_death_detail_page()
         elif state == GameState.GAME_OVER:
             self._draw_game_over()
         elif state == GameState.VICTORY:

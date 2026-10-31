@@ -115,6 +115,16 @@ class ReplayMixin:
         self.replay_data = _d
         self.replay_cam = FreeCamera(0.0, 0.0, 1.0)
         self.replay_playing = True
+        self.replay_follow = True
+        # v2.8.2 玩家向：默认隐藏数据面板（按 D/数据键可切换），
+        # 默认从「致死时刻前 3 秒」开始播，直接看到自己是怎么死的
+        self.replay_show_data = False
+        try:
+            _di = _d.death_index()
+            _back = int(3.0 * float(_d.meta.get("sample_hz", 20)))
+            _d.index = max(0, _di - _back)
+        except Exception:
+            _d.index = 0
         # 摄像机对准第一位玩家
         _f = _d.current
         if _f and _f.players:

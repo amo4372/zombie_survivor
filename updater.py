@@ -212,6 +212,30 @@ def check_for_updates(timeout=6):
         if not download_url:
             download_url = data.get("zipball_url")
 
+        # v2.8.2：若最新版被标记为"错误版本"（曾导致游戏打不开），则改用
+        # 次新的可用版本，避免反复更新到同一个坏版本。
+        try:
+            if is_version_broken(latest_version):
+                _alt = find_latest_good_version(get_current_version())
+                if _alt and _alt[1] != data.get("tag_name"):
+                    _alt_data = _release_api(f"/releases/tags/{_alt[1]}")
+                    latest_version = _alt[0]
+                    changelog = _alt_data.get("body", "") or changelog
+                    _assets2 = _alt_data.get("assets", [])
+                    for _a2 in _assets2:
+                        _n2 = str(_a2.get("name", "")).lower()
+                        if _n2.endswith(".zip"):
+                            download_url = _gh_proxy_url(_a2.get("browser_download_url"),
+                                                         mirror=UPDATE_STATE.get("mirror"))
+                            _asset_size = int(_a2.get("size", 0) or 0)
+                            break
+                        if _n2 == "manifest.json":
+                            UPDATE_STATE["manifest_url"] = _gh_proxy_url(
+                                _a2.get("browser_download_url"), mirror=UPDATE_STATE.get("mirror"))
+                    changelog = "（已跳过标记为异常的旧版本）\n" + changelog
+        except Exception:
+            pass
+
         # v2.5.8：下载URL也走最快节点
         if download_url:
             download_url = _gh_proxy_url(download_url, mirror=UPDATE_STATE.get("mirror"))
@@ -256,6 +280,233 @@ USER_DATA_FILES = {
     "game_log.txt", "_update_cache", "_update_backup", "releases", "dist_encrypted",
     "__pycache__", ".git",
 }
+
+
+# ==================== v2.8.2 致命错误自愈 ====================
+# 场景：某次更新后游戏**根本打不开**（如 ModuleNotFoundError / SyntaxError / NameError）。
+# 处理：尝试更新到更新的版本 → 若无更新版本，则回退到上一个可用版本，
+#       并把当前版本标记为"错误版本"，以后检查更新时自动跳过它。
+BROKEN_VERSIONS_FILE = "broken_versions.json"
+
+
+def _broken_file_path(game_dir=None):
+    if game_dir is None:
+        game_dir = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(game_dir, BROKEN_VERSIONS_FILE)
+
+
+def load_broken_versions(game_dir=None):
+    """读取被标记为错误的版本集合"""
+    try:
+        _p = _broken_file_path(game_dir)
+        if not os.path.exists(_p):
+            return set()
+        with open(_p, "r", encoding="utf-8") as _f:
+            _d = json.load(_f)
+        _lst = _d.get("broken", []) if isinstance(_d, dict) else list(_d)
+        return set(str(x) for x in _lst)
+    except Exception:
+        return set()
+
+
+def mark_version_broken(version, reason="", game_dir=None):
+    """把指定版本标记为错误版本（后续检查更新时跳过）"""
+    try:
+        _p = _broken_file_path(game_dir)
+        _d = {"broken": [], "history": []}
+        if os.path.exists(_p):
+            try:
+                with open(_p, "r", encoding="utf-8") as _f:
+                    _d = json.load(_f)
+            except Exception:
+                pass
+        _broken = set(str(x) for x in (_d.get("broken", []) if isinstance(_d, dict) else []))
+        _broken.add(str(version))
+        _d["broken"] = sorted(_broken)
+        _hist = _d.get("history", []) if isinstance(_d, dict) else []
+        _hist.append({"version": str(version), "reason": str(reason)[:300],
+                      "time": time.strftime("%Y-%m-%d %H:%M:%S")})
+        _d["history"] = _hist[-30:]
+        with open(_p, "w", encoding="utf-8") as _f:
+            json.dump(_d, _f, ensure_ascii=False, indent=2)
+        UPDATE_STATE["broken_versions"] = _broken
+        return True
+    except Exception:
+        return False
+
+
+def is_version_broken(version):
+    return str(version) in load_broken_versions()
+
+
+def _release_api(path, timeout=8):
+    """调用 GitHub Releases API（经代理）"""
+    _url = _gh_proxy_url(f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}{path}",
+                         mirror=UPDATE_STATE.get("mirror"))
+    _req = urllib.request.Request(_url, headers={
+        "User-Agent": "ZombieSurvivor-Updater/1.0",
+        "Accept": "application/vnd.github+json"})
+    with urllib.request.urlopen(_req, timeout=timeout) as _r:
+        return json.loads(_r.read().decode('utf-8'))
+
+
+def list_available_versions(limit=25):
+    """列出远端版本（新→旧），返回 [(version, tag)]"""
+    try:
+        _data = _release_api(f"/releases?per_page={int(limit)}")
+        _out = []
+        for _r in _data:
+            if not isinstance(_r, dict):
+                continue
+            _tag = str(_r.get("tag_name", "")).lstrip('v')
+            if _tag:
+                _out.append((_tag, _r.get("tag_name")))
+        return _out
+    except Exception:
+        return []
+
+
+def find_latest_good_version(current_version=None):
+    """找出**不是错误版本**的最新版本；没有则返回 None
+
+    current_version 提供时，只考虑比它更高的版本（正常升级路径）。
+    """
+    _broken = load_broken_versions()
+    _cur = str(current_version or get_current_version())
+    try:
+        _curt = tuple(int(x) for x in _cur.split(".") if x.isdigit())
+    except Exception:
+        _curt = ()
+    _best = None
+    for _ver, _tag in list_available_versions():
+        if _ver in _broken:
+            continue
+        try:
+            _vt = tuple(int(x) for x in _ver.split(".") if x.isdigit())
+        except Exception:
+            continue
+        if current_version is not None and _vt <= _curt:
+            continue
+        if _best is None or _vt > _best[0]:
+            _best = (_vt, _ver, _tag)
+    return (_best[1], _best[2]) if _best else None
+
+
+def find_rollback_version(current_version=None):
+    """找出可回退的版本：低于当前版本的、非错误版本中最高的那个"""
+    _broken = load_broken_versions()
+    _cur = str(current_version or get_current_version())
+    try:
+        _curt = tuple(int(x) for x in _cur.split(".") if x.isdigit())
+    except Exception:
+        return None
+    _best = None
+    for _ver, _tag in list_available_versions():
+        if _ver in _broken:
+            continue
+        try:
+            _vt = tuple(int(x) for x in _ver.split(".") if x.isdigit())
+        except Exception:
+            continue
+        if _vt >= _curt:
+            continue
+        if _best is None or _vt > _best[0]:
+            _best = (_vt, _ver, _tag)
+    return (_best[1], _best[2]) if _best else None
+
+
+def download_version_zip(version, progress_cb=None):
+    """下载指定版本的全量更新包，返回本地路径或 None"""
+    try:
+        _r = _release_api(f"/releases/tags/{version if str(version).startswith('v') else 'v' + str(version)}")
+        _url = None
+        for _a in _r.get("assets", []):
+            if str(_a.get("name", "")).lower().endswith(".zip"):
+                _url = _gh_proxy_url(_a.get("browser_download_url"),
+                                     mirror=UPDATE_STATE.get("mirror"))
+                break
+        if not _url:
+            return None
+        return download_update(_url, progress_callback=progress_cb, version=version)
+    except Exception:
+        return None
+
+
+def handle_boot_failure(error_text="", status_cb=None, progress_cb=None):
+    """启动致命错误自愈（游戏打不开时调用）
+
+    流程：
+      1) 有更高且非错误版本 → 正常更新过去
+      2) 没有 → 回退上一个非错误版本，并把当前版本标记为错误版本
+      3) 都没有 → 返回 False（只能提示用户）
+    返回 True 表示已安排修复（调用方应重启）
+    """
+    global UPDATE_STATE
+    _cur = get_current_version()
+    _err = str(error_text)[:400]
+
+    # 先排除"当前版本已被标记为错误"的死循环：若已是错误版本则直接尝试其它版本
+    _already_broken = is_version_broken(_cur)
+
+    if status_cb:
+        status_cb(f"检测到启动失败（v{_cur}），尝试自动修复...")
+
+    # 1) 尝试更新到更高版本
+    _upd = find_latest_good_version(_cur)
+    if _upd and _upd[0] != _cur:
+        _ver, _tag = _upd
+        if status_cb:
+            status_cb(f"发现可用新版本 v{_ver}，正在更新...")
+        _zip = download_version_zip(_tag, progress_cb)
+        if _zip:
+            _ok, _n, _p = extract_and_apply_update(_zip)
+            if _ok:
+                if status_cb:
+                    status_cb(f"已修复到 v{_ver}，即将重启")
+                return True
+        # 新版本也装不上 → 标记它为错误版本，继续尝试回退
+        mark_version_broken(_ver, f"更新后仍无法启动: {_err}")
+        if status_cb:
+            status_cb(f"v{_ver} 也存在问题，已标记，尝试回退...")
+
+    # 2) 回退上一个版本
+    if not _already_broken:
+        mark_version_broken(_cur, f"启动失败: {_err}")
+    _rb = find_rollback_version(_cur)
+    if _rb:
+        _ver, _tag = _rb
+        if status_cb:
+            status_cb(f"正在回退到 v{_ver}...")
+        # 优先增量（差异文件少），失败再全量
+        try:
+            UPDATE_STATE["manifest_url"] = None
+            _r = _release_api(f"/releases/tags/{_tag}")
+            for _a in _r.get("assets", []):
+                if str(_a.get("name", "")).lower() == "manifest.json":
+                    UPDATE_STATE["manifest_url"] = _gh_proxy_url(
+                        _a.get("browser_download_url"), mirror=UPDATE_STATE.get("mirror"))
+                    break
+            _inc_ok, _ic, _ip = try_incremental_update(_ver, progress_cb=progress_cb, status_cb=None)
+            if _inc_ok:
+                if status_cb:
+                    status_cb(f"已回退到 v{_ver}，即将重启")
+                return True
+        except Exception:
+            pass
+        _zip = download_version_zip(_tag, progress_cb)
+        if _zip:
+            try:
+                _ok, _n, _p = extract_and_apply_update(_zip)
+                if _ok:
+                    if status_cb:
+                        status_cb(f"已回退到 v{_ver}，即将重启")
+                    return True
+            except Exception:
+                pass
+
+    if status_cb:
+        status_cb("自动修复失败，请手动重新安装")
+    return False
 
 
 def _compute_md5(file_path, chunk=65536):

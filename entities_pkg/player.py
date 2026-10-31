@@ -631,10 +631,24 @@ class Player:
         if self.hp <= 0:
             self.hp = 0
             self.alive = False
+            # v2.8.2：致命一击已记录 → 冻结日志，保住真正的死因数据
+            self._damage_log_frozen = True
 
     def _log_damage(self, amount, dtype, source, attack_x, attack_y):
-        """v2.8.0 死亡详情：登记一条伤害记录（环形缓冲，最多 MAX_DAMAGE_LOG 条）"""
+        """v2.8.2 死亡详情：登记一条伤害记录（环形缓冲，最多 MAX_DAMAGE_LOG 条）
+
+        关键修复：玩家倒地/死亡后**立即冻结**日志。
+        旧实现会继续记录后续伤害（尸体被 AOE 溅射、残留 DOT 等），
+        把真正致死那几秒的数据挤出环形缓冲 —— 用户看到的死亡详情
+        就变成了"死后挨的无关伤害"，找不到真正死因。
+        """
         try:
+            if getattr(self, '_damage_log_frozen', False):
+                return
+            if getattr(self, 'downed', False) or getattr(self, 'permanently_dead', False) \
+                    or not getattr(self, 'alive', True):
+                self._damage_log_frozen = True
+                return
             self.damage_log.append({
                 "t": time.monotonic(),
                 "amount": round(float(amount), 1),
@@ -671,6 +685,14 @@ class Player:
                 if len(_out) >= limit:
                     break
             return _out
+        except Exception:
+            return []
+
+    def freeze_damage_log(self):
+        """v2.8.2：死亡瞬间冻结伤害日志，并返回快照（供死亡详情页面使用）"""
+        try:
+            self._damage_log_frozen = True
+            return list(self.damage_log)
         except Exception:
             return []
 

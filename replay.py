@@ -39,12 +39,15 @@ import time
 import zlib
 
 MAGIC = b"ZSRP"
-VERSION = 1
+VERSION = 2   # v2.8.2：帧内增补 max_hp / size，供真实感渲染（血条/体型）
+VERSION_V1 = 1
 
 # 单帧结构（头部）
 _FRAME_HEAD = struct.Struct("<fHH")          # t, player_count, enemy_count
-_PLAYER_BIN = struct.Struct("<ffffB")        # x, y, hp, angle, flags
-_ENEMY_BIN = struct.Struct("<IHffffB")       # id, type_idx, x, y, hp, angle, flags
+# v2：玩家 (x, y, hp, max_hp, angle, flags)
+_PLAYER_BIN = struct.Struct("<fffffB")
+# v2：敌人 (id, type_idx, x, y, hp, max_hp, angle, size, flags)
+_ENEMY_BIN = struct.Struct("<IHffffffB")
 
 # 采样与容量
 SAMPLE_HZ = 20.0                 # 每秒采样帧数
@@ -137,6 +140,7 @@ class ReplayRecorder:
                      (2 if getattr(_p, "downed", False) else 0)
             _ps.append((float(getattr(_p, "x", 0.0)), float(getattr(_p, "y", 0.0)),
                         float(getattr(_p, "hp", 0.0)),
+                        float(getattr(_p, "max_hp", 100.0) or 100.0),
                         float(getattr(_p, "facing_angle", 0.0)), _flags))
         _es = []
         for _e in enemies or []:
@@ -160,7 +164,13 @@ class ReplayRecorder:
                 _alive = bool(getattr(_e, "alive", True))
                 _boss = bool(getattr(_e, "is_boss", False))
             _flags = (1 if _alive else 0) | (2 if _boss else 0)
-            _es.append((_eid, self._type_idx(_ename), _ex, _ey, _ehp, _eang, _flags))
+            _es.append((_eid, self._type_idx(_ename), _ex, _ey, _ehp,
+                        float(getattr(_e, "max_hp", 0.0) or 0.0) if not isinstance(_e, dict)
+                        else float(_e.get("max_hp", 0.0) or 0.0),
+                        _eang,
+                        float(getattr(_e, "size", 12.0) or 12.0) if not isinstance(_e, dict)
+                        else float(_e.get("size", 12.0) or 12.0),
+                        _flags))
 
         # 敌人过多时截断（按 hp 非零优先保留，避免回放文件爆炸）
         if len(_es) > MAX_ENEMIES_PER_FRAME:
@@ -240,7 +250,7 @@ def load_replay(path):
         raise ValueError("不是有效的回放文件（magic 不匹配）")
     _off = 4
     _ver = _raw[_off]; _off += 1
-    if _ver != VERSION:
+    if _ver not in (VERSION, VERSION_V1):
         raise ValueError(f"回放版本不支持: {_ver}")
     _meta_len = struct.unpack_from("<I", _raw, _off)[0]; _off += 4
     _meta = json.loads(_raw[_off:_off + _meta_len].decode("utf-8")); _off += _meta_len
@@ -249,9 +259,14 @@ def load_replay(path):
     _events_len = struct.unpack_from("<I", _raw, _off)[0]; _off += 4
     _events = json.loads(_raw[_off:_off + _events_len].decode("utf-8"))
 
+    # v1 兼容结构
+    _P1 = struct.Struct("<ffffB")      # x, y, hp, angle, flags
+    _E1 = struct.Struct("<IHffffB")    # id, type_idx, x, y, hp, angle, flags
+    _pbin, _ebin = (_PLAYER_BIN, _ENEMY_BIN) if _ver == VERSION else (_P1, _E1)
+
     _frames = []
     _p = 0
-    _hp, _pp, _pe = _FRAME_HEAD.size, _PLAYER_BIN.size, _ENEMY_BIN.size
+    _hp, _pp, _pe = _FRAME_HEAD.size, _pbin.size, _ebin.size
     _n = len(_frames_raw)
     while _p + _hp <= _n:
         _t, _pc, _ec = _FRAME_HEAD.unpack_from(_frames_raw, _p)
@@ -260,13 +275,15 @@ def load_replay(path):
         for _ in range(_pc):
             if _p + _pp > _n:
                 break
-            _pl.append(_PLAYER_BIN.unpack_from(_frames_raw, _p))
+            _v = _pbin.unpack_from(_frames_raw, _p)
+            _pl.append(_v if _ver == VERSION else (_v[0], _v[1], _v[2], 100.0, _v[3], _v[4]))
             _p += _pp
         _el = []
         for _ in range(_ec):
             if _p + _pe > _n:
                 break
-            _el.append(_ENEMY_BIN.unpack_from(_frames_raw, _p))
+            _v = _ebin.unpack_from(_frames_raw, _p)
+            _el.append(_v if _ver == VERSION else (_v[0], _v[1], _v[2], _v[3], _v[4], 0.0, _v[5], 12.0, _v[6]))
             _p += _pe
         _frames.append(ReplayFrame(_t, _pl, _el))
     return ReplayData(_meta, _frames, _events, os.path.basename(path))
@@ -325,6 +342,19 @@ class ReplayData:
         if not self.frames:
             return
         self.index = max(0, min(len(self.frames) - 1, self.index + delta))
+
+    def death_index(self):
+        """致死（阵亡事件）所在帧下标；没有则返回最后一帧"""
+        for _e in self.events:
+            if _e.get("tag") == "death":
+                _t = _e.get("t", 0.0)
+                _best, _bd = len(self.frames) - 1, 1e9
+                for _i, _f in enumerate(self.frames):
+                    _d = abs(_f.t - _t)
+                    if _d < _bd:
+                        _bd, _best = _d, _i
+                return _best
+        return len(self.frames) - 1 if self.frames else 0
 
     def events_until(self, t, limit=8):
         """取当前时刻之前最近的 limit 条事件（用于数据面板流水）"""

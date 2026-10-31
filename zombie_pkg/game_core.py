@@ -479,6 +479,21 @@ class GameCore:
         # v2.8.0 结算页：死亡详情（查看最近伤害来源）+ 观看回放
         self.gameover_death_btn = Button(640 - 235, 720 - 218, 215, 48, "死亡详情",
                                          color=(70, 40, 40), hover_color=(110, 60, 60))
+
+        # v2.8.2 死亡详情独立页面：退出按钮（大尺寸，触控友好）
+        self.death_detail_exit_btn = Button(640 - 110, 720 - 96, 220, 56, "返回结算",
+                                            color=(70, 45, 45), hover_color=(115, 70, 70))
+        # v2.8.2 回放页触控控件（播放/暂停、逐帧、缩放、跟随、退出）
+        self.replay_touch_btns = {
+            "play":   Button(20,  640, 120, 56, "播放/暂停", color=(40, 60, 80), hover_color=(65, 95, 120)),
+            "prev":   Button(150, 640,  80, 56, "◀", color=(40, 60, 80), hover_color=(65, 95, 120)),
+            "next":   Button(240, 640,  80, 56, "▶", color=(40, 60, 80), hover_color=(65, 95, 120)),
+            "zoom_o": Button(1160, 560, 100, 52, "放大", color=(40, 60, 80), hover_color=(65, 95, 120)),
+            "zoom_i": Button(1160, 620, 100, 52, "缩小", color=(40, 60, 80), hover_color=(65, 95, 120)),
+            "follow": Button(1040, 560, 110, 52, "跟随", color=(40, 60, 80), hover_color=(65, 95, 120)),
+            "data":   Button(1040, 620, 110, 52, "数据", color=(40, 60, 80), hover_color=(65, 95, 120)),
+            "exit":   Button(1160, 20,  100, 52, "退出", color=(80, 40, 40), hover_color=(120, 60, 60)),
+        }
         self.gameover_replay_btn = Button(640 + 20, 720 - 218, 215, 48, "观看回放",
                                           color=(40, 55, 80), hover_color=(60, 85, 120))
 
@@ -1985,6 +2000,9 @@ class GameCore:
         elif self.state == GameState.REPLAY:
             # v2.8.0 全局回放：自由摄像机重看当时的战况
             self._update_replay(dt)
+        elif self.state == GameState.DEATH_DETAIL:
+            # v2.8.2 死亡详情独立页面：纯静态页，不推进世界
+            pass
         elif self.state == GameState.SKILL_SELECT:
             if self.particles:
                 self.particles.update(dt)

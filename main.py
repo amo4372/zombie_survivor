@@ -38,6 +38,20 @@ try:
     game.run()
 except Exception as e:
     logger.log_exception(e)
+    # v2.8.2：致命启动错误（游戏打不开）→ 尝试自动更新/回退修复
+    try:
+        import boot_guard
+        if boot_guard.guard_exception(e):
+            # 已安排修复并重启，不再向上抛
+            try:
+                pygame.key.stop_text_input()
+            except Exception:
+                pass
+            sys.exit(0)
+    except SystemExit:
+        raise
+    except Exception:
+        pass
     raise
 finally:
     # v2.5.6：关闭文本输入（对应 start_text_input）——

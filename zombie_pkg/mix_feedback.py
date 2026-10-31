@@ -40,6 +40,9 @@ class FeedbackMixin:
         self.death_slow_t = 0.0
         self.show_death_detail = False
         self.death_detail_scroll = 0
+        # v2.8.2：死亡瞬间的伤害日志快照（冻结，不再被死后伤害刷掉）
+        self.death_detail_snapshot = {}
+        self.death_replay_saved = False
 
     # ==================================================================
     # 1) 命中反馈
@@ -150,13 +153,23 @@ class FeedbackMixin:
             self.death_timer = DEATH_REACTION_TIME
             self.death_slow_t = 0.0
             self.death_killer = self._find_killer()
-            # 死亡瞬间：强制落一帧 + 自动保存回放，方便回看"我是怎么死的"
+            # 死亡瞬间：冻结每位玩家的伤害日志（保住真正的死因数据）
+            try:
+                self.death_detail_snapshot = {}
+                for _p in self.registered_players():
+                    _tag = self.tag_of(_p) if hasattr(self, 'tag_of') else "P1"
+                    self.death_detail_snapshot[_tag] = _p.freeze_damage_log() \
+                        if hasattr(_p, 'freeze_damage_log') else list(getattr(_p, 'damage_log', []) or [])
+            except Exception:
+                pass
+            # 死亡瞬间：强制落一帧 + 自动保存回放（多人模式同样生效）
             try:
                 if getattr(self, 'replay_recorder', None) is not None:
                     self.replay_recorder.force_capture(self.registered_players(),
                                                        getattr(self, 'enemies', []))
                     self.replay_event("death", "玩家阵亡", 0, 0, 0, tag="death")
-                    self.save_replay(tag="death")
+                    _saved = self.save_replay(tag="death")
+                    self.death_replay_saved = bool(_saved)
             except Exception:
                 pass
             self.state = GameState.DYING
@@ -259,9 +272,14 @@ class FeedbackMixin:
         _rows = []
         try:
             _now = time.monotonic()
+            _snap = getattr(self, 'death_detail_snapshot', None) or {}
             for _p in self.registered_players():
                 _tag = self.tag_of(_p) if hasattr(self, 'tag_of') else "P1"
-                for _r in reversed(getattr(_p, 'damage_log', []) or []):
+                # v2.8.2：优先用死亡瞬间的冻结快照，没有则退回实时日志
+                _log = _snap.get(_tag)
+                if _log is None:
+                    _log = getattr(_p, 'damage_log', []) or []
+                for _r in reversed(_log):
                     _ago = _now - _r.get("t", _now)
                     if _ago > window:
                         break
