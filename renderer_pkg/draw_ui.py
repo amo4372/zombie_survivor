@@ -830,7 +830,16 @@ class UiMixin:
                     dl_btn.base_y = btn_y + 70
                     if dl_btn.update(mouse_pos, mouse_pressed, self.game.touch_events, scale):
                         self.game.update_status_text = "开始下载更新..."
-                        updater.perform_full_update()
+                        # v2.8.6 修复：此前**没有传 status_cb / progress_cb**，
+                        # 后台线程跑起来后界面上完全看不到任何进展，
+                        # 失败也静默 —— 表现为"点了下载并更新，只弹发现新版本就没动静了"。
+                        updater.UPDATE_STATE["force_update"] = True
+                        updater.perform_full_update(
+                            progress_cb=lambda p: setattr(
+                                self.game, "update_download_progress", p),
+                            status_cb=lambda s: setattr(
+                                self.game, "update_status_text", s),
+                        )
                     dl_btn.draw(self.screen, self.game.font_large, scale)
 
         # 返回按钮

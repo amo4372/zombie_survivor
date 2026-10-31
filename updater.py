@@ -87,6 +87,7 @@ UPDATE_STATE = {
     "latest_version": None,
     "current_version": None,
     "update_available": False,
+    "force_update": False,          # v2.8.6：手动点更新时忽略"版本相同"判定
     "download_progress": 0.0,  # 0.0 - 1.0
     "download_speed": 0,  # bytes/s
     "downloaded_bytes": 0,
@@ -1063,6 +1064,58 @@ def _raw_file_url(rel_path, tag):
     return _gh_proxy_url(_u, mirror=UPDATE_STATE.get("mirror"))
 
 
+def _file_source_urls(rel_path, tag):
+    """单文件下载的候选源（按可靠性排序）
+
+    v2.8.6 跨版本更新修复：
+    此前只走 raw.githubusercontent.com + gh-proxy。raw 经代理后经常返回
+    HTML 错误页（HTTP 200 但内容不是文件），写入后 MD5 对不上，
+    表现为"更新了但游戏坏了/没变"。
+    现在多源候选，且**下载后强制校验 MD5**，不符则换下一个源。
+    """
+    _t = tag if str(tag).startswith("v") else f"v{tag}"
+    _rp = rel_path.replace("\\", "/").lstrip("/")
+    _urls = []
+    # 1) jsDelivr CDN：对单文件有免费 CDN，按 tag 精确定版本，国内可达性好
+    _urls.append(f"https://cdn.jsdelivr.net/gh/{GITHUB_USER}/{GITHUB_REPO}@{_t}/{_rp}")
+    # 2) raw + 已测速代理
+    _urls.append(_gh_proxy_url(
+        f"https://raw.githubusercontent.com/{GITHUB_USER}/{GITHUB_REPO}/{_t}/{_rp}",
+        mirror=UPDATE_STATE.get("mirror")))
+    # 3) raw 直连（无代理，海外/直连可用时最快）
+    _urls.append(f"https://raw.githubusercontent.com/{GITHUB_USER}/{GITHUB_REPO}/{_t}/{_rp}")
+    # 4) 兜底：再试一次默认代理
+    _urls.append(_gh_proxy_url(
+        f"https://raw.githubusercontent.com/{GITHUB_USER}/{GITHUB_REPO}/{_t}/{_rp}"))
+    return _urls
+
+
+def _download_file_verified(rel_path, tag, expect_md5=None, timeout=15):
+    """多源尝试下载单文件，并在有 expect_md5 时校验内容
+
+    返回 bytes 或 None。任一源返回的内容 MD5 不符就换下一个源 ——
+    这样即使某个代理返回了错误页也不会把坏文件写进游戏目录。
+    """
+    _last = None
+    for _u in _file_source_urls(rel_path, tag):
+        try:
+            _data = _http_get_bytes(_u, timeout=timeout, retries=1)
+        except Exception as _e:
+            _last = _e
+            continue
+        if not _data:
+            continue
+        if expect_md5:
+            try:
+                import hashlib as _hl
+                if _hl.md5(_data).hexdigest() != str(expect_md5).lower():
+                    continue      # 内容不对，换下一个源
+            except Exception:
+                continue
+        return _data
+    return None
+
+
 def _http_get_bytes(url, timeout=15, retries=2):
     """带重试的 GET，返回 bytes（失败返回 None）"""
     for _i in range(retries + 1):
@@ -1087,6 +1140,11 @@ def fetch_update_manifest(manifest_url, timeout=15):
     try:
         _m = json.loads(_raw.decode('utf-8'))
         _files = _m.get("files", _m)
+        _ver = _m.get("version") if isinstance(_m, dict) else None
+        if _ver and str(_ver) != str(UPDATE_STATE.get("latest_version") or ""):
+            # 清单与即将安装的版本不一致 → 不可用，回退全量
+            UPDATE_STATE["error"] = f"增量清单版本不匹配（{_ver}），改用完整包"
+            return None
         if not isinstance(_files, dict) or not _files:
             return None
         # 过滤用户数据与运行产物
@@ -1102,18 +1160,61 @@ def fetch_update_manifest(manifest_url, timeout=15):
                               "size": int(_info.get("size", 0) or 0)}
             else:
                 _out[_rel] = {"md5": str(_info).lower(), "size": 0}
+        if _ver:
+            _out["_version"] = str(_ver)
         return _out
     except Exception:
         UPDATE_STATE["error"] = "增量清单解析失败"
         return None
 
 
+# 跨版本清理：只在这些"游戏自带包目录"内删除多余 .py，
+# mods/ 等用户目录绝不碰，避免误删玩家自己放的东西。
+_MANAGED_PY_DIRS = ("zombie_pkg", "renderer_pkg", "entities_pkg", "ui_pkg",
+                    "gamedata", "ai_pkg", "rl")
+
+
+def compute_removed_files(manifest, game_dir=None):
+    """v2.8.6 跨版本更新：找出"新版本已删除"的本地残留文件
+
+    只比对受管目录内的 .py（不含 mods/ 等用户目录），且只返回列表不直接删。
+    """
+    if game_dir is None:
+        game_dir = os.path.dirname(os.path.abspath(__file__))
+    _out = []
+    try:
+        for _sub in list(_MANAGED_PY_DIRS) + [""]:
+            _dir = os.path.join(game_dir, _sub) if _sub else game_dir
+            if not os.path.isdir(_dir):
+                continue
+            for _fn in os.listdir(_dir):
+                if not _fn.endswith(".py") or _fn.startswith("_"):
+                    continue
+                _rel = (f"{_sub}/{_fn}" if _sub else _fn).replace("\\", "/")
+                if _rel in manifest:
+                    continue
+                if _rel in USER_DATA_FILES:
+                    continue
+                _out.append(_rel)
+    except Exception:
+        return []
+    return _out
+
+
 def compute_changed_files(manifest, game_dir=None):
-    """比对本地文件 MD5，返回需要下载的相对路径列表"""
+    """比对本地文件 MD5，返回需要下载的相对路径列表
+
+    v2.8.6：manifest 是**最新版本全量文件的 MD5 快照**，与本地逐文件比对，
+    所以天然支持跨任意多个版本 —— 从 v2.0 直接升到 v2.8.6 也能算出全部差异，
+    不需要逐个版本依次升级。
+    """
     if game_dir is None:
         game_dir = os.path.dirname(os.path.abspath(__file__))
     _need = []
     for _rel, _info in manifest.items():
+        # v2.8.6：跳过清单自带的元数据键（如 _version）
+        if str(_rel).startswith("_"):
+            continue
         # 双保险：即便清单里混入了用户数据/运行产物，也绝不覆盖
         if _rel in USER_DATA_FILES or _rel.startswith(
                 ("_update_cache", "_update_backup", "__pycache__", "releases",
@@ -1131,8 +1232,12 @@ def compute_changed_files(manifest, game_dir=None):
     return _need
 
 
-def download_incremental_files(rel_list, tag, game_dir=None, progress_cb=None):
-    """逐文件下载到缓存目录，返回 {rel: 本地缓存路径}"""
+def download_incremental_files(rel_list, tag, game_dir=None, progress_cb=None,
+                              md5_map=None):
+    """逐文件下载到缓存目录，返回 {rel: 本地缓存路径}
+
+    md5_map 提供时，每个文件下载后都会校验 MD5（v2.8.6 跨版本更新可靠性）
+    """
     if game_dir is None:
         game_dir = os.path.dirname(os.path.abspath(__file__))
     # v2.8.3 修复：此前写成 CACHE_DIR（未定义）→ NameError 打断更新线程。
@@ -1147,9 +1252,12 @@ def download_incremental_files(rel_list, tag, game_dir=None, progress_cb=None):
     _got = {}
     _total = max(1, len(rel_list))
     for _i, _rel in enumerate(rel_list):
-        _data = _http_get_bytes(_raw_file_url(_rel, tag), timeout=INCREMENTAL_FILE_TIMEOUT)
+        # v2.8.6：多源下载 + MD5 校验（防止代理返回错误页被写入）
+        _want = _md5_map.get(_rel) if _md5_map else None
+        _data = _download_file_verified(_rel, tag, expect_md5=_want,
+                                        timeout=INCREMENTAL_FILE_TIMEOUT)
         if _data is None:
-            UPDATE_STATE["error"] = f"增量下载失败: {_rel}"
+            UPDATE_STATE["error"] = f"增量下载失败: {_rel}（多源均不可用或校验不通过）"
             return None
         _dst = os.path.join(_cache, _rel)
         try:
@@ -1277,6 +1385,7 @@ def try_incremental_update(latest_version, progress_cb=None, status_cb=None):
     _manifest = fetch_update_manifest(_murl)
     if not _manifest:
         return False, 0, 0
+    UPDATE_STATE["incremental_manifest_version"] = _manifest.get("_version")
 
     if status_cb:
         status_cb("正在比对本地文件...")
@@ -1298,18 +1407,55 @@ def try_incremental_update(latest_version, progress_cb=None, status_cb=None):
 
     if status_cb:
         status_cb(f"仅 {len(_need)} 个文件有变化，开始下载...")
-    _file_map = download_incremental_files(_need, latest_version, _game_dir, progress_cb)
+    _file_map = download_incremental_files(_need, latest_version, _game_dir,
+                                           progress_cb, md5_map=_manifest)
     if not _file_map:
         return False, 0, 0
 
     if status_cb:
         status_cb("正在应用增量更新...")
     _applied, _pending = apply_incremental_files(_file_map, _game_dir)
+
+    # v2.8.6 跨版本：清理新版本已删除的残留文件（先备份，只删受管目录内的 .py）
+    _removed = compute_removed_files(_manifest, _game_dir)
+    _removed_n = 0
+    if _removed:
+        try:
+            _bk = os.path.join(_game_dir, BACKUP_DIR)
+            os.makedirs(_bk, exist_ok=True)
+            for _rel in _removed:
+                try:
+                    _src = os.path.join(_game_dir, _rel)
+                    if not os.path.isfile(_src):
+                        continue
+                    _dst = os.path.join(_bk, _rel)
+                    os.makedirs(os.path.dirname(_dst), exist_ok=True)
+                    shutil.copy2(_src, _dst)
+                    os.remove(_src)
+                    _removed_n += 1
+                except Exception:
+                    continue
+        except Exception:
+            pass
+    UPDATE_STATE["incremental_removed"] = _removed_n
+
+    # v2.8.6：应用后**重新比对**，确认所有文件都真的到位了。
+    # 若仍有不匹配（应用失败/被占用/内容错误），判定增量失败 → 回退全量。
+    _verify = compute_changed_files(_manifest, _game_dir)
+    if _verify:
+        UPDATE_STATE["error"] = (f"增量应用后仍有 {len(_verify)} 个文件不匹配，"
+                                 f"改用完整包")
+        if status_cb:
+            status_cb(UPDATE_STATE["error"])
+        return False, 0, 0
+
     try:
         with open(os.path.join(_game_dir, "version.txt"), "w", encoding="utf-8") as _f:
             _f.write(str(latest_version))
     except Exception:
         pass
+    if status_cb and _removed_n:
+        status_cb(f"已清理 {_removed_n} 个旧版本残留文件")
     return True, _applied, _pending
 
 
@@ -1320,12 +1466,44 @@ def perform_full_update(progress_cb=None, status_cb=None):
     """
     def _update_thread():
         global UPDATE_STATE
+        # v2.8.6：整个线程包一层兜底。
+        # 此前线程内任何未捕获异常都会让线程静默死亡，UI 永远停在上一条
+        # 状态（表现为"弹出发现新版本，然后就没动静了"）。
+        # 现在异常会显示出来，并强制回退到全量包。
+        try:
+            _update_thread_inner()
+        except Exception as _e:
+            UPDATE_STATE["error"] = f"更新异常: {_e}"
+            if status_cb:
+                status_cb(f"更新异常: {_e}，尝试改用完整包更新...")
+            try:
+                _res = check_for_updates(timeout=15)
+                if _res:
+                    _lv, _du, _cl = _res
+                    _zip = download_update(_du, progress_callback=progress_cb, version=_lv)
+                    if _zip:
+                        _ok, _c2, _nv, _pd = extract_and_apply_update(_zip)
+                        if _ok:
+                            sync_gamedata(status_cb=status_cb)
+                            cleanup_cache()
+                            if status_cb:
+                                status_cb(f"已用完整包更新到 v{_nv}，即将重启...")
+                            time.sleep(2)
+                            restart_game()
+                            return
+            except Exception:
+                pass
+            if status_cb:
+                status_cb(f"更新失败: {UPDATE_STATE.get('error', '未知错误')}")
+
+    def _update_thread_inner():
+        global UPDATE_STATE
 
         if status_cb:
             status_cb("正在检查更新...")
 
-        # 1. 检查更新
-        result = check_for_updates()
+        # 1. 检查更新（v2.8.6：超时从默认 6s 放宽到 15s，弱网下不再误判失败）
+        result = check_for_updates(timeout=15)
         if not result:
             if status_cb:
                 status_cb(UPDATE_STATE.get("error", "检查更新失败"))
@@ -1334,7 +1512,7 @@ def perform_full_update(progress_cb=None, status_cb=None):
         latest_version, download_url, changelog = result
         current_version = get_current_version()
 
-        if not is_newer_version(latest_version, current_version):
+        if not is_newer_version(latest_version, current_version) and not UPDATE_STATE.get("force_update"):
             if status_cb:
                 status_cb(f"已是最新版本 (v{current_version})")
             UPDATE_STATE["update_available"] = False
@@ -1364,6 +1542,7 @@ def perform_full_update(progress_cb=None, status_cb=None):
             restart_game()
             return
         # 增量不可用 → 回退全量包
+        UPDATE_STATE["force_update"] = False
         UPDATE_STATE["error"] = None
         if status_cb:
             status_cb("增量更新不可用，改为下载完整更新包...")
