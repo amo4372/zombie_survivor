@@ -1201,6 +1201,47 @@ def compute_removed_files(manifest, game_dir=None):
     return _out
 
 
+def has_pending(rel, game_dir=None):
+    """该文件是否已有待重启生效的 .pending_update（视为"已就绪，重启后生效"）"""
+    if game_dir is None:
+        game_dir = os.path.dirname(os.path.abspath(__file__))
+    try:
+        return os.path.isfile(os.path.join(game_dir, rel) + ".pending_update")
+    except Exception:
+        return False
+
+
+def _game_dir_all():
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def _count_pending(game_dir):
+    """统计当前待重启生效的 .pending_update 数量"""
+    _n = 0
+    try:
+        for _root, _dirs, _files in os.walk(game_dir):
+            for _fn in _files:
+                if _fn.endswith(".pending_update"):
+                    _n += 1
+    except Exception:
+        pass
+    return _n
+
+
+def changed_files_excluding_pending(manifest, game_dir=None):
+    """v2.8.8 修复：差异复查时排除"已写 pending"的文件
+
+    此前应用后一律用 compute_changed_files 复查：Android 上正在运行的 .py
+    无法覆盖写入 → 落为 .pending_update（重启后替换）→ 复查发现本地 MD5
+    仍不符 → 判定"增量失败" → 回退全量 → 全量遇到同样的占用问题 →
+    **怎么都更新不了**。
+
+    pending 本来就是设计内的延迟生效机制，不该算失败。
+    """
+    _need = compute_changed_files(manifest, game_dir)
+    return [_r for _r in _need if not has_pending(_r, game_dir)]
+
+
 def compute_changed_files(manifest, game_dir=None):
     """比对本地文件 MD5，返回需要下载的相对路径列表
 
@@ -1441,7 +1482,7 @@ def try_incremental_update(latest_version, progress_cb=None, status_cb=None):
 
     # v2.8.6：应用后**重新比对**，确认所有文件都真的到位了。
     # 若仍有不匹配（应用失败/被占用/内容错误），判定增量失败 → 回退全量。
-    _verify = compute_changed_files(_manifest, _game_dir)
+    _verify = changed_files_excluding_pending(_manifest, _game_dir)
     if _verify:
         UPDATE_STATE["error"] = (f"增量应用后仍有 {len(_verify)} 个文件不匹配，"
                                  f"改用完整包")
@@ -1561,6 +1602,18 @@ def perform_full_update(progress_cb=None, status_cb=None):
         # 3. 应用更新（全量镜像 + 占用延迟替换）
         success, count, new_version, pending_count = extract_and_apply_update(zip_path)
         if not success:
+            _pend_total = _count_pending(_game_dir_all())
+            if _pend_total > 0:
+                # 部分文件被占用但已落 pending → 重启后生效，不算失败
+                if status_cb:
+                    status_cb(f"已应用 {count} 个文件，{_pend_total} 个占用文件将在重启后生效，"
+                              f"新版本 v{new_version}，即将重启...")
+                UPDATE_STATE["error"] = None
+                sync_gamedata(status_cb=status_cb)
+                cleanup_cache()
+                time.sleep(2)
+                restart_game()
+                return
             if status_cb:
                 status_cb(UPDATE_STATE.get("error", "应用更新失败，已回滚"))
             return

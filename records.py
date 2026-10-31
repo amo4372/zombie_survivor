@@ -305,6 +305,15 @@ class GameRecords:
                 # === 多人模式成就（v2.5.2）===
                 "mp_first_win": {"unlocked": False, "desc": "多人模式首次取得胜利", "date": None, "group":"多人", "hidden":False, "coef_threshold": 0,
                                  "detail": "在任何多人模式（合作或对战）中首次获胜。与队友并肩作战，或在一场阵营对决中活到最后。"},
+                # === v2.8.8 双子 Boss / 军械库 / 老虎机 / 观战 ===
+                "twin_boss_meet": {"unlocked": False, "desc": "初见双子：遭遇郑某与惠某", "date": None, "group":"战斗", "hidden":False, "coef_threshold": 0},
+                "twin_boss_slain": {"unlocked": False, "desc": "双子终结：击败郑某与惠某", "date": None, "group":"战斗", "hidden":False, "coef_threshold": 0},
+                "castle_survived": {"unlocked": False, "desc": "易位余生：在王车易位的禁用效果下存活", "date": None, "group":"战斗", "hidden":False, "coef_threshold": 0},
+                "gacha_first": {"unlocked": False, "desc": "军械补给：首次从军械库抽取武器", "date": None, "group":"收集", "hidden":False, "coef_threshold": 0},
+                "gacha_legend": {"unlocked": False, "desc": "传说入库：抽到传说品质武器", "date": None, "group":"收集", "hidden":False, "coef_threshold": 0},
+                "slot_jackpot": {"unlocked": False, "desc": "头奖：老虎机三轴全中", "date": None, "group":"收集", "hidden":False, "coef_threshold": 0},
+                "spectator": {"unlocked": False, "desc": "旁观者：合作模式观战队友并见证其获胜", "date": None, "group":"多人", "hidden":False, "coef_threshold": 0},
+                "fearless_10s": {"unlocked": False, "desc": "十秒无畏：单次无畏冲锋持续满10秒", "date": None, "group":"战斗", "hidden":False, "coef_threshold": 0},
                 "mp_team_win": {"unlocked": False, "desc": "合作模式通关一场战斗", "date": None, "group":"多人", "hidden":False, "coef_threshold": 0,
                                 "detail": "合作（nPvE）模式下与队友配合通关任意一场战斗。救援倒地队友、共享资源，才能走得更远。"},
                 "mp_pvp_win": {"unlocked": False, "desc": "PvP 对战阵营获胜", "date": None, "group":"多人", "hidden":False, "coef_threshold": 0,

@@ -801,7 +801,8 @@ def get_skill_cooldown(skill_type, cooldown_mult=1.0):
 
 # ==================== v2.7.0 无畏冲锋参数 ====================
 # 防爆套装 → 肾上腺素 → 无畏冲锋 解锁链的最后一级：限时冲撞状态
-FEARLESS_CHARGE_DURATION = {1: 2.0, 2: 2.4, 3: 2.8, 4: 3.2, 5: 4.0}   # 各等级持续时间（秒）
+# v2.8.8：无畏冲锋基础时长 2.0s → 10s（原时长太短，冲撞手感几乎体会不到）
+FEARLESS_CHARGE_DURATION = {1: 10.0, 2: 11.0, 3: 12.0, 4: 13.0, 5: 15.0}   # 各等级持续时间（秒）
 FEARLESS_CHARGE_DAMAGE_REDUCTION = 0.50   # 冲锋期间任意伤害减伤 50%
 FEARLESS_CHARGE_SPEED_MULT = 1.50         # 冲锋期间移速 +50%
 FEARLESS_CHARGE_TURN_RATE = 70.0          # 冲锋期间转向速度（度/秒，正常为瞬时转向）

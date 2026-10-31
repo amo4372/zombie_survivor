@@ -1,0 +1,12 @@
+{
+  "monsters": [
+    "ZOMBIE_CRAWLER",
+    "ZOMBIE_FAST",
+    "ZOMBIE_NORMAL",
+    "ZOMBIE_RANGED",
+    "ZOMBIE_SHIELD"
+  ],
+  "weapons": [
+    "PISTOL"
+  ]
+}

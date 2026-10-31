@@ -187,6 +187,71 @@ class PlayerRegistryMixin:
             if _p is not None:
                 yield f"P{_i + 1}", _p
 
+    # ==================================================================
+    # v2.8.8 观战模式：合作模式下队友全部阵亡后可继续观看
+    # ==================================================================
+    def update_spectate(self, dt):
+        """维护观战状态与观战目标。返回是否处于观战中。
+
+        设计：
+        - 仅**合作模式**（非 PvP）生效 —— PvP 里对手还活着就该继续打
+        - 自己已彻底阵亡（permanently_dead 或 alive=False 且非倒地）→ 进入观战
+        - 观战目标 = 还活着的队友；队友全灭 → 观战结束，交由结算
+        - 观战时镜头跟随目标，且**不接受**该玩家的输入
+        """
+        try:
+            _spec = getattr(self, 'spectating', False)
+            _me = getattr(self, 'player', None)
+            if _me is None:
+                return False
+            if getattr(self.config, 'pvp_enabled', False):
+                self.spectating = False
+                self.spectate_target = None
+                return False
+            # 自己是否彻底出局
+            _out = (not getattr(_me, 'alive', True)) and \
+                   (not getattr(_me, 'downed', False)
+                    or bool(getattr(_me, 'permanently_dead', False)))
+            if not _out:
+                self.spectating = False
+                self.spectate_target = None
+                return False
+            if not self.is_multiplayer_active():
+                # 单人模式自己死了就是结束，交给正常结算
+                self.spectating = False
+                self.spectate_target = None
+                return False
+            # 找还活着的队友
+            _target = None
+            for _p in self.registered_players():
+                if _p is _me:
+                    continue
+                if getattr(_p, 'alive', False) and not getattr(_p, 'permanently_dead', False):
+                    _target = _p
+                    break
+            if _target is None:
+                # 队友也全灭 → 观战结束（调用方会触发结算）
+                self.spectating = False
+                self.spectate_target = None
+                return False
+            self.spectating = True
+            self.spectate_target = _target
+            # 镜头跟随观战目标
+            try:
+                _cam = getattr(self, 'camera', None)
+                if _cam is not None and hasattr(_cam, 'x'):
+                    _cam.x = _target.x - getattr(_cam, 'width', 1280) / 2 / max(0.01, _cam.zoom)
+                    _cam.y = _target.y - getattr(_cam, 'height', 720) / 2 / max(0.01, _cam.zoom)
+            except Exception:
+                pass
+            return True
+        except Exception:
+            return False
+
+    def begin_spectate(self):
+        """进入观战（供结算前的过渡调用）"""
+        self.spectating = True
+
     def registered_players(self):
         """已登记玩家列表（按槽位顺序）"""
         return [p for _, p in self.iter_player_slots()]

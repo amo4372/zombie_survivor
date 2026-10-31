@@ -847,6 +847,8 @@ class GameCore:
                 _pp.crit_chance += _pp.crit_bonus_add
                 _pp.health_regen += cfg.get("regen", 0) * scale_lvl
                 _pp.dmg_reduce += cfg.get("dmg_reduce", 0)
+                # v2.8.8：标记已应用，便于 UI 显示"角色效果已生效"
+                _pp._character_applied = _sc
                 _pp.char_name = _sc
             except Exception:
                 continue

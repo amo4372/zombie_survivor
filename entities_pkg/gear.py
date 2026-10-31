@@ -54,7 +54,9 @@ class RiotGear:
         self.grapple_stamina_cost = 0
         # ===== v2.2.5 钩爪重做（死神钩爪 / 自我拉拽 / 锁定圈） =====
         self.grapple_is_scythe = False        # 本次发射是否为死神钩爪（持死神镰刀时）
-        self.grapple_scythe_max_cooldown = 3.0  # 死神钩爪 CD（普通 0.8）
+        # v2.8.8：死神钩爪 CD 与普通钩爪统一（原 3.0 明显偏长，
+        # 持死神镰刀时钩爪几乎用不出来）
+        self.grapple_scythe_max_cooldown = self.grapple_max_cooldown
         self.grapple_aiming = False           # 长按瞄准中（显示预瞄线+锁定圈）
         self.grapple_locked_target = None     # 瞄准圈锁定的僵尸（松开后直飞目标）
         self.grapple_lock_radius = 200        # 锁定圈半径（世界单位，v2.2.6 拉远便于锁定远处目标）

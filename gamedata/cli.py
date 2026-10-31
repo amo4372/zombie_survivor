@@ -8,6 +8,7 @@
     python -m gamedata show 表名   # 打印某张表
     python -m gamedata edit on|off # 数据编辑模式开关（开启后游戏不自动更新数据库）
     python -m gamedata diff        # 对比数据库与内置默认值的差异
+    python -m gamedata sync --force  # 以代码为准覆盖数据库数值
 """
 
 import json
@@ -27,13 +28,66 @@ def _path():
     return os.path.join(_root, "game_data.db")
 
 
+def cmd_lock():
+    """锁定某行：本地数值永不随版本更新被覆盖"""
+    _argv = list(sys.argv[1:])
+    from . import db as _db
+    _p = _path()
+    _conn = connect(_p)
+    from .seed import ensure_dataver_columns
+    ensure_dataver_columns(_conn)
+    _args = [a for a in _argv[1:] if not a.startswith("-")]
+    if len(_args) < 2:
+        print("用法: python -m gamedata lock <表> <key>")
+        return 1
+    _t, _k = _args[0], _args[1]
+    try:
+        _n = _conn.execute(
+            f"UPDATE {_t} SET dataver=? WHERE key=?", (999999, _k)).rowcount
+        _conn.commit()
+        print(f"已锁定 {_t}.{_k}（{_n} 行，本地数值将不再被版本更新覆盖）")
+    except Exception as e:
+        print(f"锁定失败: {e}")
+        return 1
+    _conn.close()
+    return 0
+
+
+def cmd_unlock():
+    """解锁某行：恢复为可随版本更新"""
+    _argv = list(sys.argv[1:])
+    _p = _path()
+    _conn = connect(_p)
+    _args = [a for a in _argv[1:] if not a.startswith("-")]
+    if len(_args) < 2:
+        print("用法: python -m gamedata unlock <表> <key>")
+        return 1
+    _t, _k = _args[0], _args[1]
+    try:
+        _n = _conn.execute(
+            f"UPDATE {_t} SET dataver=0 WHERE key=?", (_k,)).rowcount
+        _conn.commit()
+        print(f"已解锁 {_t}.{_k}（{_n} 行，下次更新将同步为发布数值）")
+    except Exception as e:
+        print(f"解锁失败: {e}")
+        return 1
+    _conn.close()
+    return 0
+
+
 def cmd_sync():
+    _argv = list(sys.argv[1:])
     _p = _path()
     _new = not os.path.exists(_p)
     _conn = connect(_p)
     create_all(_conn)
     S.seed_tuning(_conn)
     S.seed_difficulty(_conn)
+    # v2.8.8：--force 以代码为准覆盖数据库数值（策划改完数值后同步）
+    _forced = ("--force" in _argv or "-f" in _argv)
+    _a2, _u2, _k2 = S.sync_rows_from_code(_conn, force=_forced)
+    print(f"按 dataver 同步：新增 {_a2} / 更新 {_u2} / 保留本地 {_k2}"
+          + ("（--force 强制覆盖）" if _forced else ""))
     _r = S.seed_all(_conn)
     _conn.close()
     print(f"数据库: {_p}（{'新建' if _new else '已存在，仅补缺失行'}）")
@@ -220,6 +274,8 @@ def main(argv=None):
         return cmd_show(_argv[1] if len(_argv) > 1 else "weapons")
     if _c == "edit":
         return cmd_edit(_argv[1] if len(_argv) > 1 else None)
+    if _c in ("lock", "unlock"):
+        return cmd_lock() if _c == "lock" else cmd_unlock()
     if _c == "diff":
         return cmd_diff()
     print(__doc__)

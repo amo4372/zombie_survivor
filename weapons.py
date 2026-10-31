@@ -78,6 +78,12 @@ class Projectile:
         self.is_scythe_slash = is_scythe_slash
         self.owner = None  # v2.2.7 PvPvE：投射物归属玩家（判定阵营用）
         self.lifetime = 3.0 if is_flame else (laser_duration if is_laser else 10.0)
+        # v2.8.8 弹道破空特效：高速实弹 / 轨道炮射线才显示曳光，
+        # 火焰、激光（已有自身光束）等不重复绘制。
+        _spd = math.hypot(vx, vy)
+        self.tracer = bool(_spd >= 18.0 and not is_flame and not is_laser
+                           and not is_scythe_slash)
+        self.tracer_color = (255, 120, 90) if is_rail else (255, 232, 180)
         self.alive = True
         self.should_explode = False
         # 特效标记
@@ -381,7 +387,11 @@ class Weapon:
                 "dot_damage": 12, "dot_duration": 3.0
             },
             WeaponType.RAILGUN: {
-                "name": "轨道炮", "damage": 560, "fire_rate": 1.6,
+                # v2.8.8：轨道炮改为**每帧 30 点基础伤害**（帧伤武器，
+                # 对玩家同值），不再是单次 560 的瞬时高伤
+                "name": "轨道炮", "damage": 30, "fire_rate": 1.6,
+                "damage_per_frame": True,
+                "damage_vs_player": 30,
                 "range": 1800, "speed": 0, "spread": 0, "pierce": 99,
                 "is_laser": True, "laser_width": 25, "laser_duration": 0.8,
                 "color": PURPLE, "projectile_size": 15, "shake": 25,
@@ -498,7 +508,10 @@ class Weapon:
             },
             # ========== 狙击枪扩展 ==========
             WeaponType.AWP: {
-                "name": "AWM", "damage": 420, "fire_rate": 1.1,
+                # v2.8.8：AWM 基础伤害 420 → 对僵尸 200 / 对玩家 100
+                # （原值过高且对玩家与僵尸同伤，PvP 里一枪秒人）
+                "name": "AWM", "damage": 200, "fire_rate": 1.1,
+                "damage_vs_player": 100,
                 "range": 2600, "speed": 34, "spread": 0, "pierce": 30,
                 "color": GREEN, "projectile_size": 8, "shake": 12,
                 "desc": "传奇狙击枪：射速更快/弹夹10发/射程与穿透大幅提升/按住拖动显示弹道预瞄线，松开开火（v2.5.6 修复蓄力开火）",

@@ -268,6 +268,25 @@ class SkillsMixin:
                 pass
         return cd
 
+    def _charge_locked(self, player=None):
+        """v2.8.8：该玩家是否正处于无畏冲锋中（此时禁用一切主动操作，只能转向）"""
+        _p = player if player is not None else getattr(self, 'player', None)
+        if _p is None:
+            return False
+        return bool(getattr(_p, 'fearless_charge_active', False)) or \
+               bool(getattr(getattr(_p, 'riot_gear', None), 'charge_active', False))
+
+    def _blocked_by_charge(self, action="操作", player=None):
+        """冲锋中禁用某项操作并给出提示"""
+        try:
+            self.floating_texts.append(FloatingText(
+                getattr(player or self.player, 'x', 0),
+                getattr(player or self.player, 'y', 0) - 50,
+                f"冲锋中无法{action}!", color=(255, 130, 60), lifetime=1.0))
+        except Exception:
+            pass
+        return False
+
     def _use_skill(self, skill_type):
         """使用指定技能"""
         try:
@@ -276,6 +295,9 @@ class SkillsMixin:
             pass
         if not self.player:
             return False
+        # v2.8.8：无畏冲锋期间禁用技能释放键
+        if self._charge_locked(self.player):
+            return self._blocked_by_charge("使用技能", self.player)
         if not self.player.can_act():
             return False
         # v2.7.0 无畏冲锋期间：无法使用任何技能（冲锋中只能转向）

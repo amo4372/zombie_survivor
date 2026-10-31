@@ -199,7 +199,8 @@ logger = GameLogger()
 class PlayingMixin:
     # v2.2.6：救援平衡参数（防"挨得近无限互救根本死不掉"）
     RESCUE_COOLDOWN = 15.0      # 被救活后再次可被救援的冷却（秒）
-    DOWNED_DEATH_TIME = 20.0    # 同屏倒地超过该时间未获救 → 彻底死亡
+    # v2.8.8：合作模式倒地时间 20s → 45s（原时长太短，队友根本来不及赶到）
+    DOWNED_DEATH_TIME = 45.0    # 同屏倒地超过该时间未获救 → 彻底死亡
 
     def _update_rescue(self, dt):
         """双人救援系统：倒地→队友救援复活（同屏靠近自动救援 / 网络 8 秒自动复活）；全倒地则结束
@@ -478,11 +479,18 @@ class PlayingMixin:
             self.lifesteal_flash = max(0, self.lifesteal_flash - dt * 1.5)
 
         # 角色技能：随时间缓慢回血（如医护兵）
-        if getattr(self.player, 'health_regen', 0) > 0 and self.player.alive and not self.player.downed:
-            self._char_regen_timer = getattr(self, '_char_regen_timer', 0) + dt
-            if self._char_regen_timer >= 2.0:
-                self._char_regen_timer = 0
-                self.player.heal(self.player.health_regen * 2)
+        # v2.8.8 修复：此前**只给 P1 回血**，P2/P3/P4 选了医护兵却完全不回血
+        # —— 这就是"P2 没有角色效果"的直接原因。改为遍历全部注册玩家。
+        self._char_regen_timer = getattr(self, '_char_regen_timer', 0) + dt
+        if self._char_regen_timer >= 2.0:
+            self._char_regen_timer = 0.0
+            for _p in self.registered_players():
+                try:
+                    if getattr(_p, 'health_regen', 0) > 0 and \
+                            getattr(_p, 'alive', False) and not getattr(_p, 'downed', False):
+                        _p.heal(_p.health_regen * 2)
+                except Exception:
+                    pass
 
         # 聊天输入模式：游戏继续运行，仅跳过玩家输入处理
         keys = pygame.key.get_pressed()
@@ -1014,11 +1022,15 @@ class PlayingMixin:
             if self.config.control_mode == ControlMode.KEYBOARD:
                 mouse_left = pygame.mouse.get_pressed()[0]
                 # 装备防爆套装，鼠标左键执行肘击，不再开火
-                if mouse_left and self.player.can_act():
+                # v2.8.8：无畏冲锋期间禁用肘击（冲锋只能靠摇杆/方向键转向）
+                if mouse_left and self.player.can_act() and \
+                        not getattr(self.player, 'fearless_charge_active', False):
                     if self.player.riot_gear.equipped and self.riot_anim_state == "idle":
                         self._perform_bash(math.degrees(mouse_angle))
                     else:
                         auto_shoot = True
+                elif not getattr(self.player, 'fearless_charge_active', False):
+                    auto_shoot = bool(mouse_left and self.player.can_act())
             else:
                 auto_shoot = self.aim_button.is_shooting
 
@@ -1043,10 +1055,75 @@ class PlayingMixin:
                 # 按住：实时更新蓄力角（拖拽时预瞄线跟随摇杆），本帧不开火
                 self.player._awm_saved = mouse_angle
                 _charge_blocked = True
+                # v2.8.8 蓄力收敛：记录蓄力起始时间，供散布扇形收敛 + 视野拉大使用
+                if getattr(self.player, '_charge_start_t', None) is None:
+                    self.player._charge_start_t = time.time()
             elif _saved_aim is not None and not _p1_paused:
                 # 松开：按蓄力角开火一次，并立刻清空预瞄（预瞄线立即消失，不再卡死）
                 _fire_angle = _saved_aim
                 self.player._awm_saved = None
+                self.player._charge_start_t = None
+        elif getattr(self.player, "_awm_saved", None) is not None:
+            self.player._awm_saved = None
+            self.player._charge_start_t = None
+
+        # ==================================================================
+        # v2.8.8 蓄力武器的"散布收敛"与"视野拉远"
+        # ------------------------------------------------------------------
+        # 按住开火键时：
+        #   1) 子弹散布由一个**大扇形**逐渐收窄（圆心角随蓄力时长变小），
+        #      收敛到阈值后达到该武器最小散布 —— 直观表达"越稳越准"；
+        #   2) 视野（摄像机缩放）随蓄力逐渐拉远，直至能看见子弹的极限射程，
+        #      模拟狙击手"屏息拉远观察"的体验。
+        # 松开即恢复。
+        # ==================================================================
+        _charge_t = 0.0
+        _charge_ratio = 0.0
+        _charge_w = _charge_weapon
+        if _charge_w is not None and getattr(_charge_w, "hold_charge", False) \
+                and getattr(self.player, "_awm_saved", None) is not None:
+            _st = getattr(self.player, "_charge_start_t", None)
+            if _st is not None:
+                _charge_t = max(0.0, time.time() - _st)
+            _full = float(getattr(_charge_w, "charge_full_time", 1.2) or 1.2)
+            _charge_ratio = max(0.0, min(1.0, _charge_t / _full))
+            # 1) 散布收敛：扇形圆心角从 spread 上限线性收敛到下限
+            try:
+                _sp_max = float(getattr(_charge_w, "charge_spread_max",
+                                        getattr(_charge_w, "spread", 0.06) or 0.06) or 0.06)
+                _sp_min = float(getattr(_charge_w, "charge_spread_min", 0.0) or 0.0)
+                _cur_spread = _sp_max + (_sp_min - _sp_max) * _charge_ratio
+                self.player._charge_spread = _cur_spread
+                self.player._charge_ratio = _charge_ratio
+            except Exception:
+                pass
+            # 2) 视野拉远：随蓄力把摄像机 zoom 拉低（拉远）到能覆盖射程
+            try:
+                _cam = getattr(self, "camera", None)
+                if _cam is not None and hasattr(_cam, "zoom"):
+                    _z0 = float(getattr(_cam, "_zoom_base", 0.0) or 0.0)
+                    if _z0 <= 0.0:
+                        _cam._zoom_base = float(getattr(_cam, "zoom", 1.0) or 1.0)
+                        _z0 = _cam._zoom_base
+                    _z_min = float(getattr(_charge_w, "charge_zoom_min", 0.62) or 0.62)
+                    _cam.zoom = _z0 + (_z_min - _z0) * _charge_ratio
+                    self.player._charge_zoom_active = True
+            except Exception:
+                pass
+        elif getattr(self.player, "_charge_zoom_active", False):
+            # 松开 / 切换武器：恢复原视野
+            try:
+                _cam = getattr(self, "camera", None)
+                if _cam is not None and hasattr(_cam, "zoom"):
+                    _z0 = float(getattr(_cam, "_zoom_base", 0.0) or 0.0)
+                    if _z0 > 0.0:
+                        _cam.zoom = _z0
+                    _cam._zoom_base = 0.0
+            except Exception:
+                pass
+            self.player._charge_zoom_active = False
+            self.player._charge_spread = None
+            self.player._charge_ratio = 0.0
         elif getattr(self.player, "_awm_saved", None) is not None:
             # 当前武器不是蓄力武器（切武器/装备被卸下等）：清理残留预瞄，避免预瞄线卡死
             self.player._awm_saved = None
@@ -2434,8 +2511,22 @@ class PlayingMixin:
         if self.is_multiplayer_active():
             # 双人/联机：救援系统——全部倒地才游戏结束
             # v2.8.0：不再立刻结算，先进死亡反应时间（慢放+镜头），给玩家反应余地
+            # v2.8.8：合作模式下若仍有队友存活，则**不结算**，转为观战
             if self._update_rescue(dt):
-                self._begin_death_reaction()
+                try:
+                    if hasattr(self, 'update_spectate') and self.update_spectate(dt):
+                        # 还有队友活着 → 进入观战，本局继续
+                        pass
+                    else:
+                        self._begin_death_reaction()
+                except Exception:
+                    self._begin_death_reaction()
+            else:
+                try:
+                    if hasattr(self, 'update_spectate'):
+                        self.update_spectate(dt)
+                except Exception:
+                    pass
         elif self.player.hp <= 0:
             self._begin_death_reaction()
         # v2.2.0 争分夺秒：倒计时耗尽 → 挑战结算（非死亡）

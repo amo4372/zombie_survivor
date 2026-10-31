@@ -155,6 +155,159 @@ def seed_skills(conn):
     return _n
 
 
+# ======================================================================
+# v2.8.8 数据版本（dataver）—— 解决"数据库权威"与"更新要生效"的冲突
+# ======================================================================
+# 每行带一个 dataver（数据版本号）。发布时种子数据的 dataver = 当前 DATA_VERSION。
+# 升级比对规则：
+#   发布包 dataver > 本地行 dataver  → 覆盖（策划这一版改过，必须生效）
+#   发布包 dataver <= 本地行 dataver → 保留（玩家/策划手工调过，不覆盖）
+#   本地缺行                          → 插入
+# 这样既"游戏一律读数据库"，又保证"发布的新数值能推到玩家端"。
+DATA_VERSION = 1
+
+
+def ensure_dataver_columns(conn):
+    """为各数据表补上 dataver 列"""
+    for _t in ("weapons", "enemies", "runes", "buffs", "skills"):
+        try:
+            _cols = [_r[1] for _r in
+                     conn.execute(f"PRAGMA table_info({_t})").fetchall()]
+            if "dataver" not in _cols:
+                conn.execute(f"ALTER TABLE {_t} ADD COLUMN dataver INTEGER DEFAULT 0")
+        except Exception:
+            pass
+    try:
+        conn.commit()
+    except Exception:
+        pass
+
+
+def sync_rows_from_code(conn, data_version=None, force=False):
+    """按 dataver 把代码默认值同步进数据库（行级）
+
+    返回 (新增行数, 更新行数, 保留行数)
+    """
+    ensure_dataver_columns(conn)
+    _dv = int(data_version if data_version is not None else DATA_VERSION)
+    _added = _updated = _kept = 0
+    for _table, _rows in (("weapons", D.extract_weapons()),
+                          ("enemies", D.extract_enemies()),
+                          ("runes", D.extract_runes()),
+                          ("buffs", D.extract_buffs()),
+                          ("skills", D.extract_skills())):
+        try:
+            _cols = [_r[1] for _r in
+                     conn.execute(f"PRAGMA table_info({_table})").fetchall()]
+        except Exception:
+            continue
+        for _k, _v in _rows.items():
+            if not isinstance(_v, dict):
+                continue
+            _sets, _vals = [], []
+            for _f, _fv in _v.items():
+                if _f not in _cols or _f == "key":
+                    continue
+                if isinstance(_fv, (tuple, list)) and len(_fv) >= 3:
+                    _sets.append(f"{_f}=?"); _vals.append(_color(_fv))
+                elif isinstance(_fv, bool):
+                    _sets.append(f"{_f}=?"); _vals.append(1 if _fv else 0)
+                elif isinstance(_fv, (int, float)):
+                    _sets.append(f"{_f}=?"); _vals.append(_fv)
+                elif isinstance(_fv, str):
+                    _sets.append(f"{_f}=?"); _vals.append(_fv)
+            if not _sets:
+                continue
+            try:
+                _row = conn.execute(
+                    f"SELECT dataver FROM {_table} WHERE key=?", (_k,)).fetchone()
+            except Exception:
+                _row = None
+            if _row is None:
+                _cs = ["key"] + [x.split("=")[0] for x in _sets] + ["dataver"]
+                _vs = [_k] + _vals + [_dv]
+                try:
+                    conn.execute(
+                        f"INSERT INTO {_table} ({','.join(_cs)}) "
+                        f"VALUES ({','.join(['?'] * len(_cs))})", _vs)
+                    _added += 1
+                except Exception:
+                    pass
+                continue
+            _local = _row[0] or 0
+            if force or int(_local) < _dv:
+                _vals.append(_k)
+                try:
+                    conn.execute(
+                        f"UPDATE {_table} SET {', '.join(_sets)}, dataver=? WHERE key=?",
+                        _vals + [_dv])
+                    _updated += 1
+                except Exception:
+                    pass
+            else:
+                _kept += 1
+    try:
+        conn.commit()
+    except Exception:
+        pass
+    return _added, _updated, _kept
+
+
+def overwrite_from_code(conn):
+    """v2.8.8：以代码内置默认值为准，**覆盖**数据库里的数值
+
+    为什么需要：数据库是"只补不覆盖"，玩家端 DB 里存的是旧数值。
+    策划在代码里把 AWM 从 420 改成 200 后，玩家更新了代码却仍读到 420 ——
+    **数值改了但游戏里没变**。
+
+    版本升级意味着"策划改了数值"，此时**代码是权威源**，
+    所以对已有行用代码值覆盖（仍不删除用户自建行）。
+    返回被覆盖的行数。
+    """
+    _c = conn.cursor()
+    _n = 0
+    for _table, _rows in (("weapons", D.extract_weapons()),
+                          ("enemies", D.extract_enemies()),
+                          ("runes", D.extract_runes()),
+                          ("buffs", D.extract_buffs()),
+                          ("skills", D.extract_skills())):
+        for _k, _v in _rows.items():
+            if not isinstance(_v, dict):
+                continue
+            try:
+                _cols = [_r[1] for _r in
+                         _c.execute(f"PRAGMA table_info({_table})").fetchall()]
+            except Exception:
+                continue
+            _sets, _vals = [], []
+            for _f, _fv in _v.items():
+                if _f not in _cols or _f == "key":
+                    continue
+                if isinstance(_fv, (tuple, list)) and len(_fv) >= 3:
+                    _sets.append(f"{_f}=?")
+                    _vals.append(_color(_fv))
+                elif isinstance(_fv, bool):
+                    _sets.append(f"{_f}=?")
+                    _vals.append(1 if _fv else 0)
+                elif isinstance(_fv, (int, float)):
+                    _sets.append(f"{_f}=?")
+                    _vals.append(_fv)
+                elif isinstance(_fv, str):
+                    _sets.append(f"{_f}=?")
+                    _vals.append(_fv)
+            if not _sets:
+                continue
+            _vals.append(_k)
+            try:
+                _n += _c.execute(
+                    f"UPDATE {_table} SET {', '.join(_sets)} WHERE key=?",
+                    _vals).rowcount
+            except Exception:
+                continue
+    conn.commit()
+    return _n
+
+
 def seed_all(conn):
     """补种所有表（已有行不覆盖）"""
     _r = {

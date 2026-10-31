@@ -290,8 +290,22 @@ class PlayMixin:
             prog = max(0.0, min(1.0, getattr(player, 'rescue_progress', 0) / 2.5))
             pygame.draw.rect(self.screen, (240, 220, 80), (bx, rect.y + int(148 * scale), int(bar_w * prog), int(10 * scale)))
             pygame.draw.rect(self.screen, (255, 255, 255), (bx, rect.y + int(148 * scale), bar_w, int(10 * scale)), 1)
-            dtxt = g.font_small.render("倒地 · 队友靠近救援", True, (240, 230, 120))
+            # v2.8.8：倒地时间延长到 45s 后，必须显示**还剩多久**，
+            # 否则队友无法判断来不来得及。低血量时红色闪烁提醒。
+            _dmax = float(getattr(g, 'DOWNED_DEATH_TIME', 45.0) or 45.0)
+            _dleft = max(0.0, _dmax - float(getattr(player, 'downed_timer', 0.0) or 0.0))
+            _urgent = _dleft <= 10.0
+            _blink = (int(pygame.time.get_ticks() / 250) % 2 == 0)
+            _col = (255, 90, 90) if (_urgent and _blink) else (240, 230, 120)
+            _pct2 = int(max(0.0, min(1.0, _dleft / max(0.01, _dmax))) * 100)
+            dtxt = g.font_small.render(
+                f"倒地 · 队友靠近救援 ({int(_dleft)}s / {int(_dmax)}s)", True, _col)
             self.screen.blit(dtxt, (bx, rect.y + int(160 * scale)))
+            # 剩余时间条（与救援进度条区分：这条是"还能撑多久"）
+            _ty2 = rect.y + int(176 * scale)
+            pygame.draw.rect(self.screen, (70, 40, 40), (bx, _ty2, bar_w, int(6 * scale)))
+            pygame.draw.rect(self.screen, _col, (bx, _ty2, int(bar_w * _pct2 / 100), int(6 * scale)))
+            pygame.draw.rect(self.screen, (255, 255, 255), (bx, _ty2, bar_w, int(6 * scale)), 1)
         # ===== 触控控件（仅触控模式） =====
         if g.config.control_mode == ControlMode.TOUCH and not g.is_network_client_render():
             if label == "P1":
@@ -836,6 +850,18 @@ class PlayMixin:
 
         # 绘制粒子
         self.game.particles.draw(self.screen, cam_x, cam_y, scale)
+
+        # v2.8.8 蓄力武器的散布扇形（按住开火键时显示，随蓄力收敛）
+        try:
+            if getattr(player, '_awm_saved', None) is not None:
+                self.draw_charge_spread_fan(player, cam_x, cam_y, scale)
+        except Exception:
+            pass
+        # v2.8.8 子弹破空曳光（高速弹丸/轨道炮）
+        try:
+            self.draw_bullet_tracers(cam_x, cam_y, scale)
+        except Exception:
+            pass
 
         # 绘制伤害数字
         # v2.8.7：列表中可能混入 None / 无 draw 的对象（第三方 Mod 通过
@@ -2229,3 +2255,109 @@ class PlayMixin:
         core_size = int(8 * scale * flash_intensity)
         pygame.draw.circle(self.game.screen, WHITE, (int(flash_x), int(flash_y)), core_size)
         pygame.draw.circle(self.game.screen, (255, 255, 200), (int(flash_x), int(flash_y)), max(1, core_size - 2))
+
+
+# ======================================================================
+# v2.8.8 蓄力武器的散布扇形 + 弹道破空特效
+# ======================================================================
+
+def draw_charge_spread_fan(self, player, cam_x, cam_y, scale):
+    """蓄力时绘制"子弹散布扇形"
+
+    扇形圆心角随蓄力时长**由大变小**：起始是一个很宽的大扇形（表示子弹
+    散布很大、打不准），随蓄力收敛到阈值后变成极窄的一条（表示稳定精准）。
+    达到最小散布后扇形变色提示"已稳定"。
+    """
+    try:
+        _ratio = float(getattr(player, '_charge_ratio', 0.0) or 0.0)
+        _spread = getattr(player, '_charge_spread', None)
+        if _spread is None:
+            return
+        _ang = float(getattr(player, 'facing_angle', 0.0) or 0.0)
+        _w = player.get_current_weapon() if hasattr(player, 'get_current_weapon') else None
+        _rng = float(getattr(_w, 'range', 900) or 900)
+        # 扇形半径取武器射程（屏幕上按 scale 换算）
+        _R = int(_rng * scale * 0.55)
+        _R = max(60, min(_R, 1400))
+        _px = int((getattr(player, 'x', 0) - cam_x) * scale)
+        _py = int((getattr(player, 'y', 0) - cam_y) * scale)
+        _half = math.radians(max(0.0, float(_spread)) * 180.0 / math.pi * 0.5 * 57.2958)
+        # spread 是弧度比例，这里直接当作半角的正切，转成扇形半角
+        _half = max(0.004, min(1.2, float(_spread) * 2.2))
+        _a0 = math.radians(_ang) - _half
+        _a1 = math.radians(_ang) + _half
+        _stable = _ratio >= 0.999
+        _col = (120, 255, 170) if _stable else (255, 190, 90)
+        _surf = pygame.Surface((self.screen.get_width(), self.screen.get_height()),
+                               pygame.SRCALPHA)
+        _pts = [(_px, _py)]
+        _steps = 24
+        for _i in range(_steps + 1):
+            _a = _a0 + (_a1 - _a0) * (_i / _steps)
+            _pts.append((int(_px + math.cos(_a) * _R), int(_py + math.sin(_a) * _R)))
+        pygame.draw.polygon(_surf, (*_col, 46), _pts)
+        pygame.draw.lines(_surf, (*_col, 150), True, _pts[1:], max(1, int(2 * scale)))
+        # 中线（实际弹道方向）
+        pygame.draw.line(_surf, (*_col, 210), (_px, _py),
+                         (int(_px + math.cos(math.radians(_ang)) * _R),
+                          int(_py + math.sin(math.radians(_ang)) * _R)),
+                         max(1, int(2 * scale)))
+        self.screen.blit(_surf, (0, 0))
+        # 收敛进度文字
+        try:
+            _g = self.game
+            _txt = ("已稳定" if _stable else f"收束 {int(_ratio * 100)}%")
+            _s = _g.font_small.render(_txt, True, _col)
+            self.screen.blit(_s, (_px - _s.get_width() // 2, _py - int(46 * scale)))
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
+def draw_bullet_tracers(self, cam_x, cam_y, scale):
+    """v2.8.8 弹道破空特效：高速子弹拖出一条渐隐的光迹
+
+    仅对"高速/穿透类"武器（AWM、轨道炮等）启用，模拟三角洲类游戏里
+    子弹划破空气留下的曳光。
+    """
+    try:
+        _g = self.game
+        _projs = getattr(_g, 'projectiles', None) or []
+        for _p in _projs:
+            try:
+                if not getattr(_p, 'tracer', False):
+                    continue
+                _x1 = int((getattr(_p, 'x', 0) - cam_x) * scale)
+                _y1 = int((getattr(_p, 'y', 0) - cam_y) * scale)
+                _vx = float(getattr(_p, 'vx', 0.0) or 0.0)
+                _vy = float(getattr(_p, 'vy', 0.0) or 0.0)
+                _sp = math.hypot(_vx, _vy)
+                if _sp <= 0.01:
+                    continue
+                _len = min(int(_sp * 0.055 * scale), int(260 * scale))
+                _ux, _uy = _vx / _sp, _vy / _sp
+                _x0 = int(_x1 - _ux * _len)
+                _y0 = int(_y1 - _uy * _len)
+                _col = getattr(_p, 'tracer_color', (255, 230, 170))
+                # 三段渐隐：尾部细淡、头部粗亮
+                for _k in range(3):
+                    _t0 = _k / 3.0
+                    _t1 = (_k + 1) / 3.0
+                    _sx = int(_x0 + (_x1 - _x0) * _t0)
+                    _sy = int(_y0 + (_y1 - _y0) * _t0)
+                    _ex = int(_x0 + (_x1 - _x0) * _t1)
+                    _ey = int(_y0 + (_y1 - _y0) * _t1)
+                    _a = 70 + int(150 * _t1)
+                    _wd = max(1, int((1 + _t1 * 2) * scale))
+                    _s = pygame.Surface((self.screen.get_width(),
+                                         self.screen.get_height()), pygame.SRCALPHA)
+                    pygame.draw.line(_s, (*_col[:3], _a), (_sx, _sy), (_ex, _ey), _wd)
+                    self.screen.blit(_s, (0, 0))
+                # 弹头亮点
+                _hs = max(2, int(3 * scale))
+                pygame.draw.circle(self.screen, _col, (_x1, _y1), _hs)
+            except Exception:
+                continue
+    except Exception:
+        pass

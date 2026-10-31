@@ -317,10 +317,21 @@ class GameDatabase:
                     _need = True       # 检查失败 → 保守补种
             if not _need:
                 return "up_to_date"
-            from .seed import seed_tuning, seed_difficulty, seed_all
+            from .seed import (seed_tuning, seed_difficulty, seed_all,
+                              overwrite_from_code)
             seed_tuning(conn)
             seed_difficulty(conn)
             seed_all(conn)
+            # v2.8.8：**数据库权威 + 版本化同步**
+            # - 游戏运行期一律从数据库读数值（数据库是唯一权威）
+            # - 版本升级时按 dataver 逐行同步：发布包改过的行覆盖生效，
+            #   本地手工调过的行保留 —— 既权威又保证更新能推到玩家端
+            # - 强制全量以代码为准：`python -m gamedata sync --force`
+            try:
+                from .seed import sync_rows_from_code
+                self._sync_stats = sync_rows_from_code(conn)
+            except Exception:
+                self._sync_stats = (0, 0, 0)
             conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)",
                          ("seed_version", str(_cur)))
             conn.commit()
