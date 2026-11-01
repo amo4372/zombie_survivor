@@ -277,7 +277,9 @@ class ShopMixin:
     # 单人：地图 → 武器 → 角色 → 开始
     # ==================================================================
     SETUP_STEPS_SINGLE = ["map", "weapon_p1", "char_p1"]
-    SETUP_STEPS_DUO = ["map", "weapon_p1", "char_p1", "weapon_p2", "char_p2"]
+    # v2.9.8：多人模式移除地图选择页（地图已在房间页选定），
+    # 只保留 P1 武器→P1 角色→P2 武器→P2 角色。
+    SETUP_STEPS_DUO = ["weapon_p1", "char_p1", "weapon_p2", "char_p2"]
 
     def begin_setup_flow(self):
         """v2.9.2：从"开始游戏"进入分阶段流程（全模式通用）

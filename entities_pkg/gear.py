@@ -457,14 +457,22 @@ class RiotGear:
         if not self.grapple_aiming:
             self.grapple_locked_target = None
             self.grapple_aim_anchor = None
+            self._grapple_aim_prev = False      # v2.9.8：下次瞄准重新计时
             return None
-        # 蓄力计时：0.6s 内锁定圈从 18% 扩到 100%（v2.2.12 初始圈缩小）
+        # v2.9.8 修复"锁定圈消失 / 不成长"：
+        #   ① 计时只在**开始瞄准那一帧**重置。原写法仅在字段为 None 时初始化，
+        #      连续瞄准时 _grapple_aim_start 一直是旧值 → charge 恒为 1.0，
+        #      圈一出现就是最大，完全看不到"由小到大"的过程（观感像没有圈）。
+        #   ② 起点从 18% 改为 0，真正从半径 0 长到阈值。
         import time as _t
-        if getattr(self, '_grapple_aim_charge', None) is None or getattr(self, '_grapple_aim_start', None) is None:
+        if not getattr(self, '_grapple_aim_prev', False):
+            self._grapple_aim_start = _t.time()
             self._grapple_aim_charge = 0.0
+        self._grapple_aim_prev = True
+        if getattr(self, '_grapple_aim_start', None) is None:
             self._grapple_aim_start = _t.time()
         self._grapple_aim_charge = min(1.0, (_t.time() - self._grapple_aim_start) / 0.6)
-        cur_radius = self.grapple_lock_radius * max(0.18, self._grapple_aim_charge)
+        cur_radius = self.grapple_lock_radius * max(0.0, self._grapple_aim_charge)
         # 锁定圈中心 = 锚点（预瞄终点，随瞄准移动）
         _a = math.radians(aim_angle if aim_angle is not None else self.aim_line_angle)
         _ad = aim_dist if aim_dist is not None else self.grapple_max_range
@@ -815,7 +823,7 @@ class RiotGear:
                 _ax = player_x + math.cos(_a) * self.grapple_max_range
                 _ay = player_y + math.sin(_a) * self.grapple_max_range
             _charge = getattr(self, '_grapple_aim_charge', 1.0) or 1.0
-            _r = self.grapple_lock_radius * max(0.18, _charge)
+            _r = self.grapple_lock_radius * max(0.0, _charge)
             axp = int((_ax - camera_x) * scale)
             ayp = int((_ay - camera_y) * scale)
             lr = int(_r * scale)

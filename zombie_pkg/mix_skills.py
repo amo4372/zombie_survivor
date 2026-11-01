@@ -1204,6 +1204,58 @@ class SkillsMixin:
                 hit_any = True
                 if not enemy.alive:
                     self._on_enemy_death(enemy)
+            # v2.9.8：肘击对**敌方玩家**生效。
+            # 原实现只遍历 self.enemies（僵尸），PvP 下肘击打敌人玩家完全无判定。
+            try:
+                _others = []
+                for _op in (getattr(self, 'player2', None),
+                            getattr(self, 'player', None)):
+                    if _op is None or _op is player:
+                        continue
+                    if not getattr(_op, 'alive', True):
+                        continue
+                    _others.append(_op)
+                for _op in _others:
+                    _dist = math.hypot(_op.x - player.x, _op.y - player.y)
+                    if _dist > bash_r + 20:
+                        continue
+                    # 阵营判定：team 不同才算敌人（合作模式同队不打）
+                    _t1 = getattr(player, 'team_id', 0)
+                    _t2 = getattr(_op, 'team_id', 0)
+                    if _t1 == _t2:
+                        continue
+                    if _dist > 1:
+                        _ang = math.degrees(math.atan2(_op.y - player.y,
+                                                       _op.x - player.x))
+                        _df = abs((_ang - bash_angle + 180) % 360 - 180)
+                        if _df > half_arc:
+                            continue
+                    _dmg = rg.charge_damage * 1.6 * player.damage_mult
+                    try:
+                        _dmg *= player.buff_manager.get_damage_mult()
+                    except Exception:
+                        pass
+                    try:
+                        _op.take_damage(_dmg, damage_type="melee",
+                                        attack_x=player.x, attack_y=player.y,
+                                        source="player")
+                    except Exception:
+                        pass
+                    try:
+                        _op.apply_buff(BuffType.STUN,
+                                       duration=rg.charge_stun_duration * 0.6)
+                    except Exception:
+                        pass
+                    if _dist > 0:
+                        _kb = rg.charge_knockback * 0.9
+                        _op.x += (_op.x - player.x) / _dist * _kb
+                        _op.y += (_op.y - player.y) / _dist * _kb
+                    self.damage_numbers.append(DamageNumber(
+                        _op.x, _op.y, _dmg, is_crit=False, damage_type="melee"))
+                    self.particles.spawn_blood(_op.x, _op.y, 10)
+                    hit_any = True
+            except Exception:
+                pass
             self.floating_texts.append(FloatingText(
                 player.x, player.y - 40, "盾牌肘击!", color=CYAN, lifetime=1.0
             ))

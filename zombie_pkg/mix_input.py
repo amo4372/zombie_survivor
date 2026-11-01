@@ -554,6 +554,33 @@ class InputMixin:
                   getattr(GameState, 'CHARACTER_SELECT_P1', None),
                   getattr(GameState, 'WEAPON_SELECT_P2', None),
                   getattr(GameState, 'CHARACTER_SELECT_P2', None)):
+            # v2.9.8：老虎机赌注**数字输入**（点赌注区进入编辑态后敲数字）
+            if self.state == GameState.SLOT_MACHINE and getattr(
+                    self, "slot_bet_editing", False):
+                for event in all_events:
+                    if event.type == pygame.KEYDOWN:
+                        try:
+                            from gacha import SLOT_BET_MIN
+                        except Exception:
+                            SLOT_BET_MIN = 50
+                        _cur = str(getattr(self, "slot_bet_input", "") or "")
+                        if event.key == pygame.K_RETURN or event.key == pygame.K_KP_ENTER:
+                            try:
+                                _v = int(_cur) if _cur else 0
+                            except Exception:
+                                _v = 0
+                            self.slot_bet = max(SLOT_BET_MIN, _v)
+                            self.slot_bet_editing = False
+                            self.slot_bet_input = ""
+                        elif event.key == pygame.K_ESCAPE:
+                            self.slot_bet_editing = False
+                            self.slot_bet_input = ""
+                        elif event.key == pygame.K_BACKSPACE:
+                            self.slot_bet_input = _cur[:-1]
+                        else:
+                            _ch = getattr(event, "unicode", "") or ""
+                            if _ch.isdigit() and len(_cur) < 9:
+                                self.slot_bet_input = _cur + _ch
             for event in all_events:
                 if event.type == pygame.QUIT:
                     logger.info("收到退出事件")

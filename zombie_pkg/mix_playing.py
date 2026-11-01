@@ -1017,9 +1017,15 @@ class PlayingMixin:
         # v2.1.3：双人模式改为 per-player 暂停升级 —— 不再切全局 SKILL_SELECT，
         # 升级玩家进入选卡弹窗（半屏）且怪物脱锁/免伤，另一玩家游戏完全不受影响
         _mp = self.is_multiplayer_active() and self.multiplayer_mode == "same_screen"
-        if self.state != GameState.SKILL_SELECT and not (_mp and self._upgrade_pause_player):
+        # v2.9.8：原条件 `not (_mp and self._upgrade_pause_player)` 是**整块**
+        # 判定 —— 只要任一玩家正在选卡，另一个人即使 pending_level_up 也进不来，
+        # 必须等对方选完。表现为"两人同时连升多级时要排队"。
+        # 改为循环内按玩家独立判断，配合 P2 独立 selector，两人可同时选卡。
+        if self.state != GameState.SKILL_SELECT:
             for _pl, _tag in ((self.player, "P1"), (self.player2, "P2")):
                 if not _pl or not _pl.pending_level_up:
+                    continue
+                if _mp and getattr(_pl, 'upgrade_paused', False):
                     continue
                 if _pl.skill_cards:
                     if _mp:
@@ -1039,9 +1045,12 @@ class PlayingMixin:
                             pass
                         _half = max(320, self.scaled_width // 2)
                         _region = pygame.Rect(0 if _tag == "P1" else self.scaled_width - _half, 0, _half, self.scaled_height)
-                        self.skill_card_selector.show(_pl.skill_cards, region=_region,
-                                                      title=f"{_tag} 升级！选择你的强化",
-                                                      subtitle=f"{_tag} 等级 {_pl.level} → 选择技能卡")
+                        _sel_ui = (self.skill_card_selector if _tag == "P1"
+                                   else getattr(self, 'skill_card_selector2', None)
+                                   or self.skill_card_selector)
+                        _sel_ui.show(_pl.skill_cards, region=_region,
+                                     title=f"{_tag} 升级！选择你的强化",
+                                     subtitle=f"{_tag} 等级 {_pl.level} → 选择技能卡")
                     else:
                         self.state = GameState.SKILL_SELECT
                         self.pending_upgrade_for = _tag

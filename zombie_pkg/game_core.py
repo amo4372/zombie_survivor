@@ -356,6 +356,9 @@ class GameCore:
         self.skill_selector = None
         self.skill_caster = None
         self.skill_card_selector = SkillCardSelector()
+        # v2.9.8：P2 独立选卡器 —— 此前 P1/P2 共用一个 selector，
+        # 两人同时升级时第二个人根本弹不出卡（也正因如此才被设计成"串行"）。
+        self.skill_card_selector2 = SkillCardSelector()
         self.pending_upgrade_for = None  # 同屏双人：当前升级的玩家 "P1"/"P2"
         # v2.1.3：同屏双人 per-player 升级暂停（P1 升级选卡时 P2 继续游戏、怪物脱锁升级玩家）。
         # 值为 "P1"/"P2"/None；单机模式不用（仍走全局 SKILL_SELECT 状态）
