@@ -50,7 +50,7 @@ _PLAYER_BIN = struct.Struct("<fffffB")
 _ENEMY_BIN = struct.Struct("<IHffffffB")
 
 # 采样与容量
-SAMPLE_HZ = 20.0                 # 每秒采样帧数
+SAMPLE_HZ = 30.0   # v2.9.1：20Hz→30Hz（用户反馈帧数偏低）                 # 每秒采样帧数
 DEFAULT_BUFFER_SECONDS = 120.0   # 环形缓冲保留秒数
 MAX_ENEMIES_PER_FRAME = 220      # 单帧敌人上限（超出的按距离玩家最近的截断）
 

@@ -34,6 +34,9 @@ ESSENTIAL_FILES = [
     "dev_state.py",      # v2.5.8 开发者状态（每玩家独立面板，game_core 依赖）
     "replay.py",        # v2.8.0 全局回放系统（mix_replay 依赖，漏打包会导致 import 失败）
     "boot_guard.py",    # v2.8.2 启动致命错误自愈（main.py 依赖）
+    "twin_boss.py",     # v2.8.9 双子 Boss 郑某/惠某（mix_twinboss 依赖，漏打包会 import 失败）
+    "gacha.py",         # v2.8.9 军械库补给 + 老虎机 + 出货演出（mix_shop 依赖）
+    "weapon_pool.py",   # v2.8.9 武器奖池（gacha 依赖）
     "requirements.txt", "README.md",
 ]
 
@@ -47,6 +50,7 @@ ESSENTIAL_DIRS = [
     "ui_pkg",          # v2.0.11：UI 组件包（由 ui.py 拆分）
     "entities_pkg",    # v2.0.11：实体包（由 entities.py 拆分）
     "ai_pkg",          # v2.2.4：无训练硬编程 AI 抽象模块（决策树僵尸 AI）
+    "scenes",          # v2.9.0：场景模块化（信息页，分阶段开局依赖）
     # 注意：rl/ 不进 ESSENTIAL_DIRS —— 训练工具不公开，只白名单打包
     # 地图 .zmap + map_format.py（游戏端依赖）+ ONNX 模型（create_zip 单独追加）
 ]

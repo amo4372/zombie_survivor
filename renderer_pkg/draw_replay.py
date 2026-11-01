@@ -554,6 +554,12 @@ class ReplayRenderMixin:
                 g.replay_follow = not getattr(g, 'replay_follow', True)
             elif _k == "data":
                 g.replay_show_data = not getattr(g, 'replay_show_data', False)
+            elif _k == "save":
+                try:
+                    _ok = g.save_current_replay()
+                    g.replay_save_tip = ("已保存到回放列表", 2.5) if _ok else ("保存失败", 2.5)
+                except Exception:
+                    g.replay_save_tip = ("保存失败", 2.5)
             elif _k == "exit":
                 g.exit_replay()
                 return

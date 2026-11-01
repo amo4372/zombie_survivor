@@ -561,6 +561,8 @@ class InputMixin:
                                         getattr(GameState, 'WEAPON_SELECT_P2', None),
                                         getattr(GameState, 'CHARACTER_SELECT_P2', None)):
                         self._handle_setup_click(pos)
+                    elif self.state == getattr(GameState, 'REPLAY_LIST', None):
+                        self._handle_replay_list_click(pos)
                     elif self.state == GameState.EQUIP_SELECT:
                         try:
                             mx, _ = pygame.mouse.get_pos()
@@ -1244,6 +1246,37 @@ class InputMixin:
                 if _st is not None:
                     self.state = _st
                 return True
+        except Exception:
+            pass
+        return False
+
+
+
+    def _handle_replay_list_click(self, pos):
+        """v2.9.1 回放列表：播放 / 删除 / 返回"""
+        try:
+            _rs = getattr(self, 'replay_list_rects', None) or {}
+            from config import GameState as _GS
+            _b = _rs.get('back')
+            if _b is not None and _b.collidepoint(pos):
+                self.state = _GS.MENU
+                return True
+            for _k, _v in _rs.items():
+                if _k == 'back' or not isinstance(_v, tuple):
+                    continue
+                _pr, _dr, _path = _v
+                if _pr.collidepoint(pos):
+                    try:
+                        if self.load_saved_replay(_path):
+                            return True
+                    except Exception:
+                        pass
+                elif _dr.collidepoint(pos):
+                    try:
+                        self.delete_saved_replay(_path)
+                        return True
+                    except Exception:
+                        pass
         except Exception:
             pass
         return False

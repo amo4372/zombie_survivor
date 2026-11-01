@@ -497,13 +497,15 @@ class GameCore:
         # v2.8.2 回放页触控控件（播放/暂停、逐帧、缩放、跟随、退出）
         self.replay_touch_btns = {
             "play":   Button(20,  640, 120, 56, "播放/暂停", color=(40, 60, 80), hover_color=(65, 95, 120)),
-            "prev":   Button(150, 640,  80, 56, "◀", color=(40, 60, 80), hover_color=(65, 95, 120)),
-            "next":   Button(240, 640,  80, 56, "▶", color=(40, 60, 80), hover_color=(65, 95, 120)),
+            "prev":   Button(150, 640,  96, 56, "上一帧", color=(40, 60, 80), hover_color=(65, 95, 120)),
+            "next":   Button(254, 640,  96, 56, "下一帧", color=(40, 60, 80), hover_color=(65, 95, 120)),
             "zoom_o": Button(1160, 560, 100, 52, "放大", color=(40, 60, 80), hover_color=(65, 95, 120)),
             "zoom_i": Button(1160, 620, 100, 52, "缩小", color=(40, 60, 80), hover_color=(65, 95, 120)),
             "follow": Button(1040, 560, 110, 52, "跟随", color=(40, 60, 80), hover_color=(65, 95, 120)),
             "data":   Button(1040, 620, 110, 52, "数据", color=(40, 60, 80), hover_color=(65, 95, 120)),
             "exit":   Button(1160, 20,  100, 52, "退出", color=(80, 40, 40), hover_color=(120, 60, 60)),
+            # v2.9.1：保存当前回放，之后可在主菜单回放列表里反复观看
+            "save":   Button(920, 620, 110, 52, "保存", color=(40, 80, 55), hover_color=(60, 120, 80)),
         }
         self.gameover_replay_btn = Button(640 + 20, 720 - 218, 215, 48, "观看回放",
                                           color=(40, 55, 80), hover_color=(60, 85, 120))

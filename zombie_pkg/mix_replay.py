@@ -266,6 +266,111 @@ class ReplayMixin:
             _cam.x += (_f.players[0][0] - _cam.x) * min(1.0, dt * 3.0)
             _cam.y += (_f.players[0][1] - _cam.y) * min(1.0, dt * 3.0)
 
+    def record_skill_event(self, who, skill_name, level=None, target=""):
+        """v2.9.1：记录技能释放（玩家技能 + Boss 技能都记）
+
+        此前回放只记死亡/拾取等事件，玩家放了什么技能、Boss 放了什么招
+        在回放里完全看不到，复盘价值大打折扣。
+        """
+        try:
+            _d = getattr(self, 'replay_data', None)
+            if _d is None:
+                return
+            _txt = str(skill_name or "")
+            if level:
+                _txt += f" Lv.{level}"
+            if target:
+                _txt += f" → {target}"
+            _tag = "技能" if str(who).upper().startswith("P") else "BOSS"
+            _d.add_event(f"{_tag}·{who}:{_txt}")
+        except Exception:
+            pass
+
+    def record_boss_skill(self, boss_name, skill):
+        """Boss 技能专用记录"""
+        self.record_skill_event(str(boss_name), str(skill))
+
+    def save_current_replay(self, name=None):
+        """v2.9.1：把当前回放保存成"可收藏"的录像
+
+        保存到 replays/saved/ 并在 records 里登记元信息，
+        之后可在主菜单「回放列表」里反复观看（不止死亡回放，通关录像同样可存）。
+        """
+        try:
+            _d = getattr(self, 'replay_data', None)
+            if _d is None:
+                return False
+            import os
+            import shutil as _sh
+            _dir = os.path.join(os.path.dirname(os.path.abspath('.')), 'replays', 'saved')
+            _dir = 'replays/saved'
+            os.makedirs(_dir, exist_ok=True)
+            _src = getattr(_d, 'path', None)
+            _kind = str(getattr(_d, 'kind', '') or getattr(self, 'replay_kind', '') or 'death')
+            _t = getattr(_d, 'duration', 0.0) or 0.0
+            _nm = str(name or f"{_kind}_{int(_t)}s")
+            _dst = os.path.join(_dir, f"{_nm}.zsr")
+            _i = 1
+            while os.path.exists(_dst):
+                _dst = os.path.join(_dir, f"{_nm}_{_i}.zsr")
+                _i += 1
+            if _src and os.path.exists(_src):
+                _sh.copy2(_src, _dst)
+            else:
+                # 没有源文件（内存中的回放）→ 直接写盘
+                if hasattr(_d, 'save'):
+                    _d.save(_dst)
+                else:
+                    return False
+            # 登记到 records
+            try:
+                _lst = self.records.data.setdefault('saved_replays', [])
+                _lst.append({"name": os.path.basename(_dst), "path": _dst,
+                             "kind": _kind, "duration": round(float(_t), 1),
+                             "time": __import__('time').strftime("%Y-%m-%d %H:%M")})
+                if hasattr(self.records, 'save'):
+                    self.records.save()
+            except Exception:
+                pass
+            return True
+        except Exception:
+            return False
+
+    def load_saved_replay(self, path):
+        """从回放列表打开一个已保存的录像"""
+        try:
+            from replay import ReplayData
+            _d = ReplayData.load(path)
+            if _d is None:
+                return False
+            self.replay_data = _d
+            self.replay_playing = True
+            try:
+                _d.playing = True
+                _d.index = 0
+                _d._acc = 0.0
+            except Exception:
+                pass
+            from config import GameState
+            self.state = GameState.REPLAY
+            return True
+        except Exception:
+            return False
+
+    def delete_saved_replay(self, path):
+        try:
+            import os
+            if os.path.exists(path):
+                os.remove(path)
+            _lst = self.records.data.get('saved_replays', []) or []
+            self.records.data['saved_replays'] = [
+                _r for _r in _lst if _r.get('path') != path]
+            if hasattr(self.records, 'save'):
+                self.records.save()
+            return True
+        except Exception:
+            return False
+
     def replay_toggle_play(self):
         _d = getattr(self, 'replay_data', None)
         if _d is None:
@@ -273,16 +378,36 @@ class ReplayMixin:
         if _d.index >= len(_d.frames) - 1:
             _d.index = 0          # 播完后再按 = 从头播
         self.replay_playing = not self.replay_playing
+        # v2.9.1 关键修复：ReplayData 内部还有自己的 playing 字段，
+        # 播完时会被置 False。此前只切 Game.replay_playing 而不同步它，
+        # 导致"播完一次后无论怎么点播放都不动"（update 里 if not self.playing 直接 return）。
+        try:
+            _d.playing = bool(self.replay_playing)
+        except Exception:
+            pass
+        if self.replay_playing:
+            try:
+                _d._acc = 0.0
+            except Exception:
+                pass
 
     def replay_seek(self, ratio):
         _d = getattr(self, 'replay_data', None)
         if _d is not None:
             _d.seek_ratio(ratio)
+            try:
+                _d._acc = 0.0
+            except Exception:
+                pass
 
     def replay_step(self, delta):
         _d = getattr(self, 'replay_data', None)
         if _d is not None:
             self.replay_playing = False
+            try:
+                _d.playing = False
+            except Exception:
+                pass
             _d.step(delta)
 
     def replay_cycle_speed(self):

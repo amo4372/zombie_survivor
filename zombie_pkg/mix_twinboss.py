@@ -154,6 +154,11 @@ class TwinBossMixin:
         # 事件提示
         if _evt:
             try:
+                self.record_boss_skill(
+                    ("郑某" if _evt[0] in ("zone",) else "惠某"), _evt[1] if len(_evt) > 1 else _evt[0])
+            except Exception:
+                pass
+            try:
                 _kind = _evt[0]
                 _txt = _evt[1] if len(_evt) > 1 else ""
                 if _kind == "windup":

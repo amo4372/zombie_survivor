@@ -288,6 +288,18 @@ class SkillsMixin:
         return False
 
     def _use_skill(self, skill_type):
+        # v2.9.1：技能释放记入回放（此前回放里看不到玩家放了什么技能）
+        try:
+            _pl = getattr(self, 'player', None)
+            _who = "P1"
+            try:
+                if _pl is not None and _pl is getattr(self, 'player2', None):
+                    _who = "P2"
+            except Exception:
+                pass
+            self.record_skill_event(_who, getattr(skill_type, 'name', str(skill_type)))
+        except Exception:
+            pass
         """使用指定技能"""
         try:
             trigger_hook(HOOK_SKILL_USE, skill_type, self.player)

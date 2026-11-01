@@ -219,6 +219,7 @@ class GameState(Enum):
     DYING = auto()    # v2.8.0：死亡反应时间（不立刻结算，慢动作展示死亡瞬间）
     REPLAY = auto()   # v2.8.0：全局回放（自由摄像机 + 数据面板）
     DEATH_DETAIL = auto()  # v2.8.2：死亡详情独立页面（带退出按钮，触控可滚动）
+    REPLAY_LIST = auto()   # v2.9.1：主菜单回放列表（已保存的死亡/通关录像）
     GACHA = auto()         # v2.8.9：军械库补给（武器抽取，米哈游式保底）
     SLOT_MACHINE = auto()  # v2.8.9：老虎机
 

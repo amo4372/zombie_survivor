@@ -156,6 +156,11 @@ class RenderCore:
             self._draw_mode_select()
         elif state == GameState.DIFFICULTY_SELECT:
             self._draw_difficulty_select()
+        elif state == GameState.REPLAY_LIST:
+            try:
+                self.draw_replay_list()
+            except Exception:
+                pass
         elif state == GameState.GACHA:
             try:
                 self.draw_gacha()

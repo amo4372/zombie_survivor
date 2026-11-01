@@ -275,6 +275,8 @@ class MenuMixin:
             Button(cx, 730, 200, 45, "教程", color=BLUE),
             Button(cx, 785, 200, 45, "退出", color=RED),
             Button(cx, 785, 200, 45, "更新说明", color=GRAY),
+            # v2.9.1：主菜单入口（放末尾，不打乱已有索引）
+            Button(cx, 840, 200, 45, "回放列表", color=(80, 110, 150)),
         ]
         # 模式选择按钮
         self.mode_select_buttons = [

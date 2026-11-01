@@ -118,6 +118,9 @@ class UiMixin:
                     self.game.state = GameState.SETTINGS
                 elif i == 9:
                     self.game.state = GameState.TUTORIAL
+                elif i == 12:
+                    # v2.9.1 回放列表（主菜单末尾追加，不打乱既有索引）
+                    self.game.state = GameState.REPLAY_LIST
                 elif i == 10:
                     self.game.running = False
                 elif i == 11:
@@ -517,6 +520,65 @@ class UiMixin:
                              _r, max(1, int(2 * sc)), border_radius=8)
             _bt = g.font.render(_lab, True, _col if _can else (140, 140, 140))
             self.screen.blit(_bt, _bt.get_rect(center=_r.center))
+
+    def draw_replay_list(self):
+        """v2.9.1 主菜单回放列表：可反复观看已保存的录像（含通关）"""
+        import pygame
+        g = self.game
+        sc = getattr(g, 'scale', 1.0) or 1.0
+        sw, sh = self.screen.get_size()
+        self.screen.fill((16, 15, 22))
+        _t = g.font_large.render("回放列表", True, (225, 200, 150))
+        self.screen.blit(_t, (int(28 * sc), int(22 * sc)))
+        _st = g.font_small.render("已保存的录像（死亡 / 通关）", True, (160, 160, 180))
+        self.screen.blit(_st, (int(28 * sc), int(66 * sc)))
+
+        _lst = []
+        try:
+            _lst = list(g.records.data.get('saved_replays', []) or [])
+        except Exception:
+            pass
+        g.replay_list_rects = {}
+        _y = int(110 * sc)
+        _rh = int(64 * sc)
+        if not _lst:
+            _e = g.font.render("还没有保存的回放 —— 在回放页点「保存」即可收藏", True, (150, 150, 165))
+            self.screen.blit(_e, (int(28 * sc), _y + int(20 * sc)))
+        for _i, _r in enumerate(_lst):
+            _ry = _y + _i * (_rh + int(8 * sc))
+            if _ry > sh - int(150 * sc):
+                break
+            _rect = pygame.Rect(int(28 * sc), _ry, sw - int(56 * sc), _rh)
+            _kind = str(_r.get('kind', '') or '')
+            _col = (90, 170, 120) if _kind == 'victory' else (170, 110, 110)
+            pygame.draw.rect(self.screen, (26, 24, 34), _rect, border_radius=8)
+            pygame.draw.rect(self.screen, _col, _rect, max(1, int(2 * sc)), border_radius=8)
+            _nm = g.font.render(str(_r.get('name', '?')), True, (235, 235, 245))
+            self.screen.blit(_nm, (_rect.x + int(12 * sc), _rect.y + int(8 * sc)))
+            _meta = f"{_r.get('time', '')} · {_r.get('duration', 0)}s · " + (
+                "通关" if _kind == 'victory' else "阵亡")
+            _ms = g.font_small.render(_meta, True, (175, 175, 190))
+            self.screen.blit(_ms, (_rect.x + int(12 * sc), _rect.y + int(38 * sc)))
+            # 播放 / 删除
+            _bw2 = int(90 * sc)
+            _pr = pygame.Rect(_rect.right - _bw2 * 2 - int(16 * sc),
+                              _rect.y + int(10 * sc), _bw2, int(44 * sc))
+            _dr = pygame.Rect(_rect.right - _bw2 - int(8 * sc),
+                              _rect.y + int(10 * sc), _bw2, int(44 * sc))
+            for _r2, _lab, _c2 in ((_pr, "播放", (60, 140, 90)),
+                                   (_dr, "删除", (140, 70, 70))):
+                pygame.draw.rect(self.screen, (35, 35, 45), _r2, border_radius=6)
+                pygame.draw.rect(self.screen, _c2, _r2, max(1, int(2 * sc)), border_radius=6)
+                _bt2 = g.font_small.render(_lab, True, _c2)
+                self.screen.blit(_bt2, _bt2.get_rect(center=_r2.center))
+            g.replay_list_rects[_i] = (_pr, _dr, _r.get('path'))
+
+        # 返回
+        _br = pygame.Rect(int(28 * sc), sh - int(80 * sc), int(160 * sc), int(52 * sc))
+        pygame.draw.rect(self.screen, (70, 70, 95), _br, border_radius=10)
+        _bt3 = g.font.render("返回主菜单", True, (230, 230, 240))
+        self.screen.blit(_bt3, _bt3.get_rect(center=_br.center))
+        g.replay_list_rects['back'] = _br
 
     def _draw_setup_pages(self):
         """v2.9.0 分阶段开局页面：地图 / 武器 / 角色（用 scenes.InfoPage 绘制）"""
