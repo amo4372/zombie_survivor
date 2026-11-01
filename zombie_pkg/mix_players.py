@@ -248,6 +248,85 @@ class PlayerRegistryMixin:
         except Exception:
             return False
 
+    # ==================================================================
+    # v2.8.9 通用动态视野：瞄准/射程超出屏幕时自动拉远
+    # ------------------------------------------------------------------
+    # 原 v2.8.8 只对 hold_charge 武器生效，且写在蓄力分支里。现在改为
+    # **所有武器与技能共用**：只要"要看的距离"超过当前视口能显示的范围，
+    # 就把摄像机平滑拉远，保证玩家能看见自己在打什么。
+    # ==================================================================
+    ZOOM_MARGIN = 0.72      # 目标落在视口 72% 范围内（留边）
+    ZOOM_MIN = 0.45         # 最远拉到 0.45 倍，再远就看不清了
+    ZOOM_LERP = 6.0         # 拉远/恢复的平滑速度
+
+    def desired_zoom_for(self, cam, want_dist):
+        """要看见 want_dist 距离外的目标，摄像机应采用的 zoom"""
+        try:
+            _d = float(want_dist)
+        except Exception:
+            return None
+        if _d <= 0:
+            return None
+        _halfw = float(getattr(cam, "width", 1280) or 1280) * self.ZOOM_MARGIN / 2.0
+        _z = _halfw / _d
+        return max(self.ZOOM_MIN, min(1.0, _z))
+
+    def update_dynamic_zoom(self, dt, players=None):
+        """每帧调用：按每位玩家的"要看的距离"调整主摄像机
+
+        want_dist 优先取：蓄力武器的射程（随蓄力比例增长）
+        → 技能/武器瞄准距离 → 无则恢复基准。
+        仅单人/主视口生效（分屏各视口独立，由调用方分别传 cam）。
+        """
+        try:
+            _cam = getattr(self, "camera", None)
+            _p = getattr(self, "player", None)
+            if _cam is None or _p is None or not hasattr(_cam, "zoom"):
+                return
+            if getattr(_cam, "_zoom_base", 0.0) <= 0.0:
+                _cam._zoom_base = float(getattr(_cam, "zoom", 1.0) or 1.0)
+            _base = _cam._zoom_base
+            _want = 0.0
+
+            # 1) 蓄力武器：随蓄力比例拉远到极限射程
+            try:
+                _w = _p.get_current_weapon()
+            except Exception:
+                _w = None
+            _ratio = float(getattr(_p, "_charge_ratio", 0.0) or 0.0)
+            if _w is not None and getattr(_w, "hold_charge", False) \
+                    and getattr(_p, "_awm_saved", None) is not None:
+                _want = float(getattr(_w, "range", 0) or 0) * (0.35 + 0.65 * _ratio)
+            else:
+                # 2) 瞄准距离（鼠标/摇杆方向上的瞄准点）
+                _aim = getattr(_p, "_aim_dist", 0.0)
+                try:
+                    _aim = float(_aim)
+                except Exception:
+                    _aim = 0.0
+                _want = _aim
+                # 3) 技能预瞄（G 长按瞄准）也纳入
+                _sk = getattr(self, "_skill_aim_dist", 0.0)
+                try:
+                    _sk = float(_sk)
+                except Exception:
+                    _sk = 0.0
+                _want = max(_want, _sk)
+
+            # 只有当"要看的距离"超出当前可见范围时才拉远
+            _cur_visible = (float(getattr(_cam, "width", 1280) or 1280)
+                            * self.ZOOM_MARGIN / 2.0) / max(0.01, _cam.zoom)
+            if _want > _cur_visible:
+                _target = self.desired_zoom_for(_cam, _want) or _base
+            else:
+                _target = _base
+            _k = min(1.0, self.ZOOM_LERP * dt)
+            _cam.zoom = _cam.zoom + (_target - _cam.zoom) * _k
+            if abs(_cam.zoom - _base) < 0.002:
+                _cam.zoom = _base
+        except Exception:
+            pass
+
     def begin_spectate(self):
         """进入观战（供结算前的过渡调用）"""
         self.spectating = True

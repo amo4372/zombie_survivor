@@ -197,6 +197,179 @@ class Config:
 logger = GameLogger()
 
 class ShopMixin:
+    # ==================================================================
+    # v2.8.9 军械库补给（武器抽取）—— 武器唯一获取途径
+    # ==================================================================
+    def gacha_init(self):
+        """初始化抽取系统（v2.8.9 米哈游式：保底 + UP + 重复叠等级）"""
+        try:
+            from gacha import GachaBanner, SlotMachine
+            from weapon_pool import build_pool
+            _pool = build_pool()
+            # 以 records.is_weapon_owned 为准遍历全部武器类型
+            # （此前直接读 data["weapons"] 取不到真实结构，导致已解锁的
+            #   武器仍留在奖池里，能重复抽到同一把）
+            from config import WeaponType
+            _unlocked = set()
+            for _wt in WeaponType:
+                try:
+                    if self.records.is_weapon_owned(getattr(_wt, "name", str(_wt))):
+                        _unlocked.add(getattr(_wt, "name", str(_wt)))
+                except Exception:
+                    pass
+            _save = None
+            try:
+                _save = self.records.data.get("gacha_state")
+            except Exception:
+                pass
+            # UP 限定池：取池中稀有度最高的若干把作为 UP
+            _up = []
+            try:
+                _rank = {"legend": 5, "epic": 4, "rare": 3, "fine": 2, "common": 1}
+                _srt = sorted(_pool, key=lambda w: -_rank.get(w.get("quality", "common"), 1))
+                _up = [str(w.get("key")) for w in _srt[:4]]
+            except Exception:
+                _up = []
+            self.gacha = GachaBanner(_pool, up_keys=_up, unlocked=_unlocked)
+            if _save:
+                self.gacha.from_save(_save)
+            self.slot_machine = SlotMachine()
+            self.gacha_result = []
+            self.gacha_tip = ""
+            self.slot_bet = 50
+            self.slot_result = None
+        except Exception:
+            self.gacha = None
+            self.slot_machine = None
+            self.gacha_result = []
+            self.gacha_tip = "补给系统初始化失败"
+
+    def _gacha_save(self):
+        """把保底计数写回存档（保底必须跨会话保留）"""
+        try:
+            if getattr(self, "gacha", None) is None:
+                return
+            self.records.data["gacha_state"] = self.gacha.to_save()
+            if hasattr(self.records, "save"):
+                self.records.save()
+        except Exception:
+            pass
+
+    def do_gacha(self, n=1):
+        """执行抽取（n=1 单抽 / n=10 十连），解锁武器并扣金币"""
+        _ga = getattr(self, "gacha", None)
+        if _ga is None:
+            self.gacha_init()
+            _ga = getattr(self, "gacha", None)
+        if _ga is None:
+            self.gacha_tip = "补给系统不可用"
+            return []
+        if _ga.pool_empty():
+            self.gacha_tip = "全部武器已收集，奖池为空"
+            self.gacha_result = []
+            return []
+        _n = 10 if int(n) >= 10 else 1
+        _cost = _ga.price(_n)
+        if self.records.get_coins() < _cost:
+            self.gacha_tip = f"金币不足（需要 {_cost}）"
+            return []
+        self.records.spend_coins(_cost)
+        # 注意：不能写成 `[_ga.draw_one()] if _ga.draw_one() else []`
+        # —— 那会把 draw_one 调用两次（消耗两抽、返回第二抽结果）。
+        if _n > 1:
+            _res = _ga.draw_many(_n)
+        else:
+            _one = _ga.draw_one()
+            _res = [_one] if _one else []
+        _res = [_r for _r in _res if _r]
+        # 真正解锁到存档（v2.8.9：重复抽取改为叠加等级）
+        for _r in _res:
+            try:
+                _w = _r.get("weapon") or _r
+                _k = str(_w.get("key") or _r.get("key"))
+                _lv = int(_r.get("level", 1) or 1)
+                self.records.unlock_weapon_purchase(_k)
+                if _lv > 1 and hasattr(self.records, "upgrade_weapon_purchase"):
+                    self.records.upgrade_weapon_purchase(_k, _lv)
+            except Exception:
+                pass
+        self.gacha_result = _res
+        # 提示：出紫/金时高亮
+        _best = max((int(_r.get("star", 1)) for _r in _res), default=0)
+        if _best >= 5:
+            self.gacha_tip = "传说武器到手！"
+        elif _best >= 4:
+            self.gacha_tip = "史诗武器到手！"
+        else:
+            self.gacha_tip = f"已获得 {len(_res)} 把武器"
+        self._gacha_save()
+        return _res
+
+    def do_slot(self, bet=None):
+        """玩老虎机"""
+        _sm = getattr(self, "slot_machine", None)
+        if _sm is None:
+            self.gacha_init()
+            _sm = getattr(self, "slot_machine", None)
+        if _sm is None:
+            return None
+        _bet = int(bet if bet is not None else getattr(self, "slot_bet", 50))
+        _bet = _sm.clamp_bet(_bet)
+        if self.records.get_coins() < _bet:
+            self.gacha_tip = "金币不足"
+            return None
+        self.records.spend_coins(_bet)
+        _r = _sm.spin(_bet)
+        if _r.get("payout", 0) > 0:
+            self.records.add_coins(int(_r["payout"]))
+        self.slot_result = _r
+        if _r.get("kind") == "jackpot":
+            self._unlock_achievement_safe("slot_jackpot")
+        return _r
+
+    def _gacha_click(self, pos):
+        """军械库补给页点击处理"""
+        try:
+            _btns = getattr(self, "gacha_buttons", {}) or {}
+            for _k, _r in _btns.items():
+                if hasattr(_r, "collidepoint") and _r.collidepoint(pos):
+                    from config import GameState
+                    if _k == "one":
+                        self.do_gacha(1)
+                    elif _k == "ten":
+                        self.do_gacha(10)
+                    elif _k == "slot":
+                        self.state = GameState.SLOT_MACHINE
+                    elif _k == "back":
+                        self._gacha_save()
+                        self.state = GameState.EQUIP_SELECT
+                    return True
+        except Exception:
+            pass
+        return False
+
+    def _slot_click(self, pos):
+        """老虎机页点击处理"""
+        try:
+            from config import GameState
+            from gacha import SLOT_BET_MIN, SLOT_BET_MAX
+            _btns = getattr(self, "slot_buttons", {}) or {}
+            _bet = int(getattr(self, "slot_bet", SLOT_BET_MIN) or SLOT_BET_MIN)
+            for _k, _r in _btns.items():
+                if hasattr(_r, "collidepoint") and _r.collidepoint(pos):
+                    if _k == "minus":
+                        self.slot_bet = max(SLOT_BET_MIN, _bet - 50)
+                    elif _k == "plus":
+                        self.slot_bet = min(SLOT_BET_MAX, _bet + 50)
+                    elif _k == "spin":
+                        self.do_slot(_bet)
+                    elif _k == "back":
+                        self.state = GameState.GACHA
+                    return True
+        except Exception:
+            pass
+        return False
+
     def _get_shop_weapons(self):
         """局外可选武器列表（v2.2.12：与武器图鉴完全一致，全部 32 把含投掷物）"""
         return list(WeaponType)
@@ -224,24 +397,13 @@ class ShopMixin:
         return True
 
     def equip_buy_weapon(self, wt):
-        """购买武器。返回状态字符串"""
+        """v2.8.9：武器**不再能直接购买**，只能通过「军械库补给」抽取获得。
+
+        保留此入口仅为兼容旧调用点，一律返回 gacha_only。
+        """
         if self.records.is_weapon_owned(wt.name):
             return "owned"
-        if wt == WeaponType.SCYTHE and not self.records.has_defeated_wang():
-            return "locked_wang"
-        price = WEAPON_PRICES.get(wt.name, 0)
-        if price <= 0:
-            self.records.unlock_weapon_purchase(wt.name)
-            self.selected_weapon = wt
-            self.selected_weapon_level = 1
-            return "ok"
-        if self.records.get_coins() < price:
-            return "no_coin"
-        self.records.spend_coins(price)
-        self.records.unlock_weapon_purchase(wt.name)
-        self.selected_weapon = wt
-        self.selected_weapon_level = 1
-        return "ok"
+        return "gacha_only"
 
     def get_weapon_upgrade_price(self, wt):
         """当前武器升至下一级的费用（满级返回0）"""
@@ -264,7 +426,10 @@ class ShopMixin:
             return 0
 
     def upgrade_weapon_shop(self, wt):
-        """局外升级武器（花费金币提升等级，最高5级）"""
+        """局外升级武器（花费金币提升等级，最高5级）
+
+        v2.8.9：武器**获取**改为只能抽取，但已拥有的武器仍可花金币升级。
+        """
         cur = self.records.get_weapon_level(wt.name)
         if cur >= 5:
             return "max"

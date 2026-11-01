@@ -324,6 +324,200 @@ class UiMixin:
                 desc_rect = desc_text.get_rect(center=(sw // 2, int((240 + i * 75) * scale)))
                 self.screen.blit(desc_text, desc_rect)
 
+    # ==================================================================
+    # v2.8.9 军械库补给（武器抽取）— 适配 GachaBanner
+    # ==================================================================
+    def draw_gacha(self):
+        """军械库补给页：单抽 / 十连 / 保底进度 / UP 提示 / 出货展示"""
+        import pygame
+        from gacha import (PITY_5_HARD, PITY_4_HARD, RATE_5_BASE,
+                           RATE_4_BASE, UP_RATE, MAX_LEVEL)
+        g = self.game
+        sc = getattr(g, 'scale', 1.0) or 1.0
+        sw, sh = self.screen.get_size()
+        self.screen.fill((16, 14, 22))
+
+        _ga = getattr(g, 'gacha', None)
+        _t = g.font_large.render("军械库补给", True, (255, 215, 120))
+        self.screen.blit(_t, (int(28 * sc), int(22 * sc)))
+        _sub = g.font_small.render("武器仅可通过补给获取（含 UP / 保底 / 重复叠等级）",
+                                   True, (170, 170, 190))
+        self.screen.blit(_sub, (int(28 * sc), int(66 * sc)))
+        _coin = g.font.render(f"金币：{g.records.get_coins()}", True, (255, 215, 0))
+        self.screen.blit(_coin, (sw - _coin.get_width() - int(28 * sc), int(26 * sc)))
+
+        # ---- 保底进度 ----
+        _y = int(100 * sc)
+        if _ga is not None:
+            try:
+                _pi = _ga.pity_info()
+            except Exception:
+                _pi = {}
+            _items = [
+                f"5★ 保底：{_pi.get('to_hard5', 0)} 抽内必出",
+                f"4★ 保底：{_pi.get('to_hard4', 0)} 抽内必出",
+                ("已歪 · 下次必出 UP" if _pi.get("guarantee_up")
+                 else f"UP 概率 {int(UP_RATE * 100)}%"),
+                f"累计 {len(getattr(_ga, 'history', []) or [])} 抽",
+            ]
+            for _i2, _tx in enumerate(_items):
+                _col = (255, 200, 120) if _i2 < 2 else (
+                    (255, 140, 160) if _i2 == 2 and _pi.get("guarantee_up")
+                    else (200, 200, 210))
+                _s2 = g.font_small.render(_tx, True, _col)
+                self.screen.blit(_s2, (int(28 * sc) + _i2 * int(228 * sc), _y))
+        _y += int(28 * sc)
+        _rate = (f"概率：5★ {RATE_5_BASE * 100:.1f}%  4★ {RATE_4_BASE * 100:.1f}%  "
+                 f"| {PITY_5_HARD} 抽 5★ 硬保底，{PITY_4_HARD} 抽 4★ 保底，"
+                 f"重复抽中叠加等级（上限 Lv.{MAX_LEVEL}）")
+        _rs = g.font_small.render(_rate, True, (150, 200, 220))
+        self.screen.blit(_rs, (int(28 * sc), _y))
+        _y += int(24 * sc)
+        if _ga is not None:
+            _left = len(_ga.available())
+            _lt = g.font_small.render(f"奖池剩余：{_left} 件",
+                                      True, (255, 120, 120) if _left == 0
+                                      else (180, 230, 180))
+            self.screen.blit(_lt, (int(28 * sc), _y))
+
+        # ---- 出货展示 ----
+        _res = getattr(g, 'gacha_result', None) or []
+        _ry = int(180 * sc)
+        if _res:
+            _n = len(_res)
+            _cw = min(int(190 * sc), (sw - int(60 * sc)) // max(1, _n))
+            for _i3, _r in enumerate(_res):
+                _w = _r.get("weapon") or {}
+                _star = int(_r.get("star", 3) or 3)
+                _col = {3: (90, 170, 255), 4: (190, 120, 255),
+                        5: (255, 200, 70)}.get(_star, (200, 200, 200))
+                _x = int(30 * sc) + _i3 * (_cw + int(8 * sc))
+                _rh = int(118 * sc)
+                pygame.draw.rect(self.screen, (26, 24, 34), (_x, _ry, _cw, _rh),
+                                 border_radius=8)
+                pygame.draw.rect(self.screen, _col, (_x, _ry, _cw, _rh),
+                                 max(1, int(2 * sc)), border_radius=8)
+                _ns = g.font.render(str(_w.get("name", "?"))[:8], True, _col)
+                self.screen.blit(_ns, (_x + int(8 * sc), _ry + int(10 * sc)))
+                _ss = g.font_small.render("★" * _star, True, _col)
+                self.screen.blit(_ss, (_x + int(8 * sc), _ry + int(38 * sc)))
+                if _r.get("is_up"):
+                    _us = g.font_small.render("UP!", True, (255, 150, 180))
+                    self.screen.blit(_us, (_x + int(_cw - 42 * sc), _ry + int(10 * sc)))
+                _lv = int(_r.get("level", 1) or 1)
+                _lt2 = g.font_small.render(
+                    ("重复 +1" if _r.get("dup") else "新获得") + f" Lv.{_lv}",
+                    True, (200, 200, 215))
+                self.screen.blit(_lt2, (_x + int(8 * sc), _ry + int(62 * sc)))
+                if _r.get("maxed"):
+                    _ms = g.font_small.render("已满级", True, (255, 180, 90))
+                    self.screen.blit(_ms, (_x + int(8 * sc), _ry + int(84 * sc)))
+            _ry += int(128 * sc)
+
+        # ---- 按钮 ----
+        _by = sh - int(150 * sc)
+        _bw, _bh = int(170 * sc), int(50 * sc)
+        _bx = (sw - (_bw * 2 + int(20 * sc))) // 2
+        g.gacha_buttons = {}
+        for _i4, (_key, _label, _n) in enumerate(
+                (("one", "单抽", 1), ("ten", "十连", 10))):
+            _r = pygame.Rect(_bx + _i4 * (_bw + int(20 * sc)), _by, _bw, _bh)
+            g.gacha_buttons[_key] = _r
+            _cost = _ga.price(_n) if _ga is not None else 160 * _n
+            _can = (_ga is not None and g.records.get_coins() >= _cost
+                    and not _ga.pool_empty())
+            pygame.draw.rect(self.screen, (45, 80, 45) if _can else (55, 50, 55),
+                             _r, border_radius=8)
+            pygame.draw.rect(self.screen, (90, 220, 120) if _can else (110, 110, 110),
+                             _r, max(1, int(2 * sc)), border_radius=8)
+            _bt = g.font.render(f"{_label} · {_cost}", True, (255, 255, 255))
+            self.screen.blit(_bt, _bt.get_rect(center=_r.center))
+
+        _by2 = sh - int(86 * sc)
+        for _key, _label, _col in (("slot", "老虎机", (220, 160, 60)),
+                                   ("back", "返回", (120, 120, 140))):
+            _r = pygame.Rect(int(28 * sc) if _key == "slot"
+                             else sw - int(200 * sc), _by2,
+                             int(172 * sc), int(46 * sc))
+            g.gacha_buttons[_key] = _r
+            pygame.draw.rect(self.screen, (35, 35, 45), _r, border_radius=8)
+            pygame.draw.rect(self.screen, _col, _r, max(1, int(2 * sc)), border_radius=8)
+            _bt = g.font.render(_label, True, _col)
+            self.screen.blit(_bt, _bt.get_rect(center=_r.center))
+
+        _msg = getattr(g, 'gacha_tip', "")
+        if _msg:
+            _ms2 = g.font.render(str(_msg), True, (255, 220, 140))
+            self.screen.blit(_ms2, (int(28 * sc), sh - int(190 * sc)))
+
+        # 出货演出（GachaFx）
+        try:
+            _fx = getattr(g, 'gacha_fx', None)
+            if _fx is not None and hasattr(_fx, "draw"):
+                _fx.draw(self.screen, g.font, g.font_small, sc)
+        except Exception:
+            pass
+
+    # ==================================================================
+    # v2.8.9 老虎机
+    # ==================================================================
+    def draw_slot_machine(self):
+        import pygame
+        from gacha import SLOT_BET_MIN, SLOT_BET_MAX
+        g = self.game
+        sc = getattr(g, 'scale', 1.0) or 1.0
+        sw, sh = self.screen.get_size()
+        self.screen.fill((18, 16, 20))
+
+        _t = g.font_large.render("老虎机", True, (255, 200, 90))
+        self.screen.blit(_t, (int(28 * sc), int(24 * sc)))
+        _coin = g.font.render(f"金币：{g.records.get_coins()}", True, (255, 215, 0))
+        self.screen.blit(_coin, (sw - _coin.get_width() - int(28 * sc), int(28 * sc)))
+
+        _spin = getattr(g, 'slot_result', None)
+        _names = _spin.get('reel_names', ["?", "?", "?"]) if _spin else ["?", "?", "?"]
+        _rw, _rh = int(160 * sc), int(180 * sc)
+        _total = 3 * _rw + 2 * int(24 * sc)
+        _sx = (sw - _total) // 2
+        _sy = int(140 * sc)
+        for _i, _nm in enumerate(_names):
+            _r = pygame.Rect(_sx + _i * (_rw + int(24 * sc)), _sy, _rw, _rh)
+            _c = (255, 210, 120) if (_spin and _spin.get('win')) else (70, 70, 90)
+            pygame.draw.rect(self.screen, (28, 26, 36), _r, border_radius=10)
+            pygame.draw.rect(self.screen, _c, _r, max(1, int(3 * sc)), border_radius=10)
+            _ns = g.font_large.render(str(_nm)[:3], True, (240, 240, 250))
+            self.screen.blit(_ns, _ns.get_rect(center=_r.center))
+
+        if _spin:
+            _kind = _spin.get('kind')
+            _txt = {"jackpot": f"头奖！派彩 +{_spin['payout']}",
+                    "pair": f"两同，返还 +{_spin['payout']}",
+                    "none": "未中奖"}.get(_kind, "")
+            _col = (120, 255, 140) if _spin.get('win') else (200, 120, 120)
+            _rs = g.font.render(_txt, True, _col)
+            self.screen.blit(_rs, (int(28 * sc), _sy + _rh + int(24 * sc)))
+
+        _bet = int(getattr(g, 'slot_bet', SLOT_BET_MIN) or SLOT_BET_MIN)
+        _by = sh - int(140 * sc)
+        g.slot_buttons = {}
+        _defs = (("minus", "-", (200, 120, 120)),
+                 ("plus", "+", (120, 200, 120)),
+                 ("spin", f"旋转 · {_bet}", (240, 200, 90)),
+                 ("back", "返回", (120, 120, 140)))
+        _bw = int(140 * sc)
+        _gap = int(14 * sc)
+        _total2 = len(_defs) * _bw + (len(_defs) - 1) * _gap
+        _bx = (sw - _total2) // 2
+        for _i, (_k, _lab, _col) in enumerate(_defs):
+            _r = pygame.Rect(_bx + _i * (_bw + _gap), _by, _bw, int(48 * sc))
+            g.slot_buttons[_k] = _r
+            _can = (g.records.get_coins() >= _bet) if _k == "spin" else True
+            pygame.draw.rect(self.screen, (35, 35, 45), _r, border_radius=8)
+            pygame.draw.rect(self.screen, _col if _can else (110, 110, 110),
+                             _r, max(1, int(2 * sc)), border_radius=8)
+            _bt = g.font.render(_lab, True, _col if _can else (140, 140, 140))
+            self.screen.blit(_bt, _bt.get_rect(center=_r.center))
+
     def _draw_equip_select(self):
         """局外装备选择界面：两栏列表（点击仅选中）+ 每栏底部独立'解锁/升级'大按钮，避免误触"""
         self.screen.fill(VOID_BLACK)
@@ -357,7 +551,8 @@ class UiMixin:
         wx, wy, ww, wh = int(40 * scale), int(88 * scale), int(600 * scale), int(330 * scale)
         pygame.draw.rect(self.screen, (20, 20, 28), (wx, wy, ww, wh), border_radius=10)
         pygame.draw.rect(self.screen, (70, 70, 95), (wx, wy, ww, wh), 2, border_radius=10)
-        w_title = self.game.font.render("武器 (点击选中)", True, WHITE)
+        # v2.8.9：武器不再能直接购买，只能通过「军械库补给」抽取
+        w_title = self.game.font.render("武器 (点击选中 · 仅可抽取)", True, WHITE)
         self.screen.blit(w_title, (wx + 12, wy + 6))
         rows = g.get_weapon_shop_rows()
         row_h = int(58 * scale)
@@ -437,7 +632,8 @@ class UiMixin:
             if w_op[0] == "unlock":
                 res = g.equip_buy_weapon(g.selected_weapon)
                 g.equip_hover = {"ok": f"已解锁 {_wname}", "no_coin": "金币不足",
-                                 "locked_wang": "需先击败王某", "owned": "已拥有"}.get(res, "")
+                                 "locked_wang": "需先击败王某", "owned": "已拥有",
+                                 "gacha_only": "武器仅可通过「军械库补给」抽取获得"}.get(res, "")
             else:
                 res = g.upgrade_weapon_shop(g.selected_weapon)
                 g.equip_hover = {"ok": f"{_wname} 升至 Lv.{g.records.get_weapon_level(g.selected_weapon.name)}",
@@ -559,6 +755,16 @@ class UiMixin:
         pygame.draw.rect(self.screen, GREEN, start_rect, 2, border_radius=12)
         stxt = self.game.font.render("开始游戏", True, WHITE)
         self.screen.blit(stxt, stxt.get_rect(center=start_rect.center))
+        # v2.8.9：军械库补给入口（武器唯一获取途径）
+        gacha_rect = pygame.Rect(sw // 2 + int(190 * scale), int(545 * scale),
+                                 int(230 * scale), int(56 * scale))
+        pygame.draw.rect(self.screen, (70, 50, 90), gacha_rect, border_radius=12)
+        pygame.draw.rect(self.screen, (200, 150, 255), gacha_rect, 2, border_radius=12)
+        _gt = self.game.font.render("军械库补给", True, (230, 200, 255))
+        self.screen.blit(_gt, _gt.get_rect(center=gacha_rect.center))
+        _g2 = self.game.font_small.render("（抽取武器）", True, (180, 160, 210))
+        self.screen.blit(_g2, _g2.get_rect(center=(gacha_rect.centerx,
+                                                   gacha_rect.centery + int(18 * scale))))
         back_rect = pygame.Rect(sw // 2 - int(175 * scale), int(612 * scale), int(350 * scale), int(44 * scale))
         pygame.draw.rect(self.screen, (60, 50, 50), back_rect, border_radius=10)
         pygame.draw.rect(self.screen, GRAY, back_rect, 2, border_radius=10)
@@ -568,6 +774,12 @@ class UiMixin:
         if clicked:
             if start_rect.collidepoint(clicked):
                 g.equip_confirm()
+            elif gacha_rect.collidepoint(clicked):
+                try:
+                    g.gacha_init()
+                    g.state = GameState.GACHA
+                except Exception:
+                    pass
             elif back_rect.collidepoint(clicked):
                 g.state = GameState.DIFFICULTY_SELECT
 
@@ -2337,8 +2549,7 @@ class UiMixin:
         for _wt in _wlist:
             _onm = Weapon(_wt).name
             if not g.records.is_weapon_owned(_wt.name):
-                _op = WEAPON_PRICES.get(_wt.name, 0)
-                _onm = f"🔒 {_onm}（{_op}金币）"
+                _onm = f"🔒 {_onm}（需补给抽取）"
             _wopts.append((_onm, _wt))
         def _pick_weapon(v):
             if g.records.is_weapon_owned(v.name):
@@ -2352,6 +2563,8 @@ class UiMixin:
                 g.multi_room_tip = ("金币不足，无法解锁该武器", 2.0)
             elif _r == "locked_wang":
                 g.multi_room_tip = ("需先击败 王 才能解锁", 2.0)
+            elif _r == "gacha_only":
+                g.multi_room_tip = ("武器仅可通过「军械库补给」抽取获得", 2.0)
         _dd_box(pygame.Rect(rx, _cy, rw, rh), f"武器：{_wn}")
         if not _handle_dd("pweapon", pygame.Rect(rx, _cy, rw, rh), _wopts, _pick_weapon, _wi):
             _cy += rh + gap
@@ -2379,6 +2592,8 @@ class UiMixin:
                 g.multi_room_tip = ("金币不足，无法解锁该角色", 2.0)
             elif _r == "locked_wang":
                 g.multi_room_tip = ("需先击败 王 才能解锁", 2.0)
+            elif _r == "gacha_only":
+                g.multi_room_tip = ("武器仅可通过「军械库补给」抽取获得", 2.0)
         _dd_box(pygame.Rect(rx, _cy, rw, rh), f"角色：{_cn}")
         if not _handle_dd("pchar", pygame.Rect(rx, _cy, rw, rh), _copts, _pick_char, _ci):
             _cy += rh + gap

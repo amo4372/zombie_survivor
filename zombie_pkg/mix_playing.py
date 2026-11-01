@@ -478,6 +478,39 @@ class PlayingMixin:
         if self.lifesteal_flash > 0:
             self.lifesteal_flash = max(0, self.lifesteal_flash - dt * 1.5)
 
+        # v2.8.9 投射物命中双子 Boss
+        try:
+            if getattr(self, 'twin_boss_alive', False):
+                _tb = self.twin_boss
+                for _pr in list(getattr(self, 'projectiles', []) or []):
+                    for _b in (_tb.zheng, _tb.hui):
+                        if not _b.alive:
+                            continue
+                        if math.hypot(_pr.x - _b.x, _pr.y - _b.y) < 46:
+                            self.damage_twin_boss(
+                                float(getattr(_pr, 'damage', 0) or 0),
+                                _pr.x, _pr.y)
+                            try:
+                                self.projectiles.remove(_pr)
+                            except Exception:
+                                pass
+                            break
+        except Exception:
+            pass
+
+        # v2.8.9 双子 Boss 每帧更新（能力/范围圈结算/时停/成就）
+        try:
+            self.update_twin_boss(dt)
+        except Exception:
+            pass
+
+        # v2.8.9 通用动态视野：瞄准/射程超出屏幕时自动拉远（所有武器与技能）
+        try:
+            if hasattr(self, 'update_dynamic_zoom'):
+                self.update_dynamic_zoom(dt)
+        except Exception:
+            pass
+
         # 角色技能：随时间缓慢回血（如医护兵）
         # v2.8.8 修复：此前**只给 P1 回血**，P2/P3/P4 选了医护兵却完全不回血
         # —— 这就是"P2 没有角色效果"的直接原因。改为遍历全部注册玩家。
@@ -1327,6 +1360,12 @@ class PlayingMixin:
             try:
                 trigger_hook(HOOK_ENEMY_SPAWN, enemy)
             except:
+                pass
+            # v2.8.9：达到波次后有机会改刷双子 Boss（郑某 + 惠某）
+            try:
+                if getattr(enemy, "is_boss", False) and self._maybe_spawn_twin():
+                    pass
+            except Exception:
                 pass
             if getattr(enemy, "is_boss", False):
                 # v2.4.0 boss 软性限制圈：中心=生成点，半径随波次增大（出圈减速拉回，不硬阻挡）

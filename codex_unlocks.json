@@ -1,10 +1,13 @@
 {
   "monsters": [
+    "ELITE_SORCERER",
     "ZOMBIE_CRAWLER",
     "ZOMBIE_FAST",
+    "ZOMBIE_LEAPER",
     "ZOMBIE_NORMAL",
     "ZOMBIE_RANGED",
-    "ZOMBIE_SHIELD"
+    "ZOMBIE_SHIELD",
+    "ZOMBIE_SPITTER"
   ],
   "weapons": [
     "PISTOL"

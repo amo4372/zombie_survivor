@@ -519,7 +519,7 @@ class InputMixin:
             return mouse_pos, mouse_pressed
 
         # 菜单/设置/教程/剧情资料库/难度选择的滚轮和触摸滚动
-        if self.state in (GameState.MENU, GameState.SETTINGS, GameState.TUTORIAL, GameState.RECORDS, GameState.STORY_ARCHIVE, GameState.CODEX, GameState.MODE_SELECT, GameState.DIFFICULTY_SELECT, GameState.MOD_MANAGER, GameState.ACHIEVEMENTS, GameState.UPDATE, GameState.UPDATE_NOTES, GameState.EQUIP_SELECT):
+        if self.state in (GameState.MENU, GameState.SETTINGS, GameState.TUTORIAL, GameState.RECORDS, GameState.STORY_ARCHIVE, GameState.CODEX, GameState.MODE_SELECT, GameState.DIFFICULTY_SELECT, GameState.MOD_MANAGER, GameState.ACHIEVEMENTS, GameState.UPDATE, GameState.UPDATE_NOTES, GameState.EQUIP_SELECT, GameState.GACHA, GameState.SLOT_MACHINE):
             for event in all_events:
                 if event.type == pygame.QUIT:
                     logger.info("收到退出事件")
@@ -551,6 +551,10 @@ class InputMixin:
                     elif self.state == GameState.UPDATE_NOTES:
                         if hasattr(self, '_update_notes_panel') and self._update_notes_panel:
                             self._update_notes_panel.handle_wheel(event.y)
+                    elif self.state == GameState.GACHA:
+                        self._gacha_click(pos)
+                    elif self.state == GameState.SLOT_MACHINE:
+                        self._slot_click(pos)
                     elif self.state == GameState.EQUIP_SELECT:
                         try:
                             mx, _ = pygame.mouse.get_pos()
@@ -904,6 +908,7 @@ class InputMixin:
             specs.append(("秒杀敌对", (190, 60, 60), "kill_hostile"))
         specs += [
             ("生成Boss", (180, 60, 60), "spawn_boss"),
+            ("生成双子Boss", (200, 80, 160), "spawn_twin_boss"),
             ("生成精英", (120, 80, 160), "spawn_elite"),
             ("生成小怪", (90, 130, 80), "spawn_zombie"),
             ("清空敌人", (120, 120, 130), "clear_enemies"),
@@ -1010,6 +1015,11 @@ class InputMixin:
         elif action == "kill_hostile":
             n = self._dev_kill_hostile_players(idx)
             self._dev_notify(idx, f"秒杀敌对玩家 x{n}", (255, 120, 120))
+        elif action == "spawn_twin_boss":
+            try:
+                self.spawn_twin_boss()
+            except Exception:
+                pass
         elif action == "spawn_boss":
             from config import EnemyType as _ET
             bs = [_ET.BOSS_LONG, _ET.BOSS_XIANG, _ET.BOSS_MUTANT, _ET.BOSS_QUEEN, _ET.BOSS_TITAN, _ET.BOSS_WANG]

@@ -150,6 +150,16 @@ class RenderCore:
             self._draw_mode_select()
         elif state == GameState.DIFFICULTY_SELECT:
             self._draw_difficulty_select()
+        elif state == GameState.GACHA:
+            try:
+                self.draw_gacha()
+            except Exception:
+                pass
+        elif state == GameState.SLOT_MACHINE:
+            try:
+                self.draw_slot_machine()
+            except Exception:
+                pass
         elif state == GameState.EQUIP_SELECT:
             self._draw_equip_select()
         elif state == GameState.STORY_ARCHIVE:

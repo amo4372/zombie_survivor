@@ -393,6 +393,17 @@ class GameCore:
         self.selected_weapon = WeaponType.PISTOL      # 局外选定的武器（局内唯一）
         self.selected_weapon_level = 1                # 局外武器等级
         self.selected_character = None                # 局外选定的角色（None=默认角色）
+        # v2.8.9 军械库补给（武器抽取）初始化
+        try:
+            self.gacha_init()
+        except Exception:
+            self.gacha = None
+
+        # v2.8.9 双子 Boss 接入
+        try:
+            self.twin_boss_init()
+        except Exception:
+            self.twin_boss = None
         self.selected_map_for_story = None            # 故事模式局外选定地图（None=流程）
         # 装备选择界面滚动与选中
         self.equip_weapon_scroll = 0

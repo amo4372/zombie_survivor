@@ -18,11 +18,13 @@ from .mix_net import NetMixin
 from .mix_records import RecordsMixin
 from .mix_shop import ShopMixin
 from .mix_story import StoryMixin
+from .mix_twinboss import TwinBossMixin
 
 
 class Game(GameCore, PlayerRegistryMixin, ReplayMixin, FeedbackMixin, MenuMixin, HudMixin,
            InputMixin, SkillsMixin, CombatMixin, EffectsMixin, PlayingMixin,
-           MultiplayerMixin, NetMixin, RecordsMixin, ShopMixin, StoryMixin):
+           MultiplayerMixin, NetMixin, RecordsMixin, ShopMixin, StoryMixin,
+           TwinBossMixin):
     """完整游戏类（聚合拆分后的全部功能 Mixin，逻辑与拆分前等价）
 
     v2.7.1：插入 PlayerRegistryMixin，提供玩家注册表 / 每玩家上下文 /

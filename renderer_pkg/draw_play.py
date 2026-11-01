@@ -851,15 +851,24 @@ class PlayMixin:
         # 绘制粒子
         self.game.particles.draw(self.screen, cam_x, cam_y, scale)
 
+        # v2.8.9 双子 Boss（范围圈 / 弹幕 / 时停区 / 本体）
+        try:
+            g = self.game
+            if getattr(g, 'twin_boss_alive', False):
+                g.draw_twin_boss(self.screen, cam_x, cam_y, scale,
+                                 getattr(g, 'font_small', None))
+        except Exception:
+            pass
+
         # v2.8.8 蓄力武器的散布扇形（按住开火键时显示，随蓄力收敛）
         try:
             if getattr(player, '_awm_saved', None) is not None:
-                self.draw_charge_spread_fan(player, cam_x, cam_y, scale)
+                draw_charge_spread_fan(self, player, cam_x, cam_y, scale)
         except Exception:
             pass
         # v2.8.8 子弹破空曳光（高速弹丸/轨道炮）
         try:
-            self.draw_bullet_tracers(cam_x, cam_y, scale)
+            draw_bullet_tracers(self, cam_x, cam_y, scale)
         except Exception:
             pass
 

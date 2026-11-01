@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """全局游戏记录系统 - 记录玩家自开始游玩以来的各项详细记录【兼容旧存档版】"""
+# v2.8.9：武器只能抽取，给玩家初始资金用于首抽
+INITIAL_COINS = 1200
+
 import json
 import os
 import datetime
@@ -333,7 +336,7 @@ class GameRecords:
             "total_life_steal_heal": 0,
             "highest_combo_kills": 0,
             # === 金币（积分另一形式，用于购买武器/角色/升级）===
-            "coins": 0,
+            "coins": INITIAL_COINS,   # v2.8.9：初始资金，用于抽取初始武器
             "total_coins_earned": 0,
             # === 争分夺秒排行榜（v2.2.0）：历次挑战记录，取最高分 ===
             "race_leaderboard": [],
