@@ -393,36 +393,113 @@ class UiMixin:
         # ---- 出货展示 ----
         _res = getattr(g, 'gacha_result', None) or []
         _ry = int(180 * sc)
+        # v2.9.7：结果可**横向滑动**查看（十连时卡片会被挤得很窄），
+        # 并支持点选一张在下方显示完整数值与背景故事。
+        _scr = int(getattr(g, 'gacha_result_scroll', 0) or 0)
+        _sel = int(getattr(g, 'gacha_result_sel', 0) or 0)
         if _res:
             _n = len(_res)
-            _cw = min(int(190 * sc), (sw - int(60 * sc)) // max(1, _n))
+            _cw = int(190 * sc)
+            # 滑动：拖拽 / 滚轮
+            try:
+                for _e in (getattr(g, 'touch_events', []) or []):
+                    if _e.get("type") == "down":
+                        g._gr_drag_x = _e.get("pos", (0, 0))[0]
+                        g._gr_base = _scr
+                    elif _e.get("type") == "move" and \
+                            getattr(g, '_gr_drag_x', None) is not None:
+                        _dx = _e.get("pos", (0, 0))[0] - g._gr_drag_x
+                        _scr = int(g._gr_base - _dx)
+                    elif _e.get("type") == "up":
+                        # 判定为点选还是滑动
+                        _p = _e.get("pos", (0, 0))
+                        _sx0 = getattr(g, '_gr_drag_x', None)
+                        if _sx0 is not None and abs(_p[0] - _sx0) < 12 and \
+                                _ry <= _p[1] <= _ry + int(118 * sc):
+                            _rel = (_p[0] - int(30 * sc) + _scr)
+                            _idx = int(_rel // (_cw + int(8 * sc)))
+                            if 0 <= _idx < _n:
+                                g.gacha_result_sel = _idx
+                        g._gr_drag_x = None
+            except Exception:
+                pass
+            _max_scr = max(0, _n * (_cw + int(8 * sc)) - (sw - int(60 * sc)))
+            _scr = max(0, min(_max_scr, _scr))
+            g.gacha_result_scroll = _scr
+            _sel = max(0, min(_n - 1, _sel))
+            g.gacha_result_sel = _sel
+            # 裁切区域
+            _clip_r = pygame.Rect(int(20 * sc), _ry - int(6 * sc),
+                                  sw - int(40 * sc), int(130 * sc))
+            _clip = self.screen.subsurface(_clip_r).copy()
             for _i3, _r in enumerate(_res):
                 _w = _r.get("weapon") or {}
                 _star = int(_r.get("star", 3) or 3)
                 _col = {3: (90, 170, 255), 4: (190, 120, 255),
                         5: (255, 200, 70)}.get(_star, (200, 200, 200))
-                _x = int(30 * sc) + _i3 * (_cw + int(8 * sc))
+                _x = int(30 * sc) + _i3 * (_cw + int(8 * sc)) - _scr
                 _rh = int(118 * sc)
-                pygame.draw.rect(self.screen, (26, 24, 34), (_x, _ry, _cw, _rh),
+                _bg = (40, 36, 54) if _i3 == _sel else (26, 24, 34)
+                pygame.draw.rect(_clip, _bg, (_x - int(20 * sc),
+                                              int(6 * sc), _cw, _rh),
                                  border_radius=8)
-                pygame.draw.rect(self.screen, _col, (_x, _ry, _cw, _rh),
-                                 max(1, int(2 * sc)), border_radius=8)
+                pygame.draw.rect(_clip, _col, (_x - int(20 * sc),
+                                               int(6 * sc), _cw, _rh),
+                                 max(2, int(3 * sc) if _i3 == _sel
+                                     else int(2 * sc)), border_radius=8)
+                _lx = _x - int(20 * sc)      # 裁切面内的本地坐标
+                _ly = int(6 * sc)
                 _ns = g.font.render(str(_w.get("name", "?"))[:8], True, _col)
-                self.screen.blit(_ns, (_x + int(8 * sc), _ry + int(10 * sc)))
+                _clip.blit(_ns, (_lx + int(8 * sc), _ly + int(10 * sc)))
                 _ss = g.font_small.render("★" * _star, True, _col)
-                self.screen.blit(_ss, (_x + int(8 * sc), _ry + int(38 * sc)))
+                _clip.blit(_ss, (_lx + int(8 * sc), _ly + int(38 * sc)))
                 if _r.get("is_up"):
                     _us = g.font_small.render("UP!", True, (255, 150, 180))
-                    self.screen.blit(_us, (_x + int(_cw - 42 * sc), _ry + int(10 * sc)))
+                    _clip.blit(_us, (_lx + int(_cw - 42 * sc), _ly + int(10 * sc)))
                 _lv = int(_r.get("level", 1) or 1)
                 _lt2 = g.font_small.render(
                     ("重复 +1" if _r.get("dup") else "新获得") + f" Lv.{_lv}",
                     True, (200, 200, 215))
-                self.screen.blit(_lt2, (_x + int(8 * sc), _ry + int(62 * sc)))
+                _clip.blit(_lt2, (_lx + int(8 * sc), _ly + int(62 * sc)))
                 if _r.get("maxed"):
                     _ms = g.font_small.render("已满级", True, (255, 180, 90))
-                    self.screen.blit(_ms, (_x + int(8 * sc), _ry + int(84 * sc)))
+                    _clip.blit(_ms, (_lx + int(8 * sc), _ly + int(84 * sc)))
+            self.screen.blit(_clip, _clip_r.topleft)
+            # 滑动提示
+            if _max_scr > 0:
+                _ht = g.font_small.render("← 拖动查看全部 →", True, (150, 150, 175))
+                self.screen.blit(_ht, (sw // 2 - _ht.get_width() // 2,
+                                       _ry + int(122 * sc)))
             _ry += int(128 * sc)
+
+            # ---- 选中项的完整详情（数值 + 机制 + 背景故事）----
+            try:
+                _sr = _res[_sel]
+                _sw = _sr.get("weapon") or {}
+                _dy = _ry + int(4 * sc)
+                _bx = pygame.Rect(int(30 * sc), _dy,
+                                  sw - int(60 * sc), int(112 * sc))
+                pygame.draw.rect(self.screen, (22, 20, 30), _bx, border_radius=8)
+                pygame.draw.rect(self.screen, (90, 80, 120), _bx,
+                                 max(1, int(2 * sc)), border_radius=8)
+                _nm = g.font.render(str(_sw.get("name", "?")), True, (240, 240, 250))
+                self.screen.blit(_nm, (_bx.x + int(12 * sc), _bx.y + int(8 * sc)))
+                _st2 = g.font_small.render(
+                    f"伤害 {_sw.get('damage', '-')} · 射速 {_sw.get('fire_rate', '-')} "
+                    f"· 射程 {_sw.get('range', '-')} · 弹匣 {_sw.get('ammo', '-')}",
+                    True, (190, 190, 210))
+                self.screen.blit(_st2, (_bx.x + int(12 * sc), _bx.y + int(38 * sc)))
+                _ds = g.font_small.render(str(_sw.get("desc", ""))[:34],
+                                          True, (170, 170, 195))
+                self.screen.blit(_ds, (_bx.x + int(12 * sc), _bx.y + int(60 * sc)))
+                _story = str(_sw.get("story", "") or "")
+                if _story:
+                    _ssy = g.font_small.render(_story[:40], True, (150, 145, 175))
+                    self.screen.blit(_ssy, (_bx.x + int(12 * sc),
+                                            _bx.y + int(82 * sc)))
+            except Exception:
+                pass
+            _ry += int(120 * sc)
 
         # ---- 按钮 ----
         # v2.9.4：改为**持久化 ui.Button**，渲染层直接处理点击。
@@ -515,10 +592,18 @@ class UiMixin:
                 # v2.9.6 增强：旋转光束 / 上升粒子 / 跳过提示
                 if hasattr(_fx, "draw_extra"):
                     _fx.draw_extra(self.screen, g.font_small, sc)
-                # 演出期间点击 = 跳过
+                # 演出期间点击 = 逐段推进（铺垫→闪光→揭示→下一条）
+                # v2.9.7：改为"点击继续"而非"跳过全部"，保证铺垫阶段
+                # 不会因为一次误触就被完全跳掉。
                 if _fx.active and getattr(g, 'touch_events', None):
                     try:
-                        _fx.skip()
+                        _any = False
+                        for _e in (g.touch_events or []):
+                            if _e.get("type") == "up":
+                                _any = True
+                                break
+                        if _any:
+                            _fx.skip()
                     except Exception:
                         pass
         except Exception:
@@ -527,6 +612,18 @@ class UiMixin:
     # ==================================================================
     # v2.8.9 老虎机
     # ==================================================================
+    def _slot_unlock_cost(self):
+        """下一轴的解锁费用（已满返回 0）"""
+        try:
+            _sm = getattr(self.game, 'slot_machine', None)
+            if _sm is None:
+                return 0
+            if int(getattr(_sm, 'reels', 3)) >= int(getattr(_sm, 'MAX_REELS', 6)):
+                return 0
+            return int(_sm.unlock_cost())
+        except Exception:
+            return 0
+
     def draw_slot_machine(self):
         """v2.9.6 老虎机：转子逐个转动停下 + 清晰的赔率说明"""
         import pygame
@@ -552,6 +649,7 @@ class UiMixin:
         S.blit(_coin, (sw - _coin.get_width() - int(26 * sc), int(16 * sc)))
 
         # ---- 动画推进 ----
+        _ucost = self._slot_unlock_cost
         _anim = getattr(g, 'slot_anim', None)
         _now = _time.time()
         _last = getattr(g, '_slot_anim_last_t', None)
@@ -720,15 +818,17 @@ class UiMixin:
 
         # ---- 按钮 ----
         _bet = int(getattr(g, 'slot_bet', SLOT_BET_MIN) or SLOT_BET_MIN)
+        # v2.9.7：新增「加转子」按钮 —— 花金币为下一次抽取追加一个倍率转子
         _sbtns = getattr(g, 'slot_buttons', None)
         if not isinstance(_sbtns, dict) or not _sbtns:
-            _bw2, _gap2 = 140, 14
-            _tot2 = 4 * _bw2 + 3 * _gap2
+            _bw2, _gap2 = 132, 12
+            _tot2 = 5 * _bw2 + 4 * _gap2
             _bx2 = (1280 - _tot2) // 2
             _sbtns = {}
             for _i2, (_k2, _lab2, _col2) in enumerate(
                     (("minus", "-", (200, 120, 120)),
                      ("plus", "+", (120, 200, 120)),
+                     ("addreel", "加转子", (120, 170, 255)),
                      ("spin", "旋转", (240, 200, 90)),
                      ("back", "返回", (120, 120, 140)))):
                 _sbtns[_k2] = _SB(_bx2 + _i2 * (_bw2 + _gap2), 600,
@@ -737,7 +837,7 @@ class UiMixin:
             g.slot_buttons = _sbtns
         _hit3 = self._ui_page_click(_sbtns, "slot")
         _fnt2 = getattr(g, 'font', None)
-        for _k3 in ("minus", "plus", "spin", "back"):
+        for _k3 in ("minus", "plus", "addreel", "spin", "back"):
             _b3 = _sbtns.get(_k3)
             if _b3 is None:
                 continue
@@ -748,8 +848,14 @@ class UiMixin:
                     _b3.text = "转动中…" if _spinning else f"旋转 · {_bet}"
                 except Exception:
                     pass
-            elif _k3 in ("minus", "plus"):
-                _b3.enabled = not _spinning
+            elif _k3 == "addreel":
+                _uc = _ucost()
+                _b3.enabled = (not _spinning) and _uc > 0 and bool(
+                    g.records.get_coins() >= _uc)
+                try:
+                    _b3.text = (f"加转子 · {_uc}" if _uc > 0 else "转子已满")
+                except Exception:
+                    pass
             else:
                 _b3.enabled = not _spinning
             if _hit3 == _k3:
@@ -759,6 +865,8 @@ class UiMixin:
                         g.slot_bet = max(SLOT_BET_MIN, _bet - 50)
                     elif _k3 == "plus":
                         g.slot_bet = min(SLOT_BET_MAX, _bet + 50)
+                    elif _k3 == "addreel":
+                        g.slot_add_reel()
                     elif _k3 == "spin":
                         g.do_slot(_bet)
                     else:

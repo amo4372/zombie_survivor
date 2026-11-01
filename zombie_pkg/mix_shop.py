@@ -458,6 +458,44 @@ class ShopMixin:
             self.finish_slot_spin()
         return _r
 
+    def slot_add_reel(self):
+        """v2.9.7：消耗金币追加一个倍率转子（最多 +3，即总共 6 轴）
+
+        原实现有 unlock_cost / can_unlock 接口但**没有任何 UI 入口**，
+        玩家根本没法加轴 —— 6 轴玩法形同虚设。
+        """
+        _sm = getattr(self, "slot_machine", None)
+        if _sm is None:
+            self.gacha_init()
+            _sm = getattr(self, "slot_machine", None)
+        if _sm is None:
+            return False
+        _cur = int(getattr(_sm, "reels", 3) or 3)
+        _mx = int(getattr(_sm, "MAX_REELS", 6) or 6)
+        if _cur >= _mx:
+            self.gacha_tip = f"已达上限 {_mx} 轴"
+            return False
+        _cost = int(_sm.unlock_cost())
+        if _cost <= 0:
+            self.gacha_tip = "无法继续添加"
+            return False
+        if self.records.get_coins() < _cost:
+            self.gacha_tip = f"金币不足（需要 {_cost}）"
+            return False
+        self.records.spend_coins(_cost)
+        try:
+            _ok, _spent = _sm.unlock_reel(self.records.get_coins())
+            if not _ok:
+                _sm.reels = _cur + 1
+        except Exception:
+            _sm.reels = _cur + 1
+        self.gacha_tip = f"已添加第 {_cur + 1} 个转子！倍率上限提升"
+        try:
+            self._gacha_save()
+        except Exception:
+            pass
+        return True
+
     def finish_slot_spin(self):
         """转子全部停下：揭晓结果并派彩"""
         _r = getattr(self, "slot_pending", None)
@@ -527,9 +565,17 @@ class ShopMixin:
             pass
         return False
 
+    #: v2.9.7：手雷 / 燃烧瓶 / 烟雾弹 归类为**投掷道具**而非武器，
+    #: 从武器列表、武器图鉴、补给奖池中一并移除。
+    EXCLUDED_WEAPON_NAMES = {"GRENADE", "MOLOTOV", "SMOKE_GRENADE"}
+
     def _get_shop_weapons(self):
-        """局外可选武器列表（v2.2.12：与武器图鉴完全一致，全部 32 把含投掷物）"""
-        return list(WeaponType)
+        """局外可选武器列表（v2.9.7：移除三件投掷道具）"""
+        try:
+            return [wt for wt in WeaponType
+                    if getattr(wt, "name", "") not in self.EXCLUDED_WEAPON_NAMES]
+        except Exception:
+            return list(WeaponType)
 
     def get_weapon_shop_rows(self):
         """返回武器商店行数据：[(wt, name, price, owned, level, locked_reason, desc)]"""

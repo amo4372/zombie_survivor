@@ -22,8 +22,7 @@ _FORCED = {
     "AXE": QUALITY_FINE,
     "RIFLE": QUALITY_RARE,
     "CROSSBOW": QUALITY_RARE,
-    "GRENADE": QUALITY_RARE,
-    "MOLOTOV": QUALITY_RARE,
+    # v2.9.7：GRENADE / MOLOTOV / SMOKE_GRENADE 改为投掷道具，移出武器池
     "SNIPER": QUALITY_EPIC,
     "MACHINE_GUN": QUALITY_EPIC,
     "PLASMA_RIFLE": QUALITY_EPIC,
@@ -78,7 +77,11 @@ def build_pool():
     except Exception:
         return []
     _out = []
+    #: v2.9.7：三件投掷道具不是武器，不进补给奖池
+    _EX = {"GRENADE", "MOLOTOV", "SMOKE_GRENADE"}
     for _wt in WeaponType:
+        if getattr(_wt, "name", "") in _EX:
+            continue
         try:
             _w = Weapon(_wt, level=1)
         except Exception:

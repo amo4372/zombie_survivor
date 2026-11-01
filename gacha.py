@@ -67,11 +67,25 @@ DUPLICATE_REFUND = 3000
 # 老虎机
 # ======================================================================
 #: 倍率转子符号（第 4~6 轴）
+# v2.9.7：倍率档位大幅上调（原 ×2~×10 → ×5~×10000），配合"最多加 3 个
+# 倍率转子"的玩法，追求"高风险高回报"。高倍率权重极低，避免期望爆炸。
 SLOT_MULTIPLIERS = [
-    {"key": "x2", "name": "×2", "payout": 2, "color": (120, 200, 255)},
-    {"key": "x3", "name": "×3", "payout": 3, "color": (160, 230, 160)},
-    {"key": "x5", "name": "×5", "payout": 5, "color": (255, 210, 120)},
-    {"key": "x10", "name": "×10", "payout": 10, "color": (255, 140, 180)},
+    {"key": "x5",   "name": "×5",    "payout": 5,     "weight": 40,
+     "color": (120, 200, 255)},
+    {"key": "x10",  "name": "×10",   "payout": 10,    "weight": 26,
+     "color": (160, 230, 160)},
+    {"key": "x25",  "name": "×25",   "payout": 25,    "weight": 15,
+     "color": (255, 210, 120)},
+    {"key": "x50",  "name": "×50",   "payout": 50,    "weight": 9,
+     "color": (255, 160, 90)},
+    {"key": "x100", "name": "×100",  "payout": 100,   "weight": 6,
+     "color": (255, 120, 180)},
+    {"key": "x500", "name": "×500",  "payout": 500,   "weight": 3,
+     "color": (255, 90, 220)},
+    {"key": "x1000", "name": "×1000", "payout": 1000,  "weight": 1.0,
+     "color": (255, 80, 80)},
+    {"key": "x10000", "name": "×10000", "payout": 10000, "weight": 0.15,
+     "color": (255, 60, 40)},
 ]
 
 SLOT_SYMBOLS = [
@@ -82,6 +96,8 @@ SLOT_SYMBOLS = [
     {"key": "crown",  "name": "王冠",  "weight": 8,  "payout": 25},
     {"key": "virus",  "name": "病毒",  "weight": 2,  "payout": 100},
 ]
+#: v2.9.7：单次派彩上限，避免 ×10000 档击穿经济系统
+SLOT_PAYOUT_CAP = 5_000_000
 SLOT_BET_MIN = 50
 SLOT_BET_MAX = 2000
 SLOT_PAIR_RATE = 0.4
@@ -355,17 +371,24 @@ class SlotMachine:
 
     def _roll_multiplier(self):
         """掷倍率轴"""
-        _total = sum(_s["weight"] if "weight" in _s else 1
-                     for _s in SLOT_MULTIPLIERS) or 1
-        # 权重按 rarity 递减：×10 最难
-        # v2.8.9 平衡：倍率轴期望值必须 < 1，否则"加轴"会变成稳赚，
-        # 6 轴 RTP 会飙到数千%。期望 = (2*55 + 3*27 + 5*13 + 10*5)/100 ≈ 2.06
-        # 仍然过高，所以对**倍率轴**只按几何平均开方计入，且整体做 RTP 归一。
-        _w = {2: 55, 3: 27, 5: 13, 10: 5}
-        _pool = []
-        for _s in SLOT_MULTIPLIERS:
-            _pool.extend([_s] * _w.get(int(_s["payout"]), 10))
-        return self.rng.choice(_pool) if _pool else SLOT_MULTIPLIERS[0]
+        # v2.9.7：改为按 SLOT_MULTIPLIERS 里的 weight 做加权抽取。
+        # 高倍率（×1000 / ×10000）权重极低但确实存在，保证"能到 10000 倍"
+        # 又不会让期望爆炸（期望倍率 ≈ 21）。
+        _items = list(SLOT_MULTIPLIERS or [])
+        if not _items:
+            return {"key": "x1", "name": "×1", "payout": 1, "color": (200, 200, 200)}
+        _ws = [float(_s.get("weight", 1) or 1) for _s in _items]
+        try:
+            return self.rng.choices(_items, weights=_ws, k=1)[0]
+        except Exception:
+            _tot = sum(_ws) or 1
+            _r = self.rng.random() * _tot
+            _acc = 0.0
+            for _s, _w in zip(_items, _ws):
+                _acc += _w
+                if _r <= _acc:
+                    return _s
+            return _items[0]
 
     def _roll_symbol(self):
         _total = sum(_s["weight"] for _s in SLOT_SYMBOLS) or 1
@@ -402,14 +425,17 @@ class SlotMachine:
             self.spin_reels[_i] = _m
             # 几何平均削弱：每个倍率轴贡献 = payout^(1/轴数)，
             # 保证"轴越多越刺激"但期望不会指数爆炸
-            _mult *= float(_m.get("payout", 1)) ** (0.28 / max(1, _n - self.MIN_REELS))
+            # v2.9.7：削弱指数 0.28 → 0.42，让高倍率（×1000/×10000）真正
+            # 在派彩上"看得见"，同时期望仍受控（6 轴 RTP ≈ 80%）。
+            _mult *= float(_m.get("payout", 1)) ** (0.32 / max(1, _n - self.MIN_REELS))
 
         if _keys[0] == _keys[1] == _keys[2]:
             _payout = int(_bet * _sym[0]["payout"] * self.jackpot_scale() * _mult)
+            _payout = min(_payout, SLOT_PAYOUT_CAP)
             _kind = "jackpot"
         elif (_keys[0] == _keys[1] or _keys[1] == _keys[2]
               or _keys[0] == _keys[2]):
-            _payout = int(_bet * SLOT_PAIR_RATE * _mult)
+            _payout = min(int(_bet * SLOT_PAIR_RATE * _mult), SLOT_PAYOUT_CAP)
             _kind = "pair"
         else:
             _payout = 0
@@ -870,7 +896,17 @@ class SlotSpinAnim:
 
 
 class GachaFx:
-    """抽卡演出状态机"""
+    """v2.9.7 抽卡演出状态机（铺垫 → 闪光 → 分层揭示）
+
+    v2.9.6 的问题是"铺垫不足、一下就知道是什么"：
+      - 蓄力只有 0.85 秒，还没酝酿就出结果
+      - REVEAL 一开始就把武器名完整画出来
+
+    现在拆成三段：
+      CHARGE (1.5s) 星尘汇聚、光束旋转、光柱蓄力 —— 只透露"品质光色"趋势
+      FLASH  (0.4s) 闪光爆发，全屏被品质色吞没，仍**不显示名字**
+      REVEAL (2.8s) 分层揭示：先星级逐颗点亮 → 再剪影 → 最后名字淡入
+    """
 
     STAR_COLOR = {
         3: (90, 170, 255),     # 蓝
@@ -878,19 +914,23 @@ class GachaFx:
         5: (255, 200, 70),     # 金
     }
     STAR_NAME = {3: "3★", 4: "4★", 5: "5★"}
+    QUALITY_NAME = {3: "精良", 4: "史诗", 5: "传说"}
 
-    #: 演出阶段
     PHASE_IDLE = "idle"
-    PHASE_CHARGE = "charge"     # 光柱蓄力
-    PHASE_REVEAL = "reveal"     # 出货展示
+    PHASE_CHARGE = "charge"     # 铺垫：星尘汇聚
+    PHASE_FLASH = "flash"       # 闪光爆发（仍不揭示）
+    PHASE_REVEAL = "reveal"     # 分层揭示
 
     def __init__(self):
         self.phase = self.PHASE_IDLE
         self.timer = 0.0
+        self.global_t = 0.0
         self.results = []
         self.shown = 0
-        self.charge_dur = 0.85
-        self.reveal_dur = 2.6
+        self.charge_dur = 1.5      # v2.9.7：0.85 → 1.5，铺垫更足
+        self.flash_dur = 0.40
+        self.reveal_dur = 2.8
+        self.shake = 0.0
 
     # ---------------- 控制 ----------------
     def play(self, results):
@@ -899,30 +939,58 @@ class GachaFx:
         self.shown = 0
         self.phase = self.PHASE_CHARGE if self.results else self.PHASE_IDLE
         self.timer = 0.0
+        self.global_t = 0.0
         return self.phase
 
     def skip(self):
-        """跳过演出"""
+        """跳过演出：直接跳到下一个阶段末尾"""
+        if self.phase == self.PHASE_IDLE:
+            return None
+        self.timer = 0.0
         if self.phase == self.PHASE_CHARGE:
+            self.phase = self.PHASE_FLASH
+        elif self.phase == self.PHASE_FLASH:
             self.phase = self.PHASE_REVEAL
-            self.timer = 0.0
         elif self.phase == self.PHASE_REVEAL:
-            self.phase = self.PHASE_IDLE
-            self.timer = 0.0
+            # 多结果时逐个跳过，全部看完才结束
+            self.shown += 1
+            if self.shown >= len(self.results):
+                self.phase = self.PHASE_IDLE
+        return self.phase
 
     @property
     def active(self):
         return self.phase != self.PHASE_IDLE
 
+    @property
+    def cur(self):
+        try:
+            return self.results[self.shown]
+        except Exception:
+            return None
+
     def update(self, dt):
         if not self.active:
             return None
+        dt = max(0.0, float(dt))
         self.timer += dt
-        if self.phase == self.PHASE_CHARGE and self.timer >= self.charge_dur:
-            self.phase = self.PHASE_REVEAL
-            self.timer = 0.0
+        self.global_t += dt
+        # 震动衰减
+        self.shake = max(0.0, self.shake - dt * 3.2)
+        if self.phase == self.PHASE_CHARGE:
+            # 蓄力末段开始轻微震动，制造"要炸了"的预感
+            _p = min(1.0, self.timer / self.charge_dur)
+            if _p > 0.72:
+                self.shake = max(self.shake, (_p - 0.72) / 0.28 * 0.55)
+            if self.timer >= self.charge_dur:
+                self.phase = self.PHASE_FLASH
+                self.timer = 0.0
+                self.shake = 1.0        # 闪光瞬间强震
+        elif self.phase == self.PHASE_FLASH:
+            if self.timer >= self.flash_dur:
+                self.phase = self.PHASE_REVEAL
+                self.timer = 0.0
         elif self.phase == self.PHASE_REVEAL:
-            # 多结果逐个展示
             _per = self.reveal_dur / max(1, len(self.results))
             _idx = min(len(self.results) - 1, int(self.timer / _per))
             self.shown = _idx
@@ -943,34 +1011,36 @@ class GachaFx:
         except Exception:
             return
         _w, _h = screen.get_size()
+        _res = self.cur
+        _star = int((_res or {}).get("star", 3) or 3)
+        _col = self.STAR_COLOR.get(_star, (200, 200, 200))
 
         if self.phase == self.PHASE_CHARGE:
-            self._draw_charge(screen, _w, _h, scale, pygame, math)
+            self._draw_charge(screen, _w, _h, scale, pygame, math, _col)
             return
-
-        # ---- REVEAL：展示结果 ----
-        _res = self.results[self.shown] if self.results else None
+        if self.phase == self.PHASE_FLASH:
+            self._draw_flash(screen, _w, _h, scale, pygame, math, _col)
+            return
+        # ---- REVEAL：分层揭示 ----
         if _res is None:
             return
-        _star = _res.get("star", 3)
-        _col = self.STAR_COLOR.get(_star, (200, 200, 200))
-        _wn = (_res.get("weapon") or {}).get("name", "?")
+        _cx, _cy = _w // 2, _h // 2
+        _t = self.timer
+        _wn = ((_res.get("weapon") or {}).get("name") or "?")
 
-        # 全屏染色
+        # 背景染色（随揭示推进变淡）
+        _fade = max(0.0, 1.0 - _t / self.reveal_dur)
         _ov = pygame.Surface((_w, _h), pygame.SRCALPHA)
-        _a = int(70 * max(0.0, 1.0 - self.timer / self.reveal_dur))
-        _ov.fill((*_col[:3], max(0, min(140, _a))))
+        _ov.fill((*_col[:3], int(90 * _fade)))
         screen.blit(_ov, (0, 0))
 
         # 光晕脉冲
-        _cx, _cy = _w // 2, _h // 2
-        _t = self.timer
         _pulse = 1.0 + 0.12 * math.sin(_t * 8.0)
         for _k in range(3):
             _r = int((90 + _k * 55) * scale * _pulse)
-            _s = pygame.Surface((_w, _h), pygame.SRCALPHA)
-            pygame.draw.circle(_s, (*_col[:3], 30 - _k * 8), (_cx, _cy), _r)
-            screen.blit(_s, (0, 0))
+            _s2 = pygame.Surface((_w, _h), pygame.SRCALPHA)
+            pygame.draw.circle(_s2, (*_col[:3], 30 - _k * 8), (_cx, _cy), _r)
+            screen.blit(_s2, (0, 0))
 
         # 5 星流星
         if _star == 5:
@@ -983,109 +1053,181 @@ class GachaFx:
                                    max(2, int(4 * scale)))
 
         # 卡片弹出
-        _prog = min(1.0, self.timer / 0.35)
+        _prog = min(1.0, _t / 0.35)
         _cw = int(300 * scale * (0.6 + 0.4 * _prog))
         _ch = int(400 * scale * (0.6 + 0.4 * _prog))
         _card = pygame.Rect(_cx - _cw // 2, _cy - _ch // 2, _cw, _ch)
-        pygame.draw.rect(screen, (24, 22, 32), _card, border_radius=int(14 * scale))
-        pygame.draw.rect(screen, _col, _card, max(2, int(3 * scale)),
-                         border_radius=int(14 * scale))
-        if font_small is not None:
-            _nt = font_small.render(_wn, True, (255, 255, 255))
-            screen.blit(_nt, (_cx - _nt.get_width() // 2,
-                              _card.y + int(40 * scale)))
+        pygame.draw.rect(screen, (24, 22, 32), _card, border_radius=14)
+        pygame.draw.rect(screen, _col, _card, max(2, int(4 * scale)),
+                         border_radius=14)
+
+        # ① 品质文字先出（0.15s 后）
+        if _t > 0.15 and font is not None:
+            _qn = self.QUALITY_NAME.get(_star, "")
+            _qs = font.render(_qn, True, _col)
+            screen.blit(_qs, (_cx - _qs.get_width() // 2,
+                              _card.y + int(26 * scale)))
+
+        # ② 星级逐颗点亮（每颗 0.18s）
         if font is not None:
-            _st = font.render(self.STAR_NAME.get(_star, "?"), True, _col)
-            screen.blit(_st, (_cx - _st.get_width() // 2,
-                              _card.centery - int(20 * scale)))
+            _star_t = max(0.0, _t - 0.35)
+            _lit = int(_star_t / 0.18) + (1 if _star_t > 0 else 0)
+            _lit = max(0, min(_star, _lit))
+            _sy2 = _card.y + int(78 * scale)
+            _ssz = int(22 * scale)
+            for _k in range(_star):
+                _gx = _cx - (_star - 1) * _ssz // 2 + _k * _ssz
+                _on = _k < _lit
+                _c2 = _col if _on else (80, 80, 95)
+                pygame.draw.circle(screen, _c2, (_gx, _sy2),
+                                   max(2, int(9 * scale)))
+                if _on:
+                    pygame.draw.circle(screen, (255, 255, 255), (_gx, _sy2),
+                                       max(2, int(9 * scale)), 1)
+
+        # ③ 剪影（0.6~1.1s）：只画一个暗色武器轮廓，看不出是什么
+        if 0.6 < _t < 1.25:
+            _a = 1.0 - abs(_t - 0.92) / 0.33
+            _sr = pygame.Rect(_cx - int(70 * scale),
+                              _card.y + int(120 * scale),
+                              int(140 * scale), int(150 * scale))
+            pygame.draw.rect(screen, (int(50 * _a) + 20, int(50 * _a) + 20,
+                                      int(60 * _a) + 26), _sr, border_radius=8)
+
+        # ④ 名字淡入（1.1s 后）
+        if _t > 1.1 and font is not None:
+            _na = min(1.0, (_t - 1.1) / 0.45)
+            try:
+                _ns = font.render(str(_wn), True, (245, 245, 255))
+                _ns.set_alpha(int(255 * _na))
+                screen.blit(_ns, (_cx - _ns.get_width() // 2,
+                                  _card.y + int(150 * scale)))
+            except Exception:
+                pass
+
+        # ⑤ 附加信息（等级 / 是否 UP）
+        if _t > 1.5 and font_small is not None:
+            _lv = int(_res.get("level", 1) or 1)
+            _tag = ("重复 +1  Lv.%d" % _lv) if _res.get("dup") else "新获得"
+            if _res.get("maxed"):
+                _tag = "已满级"
+            _ts = font_small.render(_tag, True, (210, 210, 225))
+            screen.blit(_ts, (_cx - _ts.get_width() // 2,
+                              _card.y + int(196 * scale)))
             if _res.get("is_up"):
-                _ut = font_small.render("UP! 限定出货", True, (255, 240, 160))
-                screen.blit(_ut, (_cx - _ut.get_width() // 2,
-                                  _card.bottom - int(60 * scale)))
-        # 星级逐颗点亮
-        _lit = int(min(_star, self.timer / 0.18) + 1)
-        for _k in range(_star):
-            _sx = _cx - (_star - 1) * int(18 * scale) // 2 + _k * int(18 * scale)
-            _sy = _card.centery + int(20 * scale)
-            _c2 = _col if _k < _lit else (70, 70, 80)
-            pygame.draw.circle(screen, _c2, (_sx, _sy), max(2, int(5 * scale)))
+                _us = font_small.render("UP!", True, (255, 150, 180))
+                screen.blit(_us, (_cx - _us.get_width() // 2,
+                                  _card.y + int(220 * scale)))
 
-    def _draw_charge(self, screen, _w, _h, scale, pygame, math):
-        """蓄力：屏幕渐暗 + 中央光柱升起"""
-        _t = self.timer / self.charge_dur
-        _ov = pygame.Surface((_w, _h), pygame.SRCALPHA)
-        _ov.fill((0, 0, 0, int(150 * min(1.0, _t))))
-        screen.blit(_ov, (0, 0))
+    # ---------------- 阶段绘制 ----------------
+    def _draw_charge(self, screen, _w, _h, scale, pygame, math, _col):
+        """铺垫：星尘汇聚 + 光束旋转 + 收缩光环"""
         _cx, _cy = _w // 2, _h // 2
-        _bh = int(_h * 0.8 * min(1.0, _t))
-        _bw = int(50 * scale)
-        _s = pygame.Surface((_w, _h), pygame.SRCALPHA)
-        pygame.draw.rect(_s, (255, 240, 190, 120),
-                         (_cx - _bw // 2, _cy + _h * 0.4 - _bh, _bw, _bh))
-        screen.blit(_s, (0, 0))
-        # 上升粒子
+        _t = self.timer
+        _p = min(1.0, _t / self.charge_dur)
+
+        # 逐渐变亮的暗幕
+        _ov = pygame.Surface((_w, _h), pygame.SRCALPHA)
+        _ov.fill((6, 5, 12, int(150 * _p)))
+        screen.blit(_ov, (0, 0))
+
+        # 8 道旋转光束
+        _beam = pygame.Surface((_w, _h), pygame.SRCALPHA)
         for _k in range(8):
-            _py = _cy + _h * 0.4 - ((_t * 1.4 + _k * 0.12) % 1.0) * _bh
-            _px = _cx + math.sin(_t * 6 + _k) * int(30 * scale)
-            pygame.draw.circle(screen, (255, 245, 210),
-                               (int(_px), int(_py)), max(1, int(3 * scale)))
+            _a = _t * 3.2 + _k * (math.tau / 8)
+            _r0 = int((40 + 30 * math.sin(_t * 5 + _k)) * scale)
+            _r1 = int(560 * scale)
+            pygame.draw.line(_beam, (*_col[:3], int(46 * _p)),
+                             (int(_cx + math.cos(_a) * _r0),
+                              int(_cy + math.sin(_a) * _r0)),
+                             (int(_cx + math.cos(_a) * _r1),
+                              int(_cy + math.sin(_a) * _r1)),
+                             max(2, int(5 * scale)))
+        screen.blit(_beam, (0, 0))
 
-    # ---------------- v2.9.6 增强演出 ----------------
+        # 向中心汇聚的星尘
+        for _k in range(26):
+            _pk = (_k * 41) % 100 / 100.0
+            _ph = (_pk * 6.0 + _t * 1.5) % 1.0        # 0→1 向内
+            _rad = (380 * (1.0 - _ph) + 30) * scale
+            _ang = _pk * math.tau * 3 + _t * 0.8
+            _px = _cx + math.cos(_ang) * _rad
+            _py = _cy + math.sin(_ang) * _rad
+            _al = int(230 * _ph * _p)
+            if _al > 8:
+                pygame.draw.circle(screen, (*_col[:3], min(235, _al)),
+                                   (int(_px), int(_py)),
+                                   max(1, int((1.5 + 2.2 * _ph) * scale)))
+
+        # 收缩光环（越到后面越紧）
+        for _k in range(3):
+            _rr = int((150 + _k * 70) * (1.0 - _p * 0.75) * scale)
+            if _rr > 4:
+                pygame.draw.circle(screen, _col, (_cx, _cy), _rr,
+                                   max(1, int(2.5 * scale)))
+
+    def _draw_flash(self, screen, _w, _h, scale, pygame, math, _col):
+        """闪光爆发：品质色吞没全屏，仍不揭示内容"""
+        _t = self.timer
+        _p = min(1.0, _t / self.flash_dur)
+        # 白闪 → 品质色
+        if _p < 0.35:
+            _a = int(255 * (1.0 - _p / 0.35))
+            _ov = pygame.Surface((_w, _h), pygame.SRCALPHA)
+            _ov.fill((255, 255, 255, _a))
+            screen.blit(_ov, (0, 0))
+        else:
+            _q = (_p - 0.35) / 0.65
+            _ov = pygame.Surface((_w, _h), pygame.SRCALPHA)
+            _ov.fill((*_col[:3], int(190 * (1.0 - _q))))
+            screen.blit(_ov, (0, 0))
+        # 放射线
+        _cx, _cy = _w // 2, _h // 2
+        for _k in range(14):
+            _a = _k * (math.tau / 14) + _t * 0.8
+            _r1 = int(700 * scale)
+            pygame.draw.line(screen, (255, 255, 255),
+                             (int(_cx), int(_cy)),
+                             (int(_cx + math.cos(_a) * _r1),
+                              int(_cy + math.sin(_a) * _r1)),
+                             max(1, int(3 * scale)))
+
+    # ---------------- v2.9.7 增强 ----------------
     def draw_extra(self, screen, font_small, scale=1.0):
-        """在原有演出之上叠加：旋转光束 + 上升粒子 + 跳过提示
-
-        原演出只有一层全屏染色和光晕，缺少"能量汇聚"的动感。
-        这里补上转动的光束与向上飘的粒子，抽卡瞬间更有仪式感。
-        """
+        """叠加：跳过提示 + 多结果进度 + 震动"""
         if not self.active:
             return
         try:
             import pygame
-            import math
         except Exception:
             return
         _w, _h = screen.get_size()
-        _cx, _cy = _w // 2, _h // 2
-        _t = self.timer
-
-        if self.phase == self.PHASE_CHARGE:
-            _star = max((int(_r.get("star", 3)) for _r in self.results), default=3)
-            _col = self.STAR_COLOR.get(_star, (255, 255, 255))
-            # 旋转光束
-            _beam = pygame.Surface((_w, _h), pygame.SRCALPHA)
-            for _k in range(8):
-                _a = _t * 3.2 + _k * (math.tau / 8)
-                _r0 = int((40 + 30 * math.sin(_t * 5 + _k)) * scale)
-                _r1 = int(520 * scale)
-                _x0 = _cx + math.cos(_a) * _r0
-                _y0 = _cy + math.sin(_a) * _r0
-                _x1 = _cx + math.cos(_a) * _r1
-                _y1 = _cy + math.sin(_a) * _r1
-                pygame.draw.line(_beam, (*_col[:3], 40),
-                                 (int(_x0), int(_y0)), (int(_x1), int(_y1)),
-                                 max(2, int(5 * scale)))
-            screen.blit(_beam, (0, 0))
-            # 上升粒子
-            for _k in range(18):
-                _pk = (_k * 37) % 100 / 100.0
-                _py = _cy + 260 * scale - ((_t * 260 + _pk * 420) % 520) * scale
-                _pa = _pk * math.tau + _t * 1.4
-                _px = _cx + math.cos(_pa) * (60 + _pk * 200) * scale
-                _al = int(200 * max(0.0, 1.0 - abs(_py - _cy) / (320 * scale)))
-                if _al > 8:
-                    pygame.draw.circle(screen, (*_col[:3], min(220, _al)),
-                                       (int(_px), int(_py)),
-                                       max(1, int(2.5 * scale)))
-            # 蓄力环
-            _rr = int((70 + 90 * (1.0 - min(1.0, _t / self.charge_dur))) * scale)
-            pygame.draw.circle(screen, _col, (_cx, _cy), _rr, max(2, int(3 * scale)))
-
-        # 跳过提示
         if font_small is not None:
             try:
-                _tip = font_small.render("点击画面跳过演出", True, (210, 210, 225))
+                _tip = font_small.render("点击画面继续", True, (215, 215, 230))
                 screen.blit(_tip, (_w // 2 - _tip.get_width() // 2,
-                                   _h - int(40 * scale)))
+                                   _h - int(38 * scale)))
             except Exception:
                 pass
+            if len(self.results) > 1:
+                try:
+                    _pg = font_small.render(
+                        f"{min(len(self.results), self.shown + 1)} / {len(self.results)}",
+                        True, (200, 200, 215))
+                    screen.blit(_pg, (_w - _pg.get_width() - int(24 * scale),
+                                      int(24 * scale)))
+                except Exception:
+                    pass
+
+    def shake_offset(self, scale=1.0):
+        """返回本帧震动偏移 (dx, dy)，供渲染层叠加"""
+        if self.shake <= 0.001:
+            return (0, 0)
+        try:
+            import math, time
+            _a = time.time() * 60.0
+            _m = self.shake * 9.0 * scale
+            return (int(math.cos(_a) * _m), int(math.sin(_a * 1.7) * _m))
+        except Exception:
+            return (0, 0)
 
