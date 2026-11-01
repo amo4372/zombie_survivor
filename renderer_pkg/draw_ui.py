@@ -498,10 +498,29 @@ class UiMixin:
             self.screen.blit(_ms2, (int(28 * sc), sh - int(190 * sc)))
 
         # 出货演出（GachaFx）
+        # v2.9.6：此前只在 PLAYING 态推进 update（mix_playing），而抽卡页是
+        # 菜单态 —— 演出 start 后永远停在"光柱蓄力"第一帧，玩家看到的就是
+        # 一层静止的膜，毫无演出效果。这里按真实时间推进。
         try:
             _fx = getattr(g, 'gacha_fx', None)
-            if _fx is not None and hasattr(_fx, "draw"):
-                _fx.draw(self.screen, g.font, g.font_small, sc)
+            if _fx is not None:
+                import time as _gft
+                _gn = _gft.time()
+                _gl = getattr(g, '_gacha_fx_last_t', None)
+                g._gacha_fx_last_t = _gn
+                if _gl is not None and hasattr(_fx, "update"):
+                    _fx.update(min(0.1, _gn - _gl))
+                if hasattr(_fx, "draw"):
+                    _fx.draw(self.screen, g.font, g.font_small, sc)
+                # v2.9.6 增强：旋转光束 / 上升粒子 / 跳过提示
+                if hasattr(_fx, "draw_extra"):
+                    _fx.draw_extra(self.screen, g.font_small, sc)
+                # 演出期间点击 = 跳过
+                if _fx.active and getattr(g, 'touch_events', None):
+                    try:
+                        _fx.skip()
+                    except Exception:
+                        pass
         except Exception:
             pass
 
@@ -509,47 +528,198 @@ class UiMixin:
     # v2.8.9 老虎机
     # ==================================================================
     def draw_slot_machine(self):
+        """v2.9.6 老虎机：转子逐个转动停下 + 清晰的赔率说明"""
         import pygame
-        from gacha import SLOT_BET_MIN, SLOT_BET_MAX
+        import time as _time
+        from gacha import (SLOT_BET_MIN, SLOT_BET_MAX, SLOT_SYMBOLS,
+                           SLOT_MULTIPLIERS)
+        from ui import Button as _SB
         g = self.game
         sc = getattr(g, 'scale', 1.0) or 1.0
         sw, sh = self.screen.get_size()
-        self.screen.fill((18, 16, 20))
+        S = self.screen
 
-        _t = g.font_large.render("老虎机", True, (255, 200, 90))
-        self.screen.blit(_t, (int(28 * sc), int(24 * sc)))
+        # ---- 背景 ----
+        S.fill((16, 13, 20))
+        # 顶部/底部暗色装饰条
+        pygame.draw.rect(S, (34, 24, 40), (0, 0, sw, int(56 * sc)))
+        pygame.draw.rect(S, (34, 24, 40), (0, sh - int(52 * sc), sw, int(52 * sc)))
+
+        # ---- 标题与金币 ----
+        _t = g.font_large.render("幸运老虎机", True, (255, 200, 90))
+        S.blit(_t, (int(26 * sc), int(14 * sc)))
         _coin = g.font.render(f"金币：{g.records.get_coins()}", True, (255, 215, 0))
-        self.screen.blit(_coin, (sw - _coin.get_width() - int(28 * sc), int(28 * sc)))
+        S.blit(_coin, (sw - _coin.get_width() - int(26 * sc), int(16 * sc)))
 
-        _spin = getattr(g, 'slot_result', None)
-        _names = _spin.get('reel_names', ["?", "?", "?"]) if _spin else ["?", "?", "?"]
-        _rw, _rh = int(160 * sc), int(180 * sc)
-        _total = 3 * _rw + 2 * int(24 * sc)
+        # ---- 动画推进 ----
+        _anim = getattr(g, 'slot_anim', None)
+        _now = _time.time()
+        _last = getattr(g, '_slot_anim_last_t', None)
+        g._slot_anim_last_t = _now
+        if _anim is not None and getattr(_anim, 'active', False):
+            _dt = 0.0 if _last is None else min(0.1, _now - _last)
+            if _anim.update(_dt):
+                try:
+                    g.finish_slot_spin()
+                except Exception:
+                    pass
+
+        _spinning = bool(_anim is not None and getattr(_anim, 'active', False))
+        _pending = getattr(g, 'slot_pending', None)
+        _res = getattr(g, 'slot_result', None)
+
+        # 轴数：转动中/待揭晓用 pending，已揭晓用 result
+        _src = _res or _pending
+        _all_reels = list((_src or {}).get('reels') or [])
+        _nreel = max(3, len(_all_reels))
+        _sym_pool = list(SLOT_SYMBOLS)
+
+        # ---- 转子窗口 ----
+        _rw, _rh = int(132 * sc), int(150 * sc)
+        _gap = int(16 * sc)
+        _total = _nreel * _rw + (_nreel - 1) * _gap
         _sx = (sw - _total) // 2
-        _sy = int(140 * sc)
-        for _i, _nm in enumerate(_names):
-            _r = pygame.Rect(_sx + _i * (_rw + int(24 * sc)), _sy, _rw, _rh)
-            _c = (255, 210, 120) if (_spin and _spin.get('win')) else (70, 70, 90)
-            pygame.draw.rect(self.screen, (28, 26, 36), _r, border_radius=10)
-            pygame.draw.rect(self.screen, _c, _r, max(1, int(3 * sc)), border_radius=10)
-            _ns = g.font_large.render(str(_nm)[:3], True, (240, 240, 250))
-            self.screen.blit(_ns, _ns.get_rect(center=_r.center))
+        _sy = int(96 * sc)
 
-        if _spin:
-            _kind = _spin.get('kind')
-            _txt = {"jackpot": f"头奖！派彩 +{_spin['payout']}",
-                    "pair": f"两同，返还 +{_spin['payout']}",
-                    "none": "未中奖"}.get(_kind, "")
-            _col = (120, 255, 140) if _spin.get('win') else (200, 120, 120)
-            _rs = g.font.render(_txt, True, _col)
-            self.screen.blit(_rs, (int(28 * sc), _sy + _rh + int(24 * sc)))
+        # 中奖闪光
+        _flash = float(getattr(g, 'slot_win_flash', 0.0) or 0.0)
+        if _flash > 0:
+            g.slot_win_flash = max(0.0, _flash - 0.03)
 
+        for _i in range(_nreel):
+            _rx = _sx + _i * (_rw + _gap)
+            _ry = _sy
+            _win = pygame.Rect(_rx, _ry, _rw, _rh)
+            # 外框
+            _is_mult = _i >= 3
+            _fc = (255, 170, 60) if _is_mult else (120, 120, 150)
+            pygame.draw.rect(S, (10, 8, 14), _win, border_radius=10)
+            if _flash > 0 and not _is_mult:
+                _gc2 = (90 + int(165 * _flash), 80 + int(150 * _flash),
+                        40 + int(60 * _flash))
+                pygame.draw.rect(S, _gc2, _win, max(2, int(3 * sc)), border_radius=10)
+            else:
+                pygame.draw.rect(S, _fc, _win, max(1, int(3 * sc)), border_radius=10)
+
+            # 裁切窗口内的滚动内容
+            _clip = S.subsurface(_win).copy()
+            _clip.fill((18, 15, 24))
+            # 决定当前轴显示的符号序列
+            if _spinning and _anim is not None:
+                _idx = _anim.symbol_index_of(_i, _sym_pool)
+                _off = _anim.offset_of(_i)
+                _stopped = _anim.is_stopped(_i)
+                _fl = _anim.flash_of(_i)
+            else:
+                _idx = 0
+                _off = 0.0
+                _stopped = True
+                _fl = 0.0
+                try:
+                    _k = _all_reels[_i].get('key') if _i < len(_all_reels) else None
+                    for _j2, _s2 in enumerate(_sym_pool):
+                        if _s2.get('key') == _k:
+                            _idx = _j2
+                            break
+                except Exception:
+                    pass
+
+            # 画三格（上/中/下），中间格是"结果行"
+            _cell = _rh / 3.0
+            _pool = _sym_pool if not _is_mult else SLOT_MULTIPLIERS
+            for _row in range(-1, 2):
+                _pi = (_idx + _row) % max(1, len(_pool))
+                try:
+                    _sym = _pool[_pi]
+                except Exception:
+                    _sym = {"name": "?", "color": (150, 150, 150)}
+                _cy = _cell * (1 + _row) - _off * _cell
+                _nm = str(_sym.get('name', '?'))
+                _col = tuple(_sym.get('color', (230, 230, 230)))
+                _fs = g.font_large.render(_nm[:3], True, _col)
+                _px = _rw // 2 - _fs.get_width() // 2
+                _py = int(_cy + _cell / 2 - _fs.get_height() // 2)
+                # 滚动时上下两格做半透明，模拟运动模糊
+                if not _stopped and _row != 0:
+                    _fs.set_alpha(110)
+                _clip.blit(_fs, (_px, _py))
+            # 刚停下的"咔"高亮
+            if _fl > 0:
+                _ovl = pygame.Surface((_rw, _rh), pygame.SRCALPHA)
+                _ovl.fill((255, 255, 255, int(90 * _fl)))
+                _clip.blit(_ovl, (0, 0))
+            S.blit(_clip, (_rx, _ry))
+
+            # 结果行高亮横线
+            _ly = _ry + _rh / 2.0
+            pygame.draw.line(S, (255, 210, 120),
+                             (_rx + int(4 * sc), int(_ly - _cell / 2)),
+                             (_rx + _rw - int(4 * sc), int(_ly - _cell / 2)),
+                             max(1, int(2 * sc)))
+            pygame.draw.line(S, (255, 210, 120),
+                             (_rx + int(4 * sc), int(_ly + _cell / 2)),
+                             (_rx + _rw - int(4 * sc), int(_ly + _cell / 2)),
+                             max(1, int(2 * sc)))
+            # 轴标签
+            _lab = f"倍率{_i - 2}" if _is_mult else f"符号{_i + 1}"
+            _ls = g.font_small.render(_lab, True, _fc)
+            S.blit(_ls, (_rx + _rw // 2 - _ls.get_width() // 2,
+                         _ry + _rh + int(6 * sc)))
+
+        # ---- 状态提示 ----
+        _msg = ""
+        if _spinning:
+            _msg = "转动中……"
+            _mc = (255, 220, 140)
+        elif _res is not None:
+            if _res.get('win'):
+                _msg = (f"★ {_res['kind'] == 'jackpot' and '头奖' or '中奖'} "
+                        f"+{_res.get('payout', 0)} ★")
+                _mc = (120, 255, 140)
+            else:
+                _msg = f"未中奖  净 {_res.get('net', 0)}"
+                _mc = (200, 150, 150)
+        elif getattr(g, 'gacha_tip', ""):
+            _msg = str(g.gacha_tip)
+            _mc = (255, 220, 140)
+        if _msg:
+            _ms = g.font.render(_msg, True, _mc)
+            S.blit(_ms, (sw // 2 - _ms.get_width() // 2,
+                         _sy + _rh + int(34 * sc)))
+
+        # ---- 赔率说明（清晰化）----
+        _iy = _sy + _rh + int(70 * sc)
+        _box = pygame.Rect(int(40 * sc), _iy, sw - int(80 * sc), int(96 * sc))
+        pygame.draw.rect(S, (24, 20, 30), _box, border_radius=8)
+        pygame.draw.rect(S, (70, 60, 90), _box, max(1, int(2 * sc)), border_radius=8)
+        _h1 = g.font_small.render("规则：左起 3 个符号轴，三个相同 = 头奖，两个相同 = 小奖",
+                                  True, (190, 190, 210))
+        S.blit(_h1, (_box.x + int(12 * sc), _box.y + int(8 * sc)))
+        _h2 = g.font_small.render("倍率轴（第 4~6 轴）只放大奖金，不参与中奖判定",
+                                  True, (190, 190, 210))
+        S.blit(_h2, (_box.x + int(12 * sc), _box.y + int(28 * sc)))
+        # 符号赔率行
+        _px2 = _box.x + int(12 * sc)
+        _py2 = _box.y + int(54 * sc)
+        for _s3 in SLOT_SYMBOLS:
+            _lab2 = f"{_s3['name']}×{_s3['payout']}"
+            _c3 = tuple(_s3.get('color', (200, 200, 200)))
+            _ts = g.font_small.render(_lab2, True, _c3)
+            S.blit(_ts, (_px2, _py2))
+            _px2 += _ts.get_width() + int(14 * sc)
+        _px3 = _box.x + int(12 * sc)
+        _py3 = _box.y + int(74 * sc)
+        _m4 = g.font_small.render("倍率轴：", True, (255, 190, 100))
+        S.blit(_m4, (_px3, _py3))
+        _px3 += _m4.get_width() + int(6 * sc)
+        for _m5 in SLOT_MULTIPLIERS:
+            _ts2 = g.font_small.render(_m5['name'], True,
+                                       tuple(_m5.get('color', (200, 200, 200))))
+            S.blit(_ts2, (_px3, _py3))
+            _px3 += _ts2.get_width() + int(10 * sc)
+
+        # ---- 按钮 ----
         _bet = int(getattr(g, 'slot_bet', SLOT_BET_MIN) or SLOT_BET_MIN)
-        _by = sh - int(140 * sc)
-        g.slot_buttons = {}
-        # v2.9.4：改为持久化 ui.Button（此前点击挂在 MOUSEWHEEL 分支下，
-        # 触控设备永不触发 → 按钮点了没反应）
-        from ui import Button as _SB
         _sbtns = getattr(g, 'slot_buttons', None)
         if not isinstance(_sbtns, dict) or not _sbtns:
             _bw2, _gap2 = 140, 14
@@ -565,24 +735,23 @@ class UiMixin:
                                   _bw2, 48, _lab2, color=(35, 35, 45),
                                   hover_color=_col2)
             g.slot_buttons = _sbtns
-        _mp2 = pygame.mouse.get_pos()
-        _mpr2 = pygame.mouse.get_pressed()
-        _tev2 = getattr(g, 'touch_events', []) or []
-        _fnt2 = getattr(g, 'font', None)
-        # v2.9.4：用统一点击判定（不依赖 Button 跨帧 tp）
         _hit3 = self._ui_page_click(_sbtns, "slot")
+        _fnt2 = getattr(g, 'font', None)
         for _k3 in ("minus", "plus", "spin", "back"):
             _b3 = _sbtns.get(_k3)
             if _b3 is None:
                 continue
             if _k3 == "spin":
-                _b3.enabled = bool(g.records.get_coins() >= _bet)
+                _b3.enabled = (not _spinning) and bool(
+                    g.records.get_coins() >= _bet)
                 try:
-                    _b3.text = f"旋转 · {_bet}"
+                    _b3.text = "转动中…" if _spinning else f"旋转 · {_bet}"
                 except Exception:
                     pass
+            elif _k3 in ("minus", "plus"):
+                _b3.enabled = not _spinning
             else:
-                _b3.enabled = True
+                _b3.enabled = not _spinning
             if _hit3 == _k3:
                 try:
                     from config import GameState as _GS3
@@ -599,9 +768,14 @@ class UiMixin:
                 return
             if _fnt2 is not None:
                 try:
-                    _b3.draw(self.screen, _fnt2, sc)
+                    _b3.draw(S, _fnt2, sc)
                 except Exception:
                     pass
+
+        # 赌注显示
+        _bs = g.font.render(f"赌注 {_bet} 金币", True, (255, 230, 150))
+        S.blit(_bs, (sw // 2 - _bs.get_width() // 2, sh - int(96 * sc)))
+
 
     def draw_replay_list(self):
         """v2.9.3 回放列表：按钮复用主菜单 Button 机制（此前自算 Rect 点不动）"""

@@ -745,6 +745,130 @@ def load_up_keys_from_db(db, pool, index=None):
 # 纯绘制，不跑帧也可单步调用；游戏内由 UI 层驱动。
 # ======================================================================
 
+class SlotSpinAnim:
+    """v2.9.6 老虎机转子动画
+
+    此前 do_slot() 一调用就瞬间出结果 —— 转子从不转动，完全没有赌博的
+    紧张感。现在改为：
+
+    1. 每个轴**独立**旋转，并按顺序逐个停下（左 → 右）
+    2. 停止前有减速过程（先快后慢），最后"咔"一下对齐
+    3. 全部停下后才结算派彩 —— 中奖瞬间才有反馈
+
+    动画由渲染层用真实时间推进（不依赖主循环 update，菜单态也能跑）。
+    """
+
+    #: 每个轴的基础转动时长（秒），越靠后停得越晚
+    BASE_SPIN = 0.75
+    #: 轴与轴之间的停止间隔（秒）
+    STAGGER = 0.42
+    #: 静止前最后的减速对齐时长（秒）
+    SLOWDOWN = 0.35
+    #: 滚动速度：每秒滚过多少个符号格
+    SYMBOL_SPEED = 13.0
+
+    def __init__(self):
+        self.active = False
+        self.reels = []          # 最终结果的符号列表
+        self.count = 0
+        self.t = 0.0             # 已进行时长（秒）
+        self.stop_at = []        # 每轴停止时刻（秒）
+        self.just_finished = False
+        self.payout = 0
+        self.kind = "none"
+
+    # ---------------- 控制 ----------------
+    def start(self, reels, now=None):
+        """开始旋转。reels 为已算好的结果列表"""
+        self.reels = list(reels or [])
+        self.count = len(self.reels)
+        self.t = 0.0
+        self.active = self.count > 0
+        self.just_finished = False
+        self.stop_at = [self.BASE_SPIN + i * self.STAGGER
+                        for i in range(self.count)]
+        return self.active
+
+    def update(self, dt):
+        """推进动画，返回 True 表示**本帧刚好全部停下**"""
+        if not self.active:
+            return False
+        self.t += max(0.0, float(dt))
+        _last = self.stop_at[-1] if self.stop_at else 0.0
+        if self.t >= _last + self.SLOWDOWN:
+            self.active = False
+            self.just_finished = True
+            return True
+        return False
+
+    def skip(self):
+        """跳过：立即全部停下"""
+        if not self.active:
+            return False
+        self.t = self.stop_at[-1] + self.SLOWDOWN + 0.01 if self.stop_at else 0.0
+        self.active = False
+        self.just_finished = True
+        return True
+
+    # ---------------- 查询 ----------------
+    def is_stopped(self, i):
+        """第 i 轴是否已停稳"""
+        if i >= len(self.stop_at):
+            return True
+        return self.t >= self.stop_at[i] + self.SLOWDOWN
+
+    def progress_of(self, i):
+        """第 i 轴的停止进度 0~1（用于减速对齐）"""
+        if i >= len(self.stop_at):
+            return 1.0
+        _st = self.stop_at[i]
+        if self.t <= _st:
+            return 0.0
+        return min(1.0, (self.t - _st) / self.SLOWDOWN)
+
+    def offset_of(self, i):
+        """第 i 轴当前的滚动偏移（单位：格），用于绘制连续滚动"""
+        if self.is_stopped(i):
+            return 0.0
+        _p = self.progress_of(i)
+        # 匀速滚动，进入减速段后用 ease-out 收敛到 0
+        _t = max(0.0, self.t)
+        _raw = _t * self.SYMBOL_SPEED
+        if _p > 0.0:
+            # 减速：把剩余滚动量按 (1-p)^2 衰减
+            _ease = (1.0 - _p) ** 2
+            _raw = _t * self.SYMBOL_SPEED * _ease
+        return _raw - int(_raw)   # 只保留小数部分做循环偏移
+
+    def symbol_index_of(self, i, pool):
+        """第 i 轴当前应显示的符号在 pool 中的下标"""
+        if not pool:
+            return 0
+        if self.is_stopped(i):
+            try:
+                _k = self.reels[i].get("key")
+            except Exception:
+                _k = None
+            for _j, _s in enumerate(pool):
+                if _s.get("key") == _k:
+                    return _j
+            return 0
+        _t = max(0.0, self.t)
+        return int(_t * self.SYMBOL_SPEED + i * 3) % len(pool)
+
+    def flash_of(self, i):
+        """刚停下时的闪光强度 0~1（用于"咔"一下的高亮）"""
+        if i >= len(self.stop_at):
+            return 0.0
+        _st = self.stop_at[i]
+        if self.t < _st:
+            return 0.0
+        _d = self.t - _st
+        if _d > 0.45:
+            return 0.0
+        return 1.0 - _d / 0.45
+
+
 class GachaFx:
     """抽卡演出状态机"""
 
@@ -905,3 +1029,63 @@ class GachaFx:
             _px = _cx + math.sin(_t * 6 + _k) * int(30 * scale)
             pygame.draw.circle(screen, (255, 245, 210),
                                (int(_px), int(_py)), max(1, int(3 * scale)))
+
+    # ---------------- v2.9.6 增强演出 ----------------
+    def draw_extra(self, screen, font_small, scale=1.0):
+        """在原有演出之上叠加：旋转光束 + 上升粒子 + 跳过提示
+
+        原演出只有一层全屏染色和光晕，缺少"能量汇聚"的动感。
+        这里补上转动的光束与向上飘的粒子，抽卡瞬间更有仪式感。
+        """
+        if not self.active:
+            return
+        try:
+            import pygame
+            import math
+        except Exception:
+            return
+        _w, _h = screen.get_size()
+        _cx, _cy = _w // 2, _h // 2
+        _t = self.timer
+
+        if self.phase == self.PHASE_CHARGE:
+            _star = max((int(_r.get("star", 3)) for _r in self.results), default=3)
+            _col = self.STAR_COLOR.get(_star, (255, 255, 255))
+            # 旋转光束
+            _beam = pygame.Surface((_w, _h), pygame.SRCALPHA)
+            for _k in range(8):
+                _a = _t * 3.2 + _k * (math.tau / 8)
+                _r0 = int((40 + 30 * math.sin(_t * 5 + _k)) * scale)
+                _r1 = int(520 * scale)
+                _x0 = _cx + math.cos(_a) * _r0
+                _y0 = _cy + math.sin(_a) * _r0
+                _x1 = _cx + math.cos(_a) * _r1
+                _y1 = _cy + math.sin(_a) * _r1
+                pygame.draw.line(_beam, (*_col[:3], 40),
+                                 (int(_x0), int(_y0)), (int(_x1), int(_y1)),
+                                 max(2, int(5 * scale)))
+            screen.blit(_beam, (0, 0))
+            # 上升粒子
+            for _k in range(18):
+                _pk = (_k * 37) % 100 / 100.0
+                _py = _cy + 260 * scale - ((_t * 260 + _pk * 420) % 520) * scale
+                _pa = _pk * math.tau + _t * 1.4
+                _px = _cx + math.cos(_pa) * (60 + _pk * 200) * scale
+                _al = int(200 * max(0.0, 1.0 - abs(_py - _cy) / (320 * scale)))
+                if _al > 8:
+                    pygame.draw.circle(screen, (*_col[:3], min(220, _al)),
+                                       (int(_px), int(_py)),
+                                       max(1, int(2.5 * scale)))
+            # 蓄力环
+            _rr = int((70 + 90 * (1.0 - min(1.0, _t / self.charge_dur))) * scale)
+            pygame.draw.circle(screen, _col, (_cx, _cy), _rr, max(2, int(3 * scale)))
+
+        # 跳过提示
+        if font_small is not None:
+            try:
+                _tip = font_small.render("点击画面跳过演出", True, (210, 210, 225))
+                screen.blit(_tip, (_w // 2 - _tip.get_width() // 2,
+                                   _h - int(40 * scale)))
+            except Exception:
+                pass
+

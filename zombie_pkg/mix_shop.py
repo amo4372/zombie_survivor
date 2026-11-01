@@ -418,12 +418,21 @@ class ShopMixin:
         return _res
 
     def do_slot(self, bet=None):
-        """玩老虎机"""
+        """玩老虎机（v2.9.6：转子先转动，逐个停下后才结算）
+
+        原实现是"点一下立刻出结果"，转子从不转动，完全没有赌博的紧张感。
+        现在：扣注 → 算好结果（先不派彩）→ 启动转子动画 →
+        动画跑完由 finish_slot_spin() 派彩并展示。
+        """
         _sm = getattr(self, "slot_machine", None)
         if _sm is None:
             self.gacha_init()
             _sm = getattr(self, "slot_machine", None)
         if _sm is None:
+            return None
+        # 正在转动时忽略重复点击
+        _anim = getattr(self, "slot_anim", None)
+        if _anim is not None and getattr(_anim, "active", False):
             return None
         _bet = int(bet if bet is not None else getattr(self, "slot_bet", 50))
         _bet = _sm.clamp_bet(_bet)
@@ -432,12 +441,48 @@ class ShopMixin:
             return None
         self.records.spend_coins(_bet)
         _r = _sm.spin(_bet)
-        if _r.get("payout", 0) > 0:
-            self.records.add_coins(int(_r["payout"]))
+        # 结果先压住，等转子停下再揭晓
+        self.slot_pending = _r
+        self.slot_result = None
+        self.slot_paid = False
+        try:
+            from gacha import SlotSpinAnim
+            if not isinstance(_anim, SlotSpinAnim):
+                _anim = SlotSpinAnim()
+                self.slot_anim = _anim
+            _anim.payout = int(_r.get("payout", 0) or 0)
+            _anim.kind = str(_r.get("kind", "none") or "none")
+            _anim.start(_r.get("reels") or [])
+        except Exception:
+            # 动画不可用时退回即时结算
+            self.finish_slot_spin()
+        return _r
+
+    def finish_slot_spin(self):
+        """转子全部停下：揭晓结果并派彩"""
+        _r = getattr(self, "slot_pending", None)
+        if _r is None or getattr(self, "slot_paid", False):
+            return
+        self.slot_paid = True
         self.slot_result = _r
+        _pay = int(_r.get("payout", 0) or 0)
+        if _pay > 0:
+            self.records.add_coins(_pay)
+            # 中奖闪光
+            try:
+                self.slot_win_flash = 1.0
+            except Exception:
+                pass
+            self.gacha_tip = (f"头奖！+{_pay}" if _r.get("kind") == "jackpot"
+                              else f"中奖 +{_pay}")
+        else:
+            self.gacha_tip = "未中奖 —— 再试一次？"
         if _r.get("kind") == "jackpot":
             self._unlock_achievement_safe("slot_jackpot")
-        return _r
+        try:
+            self._gacha_save()
+        except Exception:
+            pass
 
     def _gacha_click(self, pos):
         """军械库补给页点击处理"""
