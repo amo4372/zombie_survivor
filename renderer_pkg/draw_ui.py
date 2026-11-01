@@ -425,35 +425,72 @@ class UiMixin:
             _ry += int(128 * sc)
 
         # ---- 按钮 ----
-        _by = sh - int(150 * sc)
-        _bw, _bh = int(170 * sc), int(50 * sc)
-        _bx = (sw - (_bw * 2 + int(20 * sc))) // 2
-        g.gacha_buttons = {}
-        for _i4, (_key, _label, _n) in enumerate(
-                (("one", "单抽", 1), ("ten", "十连", 10))):
-            _r = pygame.Rect(_bx + _i4 * (_bw + int(20 * sc)), _by, _bw, _bh)
-            g.gacha_buttons[_key] = _r
+        # v2.9.4：改为**持久化 ui.Button**，渲染层直接处理点击。
+        # 此前是"渲染存 Rect + 输入层 handler 匹配"，而那个 handler 被误挂在
+        # MOUSEWHEEL 事件的 elif 链上 —— 手机触控永不产生滚轮事件，
+        # 于是按钮永远点不动。
+        from ui import Button as _GB
+        _btns = getattr(g, 'gacha_buttons', None)
+        if not isinstance(_btns, dict) or not _btns:
+            _btns = {}
+            _btns["one"] = _GB(460, 570, 170, 50, "单抽",
+                               color=(45, 80, 45), hover_color=(70, 120, 70))
+            _btns["ten"] = _GB(650, 570, 170, 50, "十连",
+                               color=(45, 80, 45), hover_color=(70, 120, 70))
+            _btns["slot"] = _GB(28, 634, 172, 46, "老虎机",
+                                color=(90, 70, 30), hover_color=(130, 100, 45))
+            _btns["back"] = _GB(1080, 634, 172, 46, "返回",
+                                color=(60, 60, 75), hover_color=(90, 90, 110))
+            g.gacha_buttons = _btns
+        _mp = pygame.mouse.get_pos()
+        _mpr = pygame.mouse.get_pressed()
+        _tev = getattr(g, 'touch_events', []) or []
+        _fnt = getattr(g, 'font', None)
+        _hitg = self._ui_page_click(_btns, "gacha")
+        for _key, _n, _lb in (("one", 1, "单抽"), ("ten", 10, "十连")):
+            _b = _btns.get(_key)
+            if _b is None:
+                continue
             _cost = _ga.price(_n) if _ga is not None else 160 * _n
             _can = (_ga is not None and g.records.get_coins() >= _cost
                     and not _ga.pool_empty())
-            pygame.draw.rect(self.screen, (45, 80, 45) if _can else (55, 50, 55),
-                             _r, border_radius=8)
-            pygame.draw.rect(self.screen, (90, 220, 120) if _can else (110, 110, 110),
-                             _r, max(1, int(2 * sc)), border_radius=8)
-            _bt = g.font.render(f"{_label} · {_cost}", True, (255, 255, 255))
-            self.screen.blit(_bt, _bt.get_rect(center=_r.center))
-
-        _by2 = sh - int(86 * sc)
-        for _key, _label, _col in (("slot", "老虎机", (220, 160, 60)),
-                                   ("back", "返回", (120, 120, 140))):
-            _r = pygame.Rect(int(28 * sc) if _key == "slot"
-                             else sw - int(200 * sc), _by2,
-                             int(172 * sc), int(46 * sc))
-            g.gacha_buttons[_key] = _r
-            pygame.draw.rect(self.screen, (35, 35, 45), _r, border_radius=8)
-            pygame.draw.rect(self.screen, _col, _r, max(1, int(2 * sc)), border_radius=8)
-            _bt = g.font.render(_label, True, _col)
-            self.screen.blit(_bt, _bt.get_rect(center=_r.center))
+            _b.enabled = bool(_can)
+            try:
+                _b.text = f"{_lb} · {_cost}"
+            except Exception:
+                pass
+            if _hitg == _key:
+                try:
+                    g.do_gacha(_n)
+                except Exception:
+                    pass
+                return
+            if _fnt is not None:
+                try:
+                    _b.draw(self.screen, _fnt, sc)
+                except Exception:
+                    pass
+        for _key in ("slot", "back"):
+            _b = _btns.get(_key)
+            if _b is None:
+                continue
+            _b.enabled = True
+            if _hitg == _key:
+                try:
+                    from config import GameState as _GS2
+                    if _key == "slot":
+                        g.state = _GS2.SLOT_MACHINE
+                    else:
+                        g._gacha_save()
+                        g.state = _GS2.EQUIP_SELECT
+                except Exception:
+                    pass
+                return
+            if _fnt is not None:
+                try:
+                    _b.draw(self.screen, _fnt, sc)
+                except Exception:
+                    pass
 
         _msg = getattr(g, 'gacha_tip', "")
         if _msg:
@@ -510,23 +547,61 @@ class UiMixin:
         _bet = int(getattr(g, 'slot_bet', SLOT_BET_MIN) or SLOT_BET_MIN)
         _by = sh - int(140 * sc)
         g.slot_buttons = {}
-        _defs = (("minus", "-", (200, 120, 120)),
-                 ("plus", "+", (120, 200, 120)),
-                 ("spin", f"旋转 · {_bet}", (240, 200, 90)),
-                 ("back", "返回", (120, 120, 140)))
-        _bw = int(140 * sc)
-        _gap = int(14 * sc)
-        _total2 = len(_defs) * _bw + (len(_defs) - 1) * _gap
-        _bx = (sw - _total2) // 2
-        for _i, (_k, _lab, _col) in enumerate(_defs):
-            _r = pygame.Rect(_bx + _i * (_bw + _gap), _by, _bw, int(48 * sc))
-            g.slot_buttons[_k] = _r
-            _can = (g.records.get_coins() >= _bet) if _k == "spin" else True
-            pygame.draw.rect(self.screen, (35, 35, 45), _r, border_radius=8)
-            pygame.draw.rect(self.screen, _col if _can else (110, 110, 110),
-                             _r, max(1, int(2 * sc)), border_radius=8)
-            _bt = g.font.render(_lab, True, _col if _can else (140, 140, 140))
-            self.screen.blit(_bt, _bt.get_rect(center=_r.center))
+        # v2.9.4：改为持久化 ui.Button（此前点击挂在 MOUSEWHEEL 分支下，
+        # 触控设备永不触发 → 按钮点了没反应）
+        from ui import Button as _SB
+        _sbtns = getattr(g, 'slot_buttons', None)
+        if not isinstance(_sbtns, dict) or not _sbtns:
+            _bw2, _gap2 = 140, 14
+            _tot2 = 4 * _bw2 + 3 * _gap2
+            _bx2 = (1280 - _tot2) // 2
+            _sbtns = {}
+            for _i2, (_k2, _lab2, _col2) in enumerate(
+                    (("minus", "-", (200, 120, 120)),
+                     ("plus", "+", (120, 200, 120)),
+                     ("spin", "旋转", (240, 200, 90)),
+                     ("back", "返回", (120, 120, 140)))):
+                _sbtns[_k2] = _SB(_bx2 + _i2 * (_bw2 + _gap2), 600,
+                                  _bw2, 48, _lab2, color=(35, 35, 45),
+                                  hover_color=_col2)
+            g.slot_buttons = _sbtns
+        _mp2 = pygame.mouse.get_pos()
+        _mpr2 = pygame.mouse.get_pressed()
+        _tev2 = getattr(g, 'touch_events', []) or []
+        _fnt2 = getattr(g, 'font', None)
+        # v2.9.4：用统一点击判定（不依赖 Button 跨帧 tp）
+        _hit3 = self._ui_page_click(_sbtns, "slot")
+        for _k3 in ("minus", "plus", "spin", "back"):
+            _b3 = _sbtns.get(_k3)
+            if _b3 is None:
+                continue
+            if _k3 == "spin":
+                _b3.enabled = bool(g.records.get_coins() >= _bet)
+                try:
+                    _b3.text = f"旋转 · {_bet}"
+                except Exception:
+                    pass
+            else:
+                _b3.enabled = True
+            if _hit3 == _k3:
+                try:
+                    from config import GameState as _GS3
+                    if _k3 == "minus":
+                        g.slot_bet = max(SLOT_BET_MIN, _bet - 50)
+                    elif _k3 == "plus":
+                        g.slot_bet = min(SLOT_BET_MAX, _bet + 50)
+                    elif _k3 == "spin":
+                        g.do_slot(_bet)
+                    else:
+                        g.state = _GS3.GACHA
+                except Exception:
+                    pass
+                return
+            if _fnt2 is not None:
+                try:
+                    _b3.draw(self.screen, _fnt2, sc)
+                except Exception:
+                    pass
 
     def draw_replay_list(self):
         """v2.9.3 回放列表：按钮复用主菜单 Button 机制（此前自算 Rect 点不动）"""
@@ -636,6 +711,89 @@ class UiMixin:
         except Exception:
             pass
 
+    def _ui_page_click(self, btns, tag):
+        """v2.9.4：新页面统一点击判定
+
+        不依赖 ui.Button 的跨帧 touch_pressed —— 本项目主循环每帧清空
+        touch_events，Button 的跨帧触控状态在"只在渲染层 update"的用法下
+        并不可靠（down 存下的 tp 会在下一帧前丢失，up 永远等不到配对，
+        表现为"按钮点了没反应"）。
+
+        改为自建 pending，且**触控与鼠标分开记账**（v2.9.4 修正）：
+        早期版本两者共用同一份 pending，鼠标未按下的分支会把触控刚记下的
+        pending 直接 pop 掉，导致触控点击永远不触发。
+        返回被点击的 key，无则返回 None。
+        """
+        import pygame
+        g = self.game
+        sc = getattr(g, 'scale', 1.0) or 1.0
+        pend = getattr(g, '_ui_pending', None)
+        if pend is None:
+            pend = {}
+            g._ui_pending = pend
+        tev = list(getattr(g, 'touch_events', []) or [])
+        mpos = pygame.mouse.get_pos()
+        mpr = pygame.mouse.get_pressed()
+        hit = None
+
+        def _rect_of(_b):
+            try:
+                return _b.get_scaled_rect(sc)
+            except Exception:
+                return None
+
+        # ---- 触控：down 记账，up 配对 ----
+        for _ev in tev:
+            try:
+                _t = _ev.get("type")
+                _p = _ev.get("pos")
+            except Exception:
+                continue
+            if _t == "down":
+                for _k, _b in btns.items():
+                    _r = _rect_of(_b)
+                    if _r is not None and _r.collidepoint(_p):
+                        pend[tag + ":t:" + _k] = True
+            elif _t == "up":
+                for _k, _b in btns.items():
+                    _r = _rect_of(_b)
+                    if _r is not None and _r.collidepoint(_p):
+                        if pend.pop(tag + ":t:" + _k, False):
+                            hit = _k
+                            break
+            if hit is not None:
+                break
+
+        # ---- 鼠标：按下记账，抬起配对（独立命名空间，不碰触控 pending）----
+        if hit is None:
+            if mpr[0]:
+                for _k, _b in btns.items():
+                    _r = _rect_of(_b)
+                    if _r is not None and _r.collidepoint(mpos):
+                        pend[tag + ":m:" + _k] = True
+            else:
+                for _k, _b in btns.items():
+                    if pend.pop(tag + ":m:" + _k, None) is None:
+                        continue
+                    _r = _rect_of(_b)
+                    if _r is not None and _r.collidepoint(mpos):
+                        hit = _k
+                        break
+
+        if hit is not None:
+            for _kk in list(pend.keys()):
+                if _kk.startswith(tag + ":"):
+                    pend.pop(_kk, None)
+        # 同步 hover 视觉
+        for _k, _b in btns.items():
+            try:
+                _r = _rect_of(_b)
+                if _r is not None:
+                    _b.hovered = _r.collidepoint(mpos)
+            except Exception:
+                pass
+        return hit
+
     def _draw_setup_pages(self):
         """v2.9.3 分阶段开局：地图 / 武器 / 角色（按钮复用主菜单 Button 机制）"""
         from config import GameState as _GS
@@ -674,6 +832,7 @@ class UiMixin:
         _mp = pygame.mouse.get_pos()
         _mpr = pygame.mouse.get_pressed()
         _touch = getattr(g, 'touch_events', []) or []
+        _hits = self._ui_page_click(_btns, "setup")
         _detail_mode = getattr(g, 'info_page_back', None) is not None
         _last = int(getattr(g, 'setup_index', 0)) >= \
             len(getattr(g, 'setup_steps', []) or []) - 1
@@ -688,7 +847,7 @@ class UiMixin:
                 continue
             _b.visible = (not _detail_mode) if _k == "back" else True
             _b.enabled = True
-            if _b.update(_mp, _mpr, _touch, sc):
+            if _hits == _k:
                 if _k == "next":
                     # 详情页模式：直接返回来源页，不走流程推进
                     if getattr(g, 'info_page_back', None) is not None:

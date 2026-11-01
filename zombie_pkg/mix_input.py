@@ -406,6 +406,32 @@ class InputMixin:
                                 self.replay_cam.move(-_dx * 2.2, -_dy * 2.2)
                     except Exception:
                         pass
+                elif event.type == pygame.FINGERDOWN:
+                    # v2.9.4：回放页此前从不填充 touch_events，而页面按钮是
+                    # ui.Button，靠 touch_events 判定点击 → 手机上全部失灵。
+                    try:
+                        self.touch_events.append({
+                            "type": "down",
+                            "pos": (event.x * self.scaled_width,
+                                    event.y * self.scaled_height),
+                            "id": getattr(event, 'finger_id', 0)})
+                    except Exception:
+                        pass
+                elif event.type == pygame.FINGERUP:
+                    try:
+                        self.touch_events.append({
+                            "type": "up",
+                            "pos": (event.x * self.scaled_width,
+                                    event.y * self.scaled_height),
+                            "id": getattr(event, 'finger_id', 0)})
+                    except Exception:
+                        pass
+                elif event.type == pygame.MOUSEBUTTONUP:
+                    try:
+                        self.touch_events.append({
+                            "type": "up", "pos": mouse_pos, "id": 0})
+                    except Exception:
+                        pass
                 elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     # 点击时间轴跳转
                     try:
@@ -559,18 +585,10 @@ class InputMixin:
                     elif self.state == GameState.UPDATE_NOTES:
                         if hasattr(self, '_update_notes_panel') and self._update_notes_panel:
                             self._update_notes_panel.handle_wheel(event.y)
-                    elif self.state == GameState.GACHA:
-                        self._gacha_click(pos)
-                    elif self.state == GameState.SLOT_MACHINE:
-                        self._slot_click(pos)
-                    elif self.state in (getattr(GameState, 'MAP_SELECT', None),
-                                        getattr(GameState, 'WEAPON_SELECT_P1', None),
-                                        getattr(GameState, 'CHARACTER_SELECT_P1', None),
-                                        getattr(GameState, 'WEAPON_SELECT_P2', None),
-                                        getattr(GameState, 'CHARACTER_SELECT_P2', None)):
-                        self._handle_setup_click(pos)
-                    elif self.state == getattr(GameState, 'REPLAY_LIST', None):
-                        self._handle_replay_list_click(pos)
+                    # v2.9.4：GACHA / SLOT_MACHINE / 分阶段开局 / 回放列表的点击
+                    # 此前误挂在 MOUSEWHEEL 事件的 elif 链上 —— 手机触控永不
+                    # 产生滚轮事件，于是这些页面按钮全部点不动。
+                    # 现已改为渲染层用 ui.Button 直接处理点击，此处不再触发。
                     elif self.state == GameState.EQUIP_SELECT:
                         try:
                             mx, _ = pygame.mouse.get_pos()

@@ -872,7 +872,16 @@ class PlayMixin:
         # 此前直接 dn.draw() → AttributeError 打断整帧渲染，表现为"游戏卡死报错"。
         # 这里做防御：跳过不可用元素，并在遍历后顺手清理，避免列表无限增长。
         _bad = False
-        for dn in self.game.damage_numbers:
+        # v2.9.4：None 混入会直接崩整帧（AttributeError: 'NoneType' has no
+        # attribute 'draw'）。来源包括 Mod API spawn_damage_number 导入失败、
+        # 以及部分旧存档/联机同步兜底。这里统一过滤并就地清理。
+        _dn_list = getattr(self.game, 'damage_numbers', None) or []
+        if any(_d is None for _d in _dn_list):
+            self.game.damage_numbers = [_d for _d in _dn_list if _d is not None]
+            _dn_list = self.game.damage_numbers
+        for dn in _dn_list:
+            if dn is None or not hasattr(dn, "draw"):
+                continue
             if dn is None or not hasattr(dn, "draw"):
                 _bad = True
                 continue
