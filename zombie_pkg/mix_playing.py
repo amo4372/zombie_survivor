@@ -309,7 +309,8 @@ class PlayingMixin:
                 p.hp = int(p.max_hp * 0.5)
                 p.rescue_progress = 0.0
                 p.last_rescue_time = _now  # 进入救援冷却
-                p.invincible_timer = 1.5
+                # v2.9.9：删除复活后的通用无敌帧（只保留冲刺技能词条写入）
+                pass
                 self.floating_texts.append(FloatingText(p.x, p.y - 40, "已复活!", color=GREEN, lifetime=1.5))
                 # v2.2.7 被救起后重置该玩家触控按钮（防倒地期间按住的按钮残留卡死）
                 try:
@@ -900,6 +901,17 @@ class PlayingMixin:
                 # 载具撞击伤害
                 try:
                     _hits = _veh.ram_enemies(self.enemies, self.damage_numbers, self.particles)
+                    # v2.9.9：载具也要能撞敌方玩家（此前只撞僵尸）
+                    try:
+                        _ovt = getattr(_veh, 'owner_team', None)
+                        if _ovt is None:
+                            _ovt = getattr(self.player, 'team_id', None)
+                        _veh.ram_targets(self.enemies, self.damage_numbers,
+                                         self.particles,
+                                         players=self._other_players(),
+                                         owner_team=_ovt)
+                    except Exception:
+                        pass
                     for _e in _hits:
                         if not getattr(_e, 'alive', False):
                             self._on_enemy_death(_e)
@@ -2928,8 +2940,7 @@ class PlayingMixin:
         try:
             self.floating_texts.append(FloatingText(
                 p.x, p.y - 40, f"被 {getattr(proj.owner, 'name', '对方')} 击中!", color=RED, lifetime=1.0))
-            if hasattr(p, 'invincible_timer'):
-                p.invincible_timer = max(getattr(p, 'invincible_timer', 0), 0.3)
+            # v2.9.9：删除命中后的通用无敌帧（只保留冲刺技能词条写入）
         except Exception:
             pass
 

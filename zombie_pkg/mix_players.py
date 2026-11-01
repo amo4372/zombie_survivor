@@ -400,6 +400,19 @@ class PlayerRegistryMixin:
         """进入观战（供结算前的过渡调用）"""
         self.spectating = True
 
+    def _other_players(self):
+        """v2.9.9：返回全部已注册玩家（含 P1/P2…），供 PvP 伤害判定使用"""
+        try:
+            _out = []
+            for _t in ("P1", "P2", "P3", "P4"):
+                _p = self.get_player(_t)
+                if _p is not None and _p not in _out:
+                    _out.append(_p)
+            return _out
+        except Exception:
+            return [x for x in (getattr(self, "player", None),
+                                getattr(self, "player2", None)) if x is not None]
+
     def registered_players(self):
         """已登记玩家列表（按槽位顺序）"""
         return [p for _, p in self.iter_player_slots()]

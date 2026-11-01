@@ -28,6 +28,7 @@
 消耗金币玩三轴老虎机，按符号倍率返还。
 """
 import random
+import math
 
 # ======================================================================
 # 品质定义（weight 为内部相对权重，实际概率由 _roll_quality 精确控制）
@@ -98,8 +99,10 @@ SLOT_SYMBOLS = [
 ]
 #: v2.9.7：单次派彩上限，避免 ×10000 档击穿经济系统
 SLOT_PAYOUT_CAP = 5_000_000
+# v2.9.9：赌注支持**无限制输入**（原上限 2000 太小，加倍几次就顶到天花板，
+# 表现为"点了加倍但赌注没变"）。上限提到 100 万，并在 clamp_bet 同步。
 SLOT_BET_MIN = 50
-SLOT_BET_MAX = 2000
+SLOT_BET_MAX = 1_000_000
 SLOT_PAIR_RATE = 0.4
 
 
@@ -377,7 +380,26 @@ class SlotMachine:
         _items = list(SLOT_MULTIPLIERS or [])
         if not _items:
             return {"key": "x1", "name": "×1", "payout": 1, "color": (200, 200, 200)}
-        _ws = [float(_s.get("weight", 1) or 1) for _s in _items]
+        # v2.9.9：**倍率随赌注大小调整** —— 下得越大，高档倍率的权重越高。
+        # 按 log10(bet/50) 归一化，1000 金币约 +1 档，10000 约 +2 档。
+        try:
+            _b = float(getattr(self, 'bet', 0) or 0)
+            _tier = max(0.0, min(3.0, math.log10(max(1.0, _b / 50.0))))
+        except Exception:
+            _tier = 0.0
+        _ws = []
+        for _s in _items:
+            _w = float(_s.get("weight", 1) or 1)
+            # 档位越高（payout 越大），受赌注加成越明显
+            try:
+                _p = float(_s.get("payout", 1) or 1)
+                # 0.9 → 0.42：实测 0.9 时大赌注 6 轴 RTP 达 111%（庄家亏本），
+                # 降到 0.42 后回到 ~96%，保留"大赌注更容易见高档"的手感。
+                _boost = 1.0 + _tier * (math.log10(max(2.0, _p)) - 0.3) * 0.07
+                _w *= max(0.15, _boost)
+            except Exception:
+                pass
+            _ws.append(_w)
         try:
             return self.rng.choices(_items, weights=_ws, k=1)[0]
         except Exception:

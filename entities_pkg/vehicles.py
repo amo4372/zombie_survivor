@@ -306,6 +306,59 @@ class Vehicle:
         return self.x, self.y
 
     # ==================== 撞击 ====================
+    def ram_targets(self, enemies, damage_numbers=None, particles=None,
+                    players=None, owner_team=None):
+        """v2.9.9：撞击**敌方玩家**
+
+        此前 ram_enemies 只遍历 self.enemies（僵尸列表），PvP 下载具撞到
+        敌人玩家完全不结算 —— 撞飞了但不掉血。
+        """
+        hit_list = []
+        if self.dead or self.type_id == "heli":
+            return hit_list
+        facing = self.facing_angle
+        for _pp in (players or []):
+            try:
+                if _pp is None or not getattr(_pp, "alive", True):
+                    continue
+                # 阵营过滤：同队不撞（合作模式安全）
+                if owner_team is not None and \
+                        getattr(_pp, "team_id", 0) == owner_team:
+                    continue
+                if not self.hull_overlap(_pp.x, _pp.y, getattr(_pp, "size", 20)):
+                    continue
+                _dist = math.hypot(_pp.x - self.x, _pp.y - self.y)
+                if _dist > 1:
+                    _a = math.degrees(math.atan2(_pp.y - self.y, _pp.x - self.x))
+                    _df = abs((_a - facing + 180) % 360 - 180)
+                    if _df > 80.0:
+                        continue
+                _act = self.ram_damage * self.damage_mult
+                # 关键：damage_type 用 melee、source 用 player，
+                # 并保证 attack_x/attack_y 传入以便正确判定盾牌格挡方向
+                try:
+                    _pp.take_damage(_act, damage_type="melee",
+                                    attack_x=self.x, attack_y=self.y,
+                                    source="player")
+                except Exception:
+                    pass
+                _kb = 160
+                _pa = math.radians(facing)
+                _pp.x += math.cos(_pa) * _kb
+                _pp.y += math.sin(_pa) * _kb
+                if damage_numbers is not None:
+                    try:
+                        damage_numbers.append(
+                            __import__("ui", fromlist=["DamageNumber"]).DamageNumber(
+                                _pp.x, _pp.y, int(_act), is_crit=False,
+                                damage_type="melee"))
+                    except Exception:
+                        pass
+                hit_list.append(_pp)
+            except Exception:
+                continue
+        return hit_list
+
     def ram_enemies(self, enemies, damage_numbers=None, particles=None):
         """载具撞击伤害（v2.2.3）：仅车头前方 ±80° 扇形内的敌人受伤；
         武装直升机不参与撞击（低空飞行，不碾压地面单位）"""

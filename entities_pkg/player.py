@@ -619,10 +619,11 @@ class Player:
         # v2.8.0 死亡详情：登记本次伤害来源（actual_damage 为格挡/护甲后的真实扣血）
         if actual_damage > 0:
             self._log_damage(actual_damage, damage_type, source, attack_x, attack_y)
-        # v2.6.4 修复：来自玩家的远程伤害（子弹）不设置无敌帧，允许多发子弹连续命中
-        # 只有僵尸伤害或近战伤害才设置无敌帧
-        if source != "player" or damage_type != "ranged":
-            self.invincible_timer = 0.3
+        # v2.9.9：**删除受伤后的通用无敌帧**。
+        # 原逻辑"非玩家远程伤害命中后设置 0.3s 无敌"会让近战类伤害
+        # （剑气/吸血斩/肘击/载具撞击/钩爪撞击）在 0.3 秒内完全无效 ——
+        # 表现为 PvP 下打敌人玩家"只有第一下有效，后面全不掉血"。
+        # invincible_timer 现在**只由冲刺类技能词条写入**（见 mix_skills）。
 
         # 创伤效果 - 增强
         trauma_add = min(0.7, actual_damage / self.max_hp * 3)

@@ -549,9 +549,53 @@ class CombatMixin:
                     if not hasattr(self, 'melee_hit_players'):
                         self.melee_hit_players = set()
                     self.melee_hit_players.add(id(_pp))
-                    _pp.take_damage(self.melee_attack_damage, damage_type='melee',
+                    # v2.9.9：命中敌人玩家时走**与命中僵尸一致的完整伤害链**
+                    # 此前直接用固定 melee_attack_damage，不吃任何技能乘区、
+                    # 不暴击、也不触发吸血斩 —— 表现为"打敌人玩家不回血、
+                    # 伤害明显偏低"。
+                    _pd = float(self.melee_attack_damage)
+                    try:
+                        _st = getattr(self.player, 'skill_tree', None)
+                        if _st is not None:
+                            _md = _st.get_skill(SkillType.MELEE_DAMAGE)
+                            if _md and _md.current_level > 0:
+                                _pd *= (1.0 + _md.current_level * 0.25)
+                    except Exception:
+                        pass
+                    try:
+                        _pd *= (self.player.damage_mult *
+                                self.player.damage_boost_mult *
+                                self.player.buff_manager.get_damage_mult())
+                        _rune = getattr(self, 'rune_buffs', {}) or {}
+                        _pd *= (1.0 + float(_rune.get("damage", 0)))
+                    except Exception:
+                        pass
+                    _crit = False
+                    try:
+                        if random.random() < self.player.crit_chance:
+                            _crit = True
+                            _pd *= self.player.crit_damage
+                    except Exception:
+                        pass
+                    _pp.take_damage(_pd, damage_type='melee',
                                     attack_x=self.player.x, attack_y=self.player.y, source='player')
-                    self.damage_numbers.append(DamageNumber(_pp.x, _pp.y, int(self.melee_attack_damage), color=RED))
+                    # 吸血斩 / 生命偷取：对敌人玩家同样生效
+                    try:
+                        _ls = getattr(self.player, 'skill_tree', None)
+                        if _ls is not None:
+                            _lss = _ls.get_skill(SkillType.MELEE_LIFESTEAL)
+                            if _lss and _lss.current_level > 0:
+                                _hp_add = _pd * _lss.current_level * 0.1
+                                self.player.hp = min(self.player.max_hp,
+                                                     self.player.hp + _hp_add)
+                    except Exception:
+                        pass
+                    try:
+                        if hasattr(self, '_vampire_heal'):
+                            self._vampire_heal(_pd, sx=_pp.x, sy=_pp.y)
+                    except Exception:
+                        pass
+                    self.damage_numbers.append(DamageNumber(_pp.x, _pp.y, int(_pd), is_crit=_crit, color=RED))
         
         if self.melee_attack_timer <= 0:
             self.melee_attack_active = False

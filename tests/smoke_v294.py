@@ -64,7 +64,7 @@ _sb = getattr(g2, "slot_buttons", {})
 check(hasattr(_sb.get("spin"), "update"), "老虎机按钮为 Button")
 _b0 = int(getattr(g2, "slot_bet", 0) or 0)
 # plus base: _bx2=(1280-(140*4+14*3))//2=(1280-602)//2=339; +（第2个）339+154=493
-tap(g2, 496, 624)   # v2.9.7：按钮改为 5 个，plus 中心随之变化
+tap(g2, 448, 474)   # v2.9.9：6 按钮布局，plus 中心(448,474)   # v2.9.7：按钮改为 5 个，plus 中心随之变化
 check(int(getattr(g2, "slot_bet", 0) or 0) > _b0,
       f"点+提高赌注 {_b0} → {getattr(g2, 'slot_bet', 0)}")
 

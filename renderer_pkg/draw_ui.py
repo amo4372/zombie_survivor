@@ -777,7 +777,7 @@ class UiMixin:
             S.blit(_ms, (sw // 2 - _ms.get_width() // 2, _sy + _rh + int(34 * sc)))
 
         # ---- 机制说明 ----
-        _iy = _sy + _rh + int(70 * sc)
+        _iy = _sy + _rh + int(58 * sc)
         _box = pygame.Rect(int(40 * sc), _iy, sw - int(80 * sc), int(112 * sc))
         pygame.draw.rect(S, (24, 20, 30), _box, border_radius=8)
         pygame.draw.rect(S, (70, 60, 90), _box, max(1, int(2 * sc)), border_radius=8)
@@ -821,7 +821,9 @@ class UiMixin:
                      ("double", "加倍", (200, 140, 255)),
                      ("spin", "旋转", (240, 200, 90)),
                      ("back", "返回", (120, 120, 140)))):
-                _sbtns[_k2] = _SB(_bx2 + _i2 * (_bw2 + _gap2), 600,
+                # v2.9.9：按钮 y 600 → 450。原位置与赌注区(sh-96)重叠，
+                # 赌注框被按钮压住 → 点不到、也没法输入。
+                _sbtns[_k2] = _SB(_bx2 + _i2 * (_bw2 + _gap2), 450,
                                   _bw2, 48, _lab2, color=(35, 35, 45),
                                   hover_color=_col2)
             g.slot_buttons = _sbtns
@@ -882,13 +884,13 @@ class UiMixin:
         _txt = (f"赌注 [{getattr(g, 'slot_bet_input', '') or ''}]"
                 if _editing else f"赌注 {_bet} 金币  (点此输入)")
         _bs = g.font.render(_txt, True, (255, 240, 160) if _editing else (255, 230, 150))
-        _br = _bs.get_rect(center=(sw // 2, sh - int(96 * sc)))
+        _br = _bs.get_rect(center=(sw // 2, int(540 * sc)))
         S.blit(_bs, _br)
         if _editing:
             pygame.draw.rect(S, (255, 240, 160), _br.inflate(int(16 * sc), int(10 * sc)),
                              max(1, int(2 * sc)), border_radius=6)
             _tip2 = g.font_small.render("输入数字，回车确认，ESC 取消", True, (200, 200, 215))
-            S.blit(_tip2, (sw // 2 - _tip2.get_width() // 2, sh - int(70 * sc)))
+            S.blit(_tip2, (sw // 2 - _tip2.get_width() // 2, int(568 * sc)))
         try:
             for _e in (getattr(g, 'touch_events', []) or []):
                 if _e.get("type") == "up" and _br.collidepoint(_e.get("pos", (0, 0))):
@@ -1113,51 +1115,181 @@ class UiMixin:
                 pass
         return hit
 
+    # ---------------- v2.9.9 分阶段选择列表 ----------------
+    def _setup_sel_field(self, who, kind):
+        """当前步骤对应的选中字段名"""
+        _p2 = str(who).upper() == "P2"
+        if kind == "weapon":
+            return "selected_weapon_p2" if _p2 else "selected_weapon_p1"
+        return "selected_char_p2" if _p2 else "selected_char_p1"
+
+    def _setup_scroll_field(self, who, kind):
+        return f"setup_scroll_{kind}_{str(who).lower()}"
+
     def _draw_setup_pages(self):
-        """v2.9.3 分阶段开局：地图 / 武器 / 角色（按钮复用主菜单 Button 机制）"""
+        """v2.9.9 分阶段开局：复用单人装备页的列表（点击选中 + 拖动/滚轮滚动）
+
+        此前用的是 scenes/info_pages.InfoPage —— 列表项不支持触控拖动与
+        点击命中，玩家看着有很多武器却一个都点不动、也滚不了。
+        现在改为与单人「选择装备」页同一套绘制与交互，仅按步骤显示单栏。
+        """
         from config import GameState as _GS
         g = self.game
         _st = g.state
-        _map = {_GS.MAP_SELECT: "map", _GS.WEAPON_SELECT_P1: "weapon_p1",
-                _GS.CHARACTER_SELECT_P1: "char_p1",
-                _GS.WEAPON_SELECT_P2: "weapon_p2",
-                _GS.CHARACTER_SELECT_P2: "char_p2"}
-        _step = _map.get(_st)
-        if _step is None:
+        _map = {_GS.MAP_SELECT: ("map", "P1"),
+                _GS.WEAPON_SELECT_P1: ("weapon", "P1"),
+                _GS.CHARACTER_SELECT_P1: ("char", "P1"),
+                _GS.WEAPON_SELECT_P2: ("weapon", "P2"),
+                _GS.CHARACTER_SELECT_P2: ("char", "P2")}
+        _info = _map.get(_st)
+        if _info is None:
             return False
+        _kind, _who = _info
         import pygame
         sc = getattr(g, 'scale', 1.0) or 1.0
         sw, sh = self.screen.get_size()
         self.screen.fill((14, 14, 20))
 
-        # ---- 内容（信息页）----
-        _page = None
+        # ---- 标题 ----
+        _title = {"map": "选择地图", "weapon": f"{_who} · 选择武器",
+                  "char": f"{_who} · 选择角色"}[_kind]
         try:
-            from scenes.info_pages import build_info_page
-            _who = "P2" if _step.endswith("_p2") else "P1"
-            _kind = _step.split("_")[0]
-            _page = build_info_page(g, _kind, _who)
+            _t = g.font_title.render(_title, True, (240, 240, 250))
+            self.screen.blit(_t, _t.get_rect(center=(sw // 2, int(34 * sc))))
         except Exception:
-            _page = None
-        if _page is None:
-            return False
-        # v2.9.8：InfoPage.draw 签名是 draw(**renderer**) 不是 draw(screen)，
-        # 此前传错对象 → TypeError 被 except 静默吞掉 → 选择页只剩两个按钮。
+            pass
         try:
-            _page.draw(self)
-        except TypeError:
-            try:
-                _page.draw(self.screen)
-            except Exception:
-                pass
+            _idx = int(getattr(g, 'setup_index', 0) or 0)
+            _tot = len(getattr(g, 'setup_steps', []) or [])
+            _sub = g.font_small.render(f"第 {_idx + 1} / {_tot} 步", True, (150, 150, 175))
+            self.screen.blit(_sub, _sub.get_rect(center=(sw // 2, int(66 * sc))))
         except Exception:
             pass
 
-        # ---- 按钮（同主菜单：渲染层直接 update + 处理点击）----
+        # ---- 数据行 ----
+        if _kind == "map":
+            try:
+                from config import STORY_MAP_ORDER, MAP_CONFIGS
+                rows = [(_m, MAP_CONFIGS[_m]["name"]) for _m in STORY_MAP_ORDER]
+            except Exception:
+                rows = []
+        elif _kind == "weapon":
+            try:
+                rows = [(r[0], r[1]) for r in g.get_weapon_shop_rows()]
+            except Exception:
+                rows = []
+        else:
+            try:
+                rows = [(r[0], r[0]) for r in g.get_character_shop_rows()]
+            except Exception:
+                rows = []
+        if not rows:
+            try:
+                _e2 = g.font.render("暂无可选项", True, (170, 170, 190))
+                self.screen.blit(_e2, _e2.get_rect(center=(sw // 2, sh // 2)))
+            except Exception:
+                pass
+
+        # ---- 布局 ----
+        _lw = int(sw * 0.62)
+        _lx = (sw - _lw) // 2
+        _ly = int(96 * sc)
+        _lh = sh - _ly - int(120 * sc)
+        _row_h = int(56 * sc)
+        _visible = max(1, int(_lh // _row_h))
+        _sf = self._setup_scroll_field(_who, _kind)
+        _scroll = max(0, int(getattr(g, _sf, 0) or 0))
+        _max_scroll = max(0, len(rows) - _visible)
+        _scroll = min(_scroll, _max_scroll)
+
+        # ---- 输入：拖动滚动 + 点击 ----
+        _touch = list(getattr(g, 'touch_events', []) or [])
+        _clicked = None
+        try:
+            for _e in _touch:
+                if _e.get("type") == "down":
+                    setattr(g, '_setup_drag_y', _e.get("pos", (0, 0))[1])
+                    setattr(g, '_setup_drag_base', _scroll)
+                    setattr(g, '_setup_drag_x', _e.get("pos", (0, 0))[0])
+                elif _e.get("type") == "move":
+                    _dy = getattr(g, '_setup_drag_y', None)
+                    if _dy is not None:
+                        _d = _e.get("pos", (0, 0))[1] - _dy
+                        _scroll = int(getattr(g, '_setup_drag_base', 0)
+                                      - _d / max(1.0, _row_h))
+                        _scroll = max(0, min(_max_scroll, _scroll))
+                elif _e.get("type") == "up":
+                    _p = _e.get("pos", (0, 0))
+                    _dy0 = getattr(g, '_setup_drag_y', None)
+                    if _dy0 is not None and abs(_p[1] - _dy0) < 14:
+                        _clicked = _p
+                    setattr(g, '_setup_drag_y', None)
+        except Exception:
+            pass
+        try:
+            for _e in getattr(g, 'scroll_events', []) or []:
+                _scroll = max(0, min(_max_scroll, _scroll - int(_e)))
+        except Exception:
+            pass
+        setattr(g, _sf, _scroll)
+
+        # ---- 列表绘制 ----
+        try:
+            pygame.draw.rect(self.screen, (20, 20, 28),
+                             (_lx, _ly, _lw, _lh), border_radius=10)
+            pygame.draw.rect(self.screen, (70, 70, 95),
+                             (_lx, _ly, _lw, _lh), 2, border_radius=10)
+        except Exception:
+            pass
+
+        _sel_field = self._setup_sel_field(_who, _kind)
+        _cur = getattr(g, _sel_field, None)
+        for _i, (_val, _name) in enumerate(rows[_scroll:_scroll + _visible]):
+            _ry = _ly + _i * _row_h
+            _rect = pygame.Rect(_lx + 6, _ry + 3, _lw - 12, _row_h - 8)
+            _is_sel = (_cur == _val)
+            try:
+                pygame.draw.rect(self.screen,
+                                 (38, 45, 70) if _is_sel else (30, 30, 42),
+                                 _rect, border_radius=8)
+                if _is_sel:
+                    pygame.draw.rect(self.screen, (255, 200, 70), _rect, 2,
+                                     border_radius=8)
+                _nt = g.font.render(str(_name), True,
+                                    (255, 255, 255) if _is_sel else (190, 190, 205))
+                self.screen.blit(_nt, (_rect.x + 12, _rect.y + 12))
+            except Exception:
+                pass
+            # v2.9.9：命中判定按**行索引**而非严格矩形碰撞 ——
+            # 行与行之间有 8px 间隙，严格碰撞会让点在缝隙上的操作完全无响应。
+            _hit = False
+            if _clicked:
+                _hit = _rect.collidepoint(_clicked)
+                if not _hit and _lx <= _clicked[0] <= _lx + _lw \
+                        and _ly <= _clicked[1] <= _ly + _lh:
+                    _hit = (int((_clicked[1] - _ly) // _row_h) == _i)
+            if _hit:
+                try:
+                    setattr(g, _sel_field, _val)
+                    g.setup_choice_made = True
+                except Exception:
+                    pass
+
+        if _max_scroll > 0:
+            try:
+                _bx = _lx + _lw - 10
+                _th = max(18, int(_lh * (_visible / max(1, len(rows)))))
+                _ty = _ly + int((_lh - _th) * (_scroll / _max_scroll))
+                pygame.draw.rect(self.screen, (60, 60, 90), (_bx, _ly, 5, _lh))
+                pygame.draw.rect(self.screen, (150, 150, 200), (_bx, _ty, 5, _th))
+                _h2 = g.font_small.render(f"拖动滚动 {_scroll + 1}/{len(rows)}",
+                                          True, (150, 150, 175))
+                self.screen.blit(_h2, (_lx + 12, _ly + _lh - int(18 * sc)))
+            except Exception:
+                pass
+
+        # ---- 流程按钮 ----
         _btns = getattr(g, 'setup_page_btns', None) or {}
-        _mp = pygame.mouse.get_pos()
-        _mpr = pygame.mouse.get_pressed()
-        _touch = getattr(g, 'touch_events', []) or []
         _hits = self._ui_page_click(_btns, "setup")
         _detail_mode = getattr(g, 'info_page_back', None) is not None
         _last = int(getattr(g, 'setup_index', 0)) >= \
@@ -1175,7 +1307,6 @@ class UiMixin:
             _b.enabled = True
             if _hits == _k:
                 if _k == "next":
-                    # 详情页模式：直接返回来源页，不走流程推进
                     if getattr(g, 'info_page_back', None) is not None:
                         _back = g.info_page_back
                         g.info_page_back = None
@@ -1197,22 +1328,13 @@ class UiMixin:
                     if _st3 is not None:
                         g.state = _st3
                 return True
-            _sf = getattr(g, 'font_large', None) or getattr(g, 'font', None)
+            _f = getattr(g, 'font_large', None) or getattr(g, 'font', None)
             try:
-                _b.draw(self.screen, _sf, sc)
+                _b.draw(self.screen, _f, sc)
             except Exception:
                 pass
-
-        # 步骤指示
-        try:
-            _idx = int(getattr(g, 'setup_index', 0) or 0)
-            _tot = len(getattr(g, 'setup_steps', []) or [])
-            _tip = g.font_small.render(f"第 {_idx + 1} / {_tot} 步", True, (150, 150, 170))
-            self.screen.blit(_tip, (sw - _tip.get_width() - int(28 * sc),
-                                    sh - int(34 * sc)))
-        except Exception:
-            pass
         return True
+
 
     def _open_info_page(self, kind, who="P1"):
         """v2.9.3：打开武器/角色详情页（独立页面，可返回）"""

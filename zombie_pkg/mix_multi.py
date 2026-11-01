@@ -416,6 +416,18 @@ class MultiplayerMixin:
             p2.x, p2.y = _veh2.x, _veh2.y
             try:
                 _hits = _veh2.ram_enemies(self.enemies, self.damage_numbers, self.particles)
+                # v2.9.9：P2 载具撞击敌方玩家
+                try:
+                    _ovt2 = getattr(_veh2, 'owner_team', None)
+                    if _ovt2 is None:
+                        _ovt2 = getattr(p2, 'team_id', None)
+                    _veh2.ram_targets(self.enemies, self.damage_numbers,
+                                      self.particles,
+                                      players=[_x for _x in (self.player, p2)
+                                               if _x is not None],
+                                      owner_team=_ovt2)
+                except Exception:
+                    pass
                 for _e in _hits:
                     if not getattr(_e, 'alive', False):
                         self._on_enemy_death(_e)

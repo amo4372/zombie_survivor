@@ -404,8 +404,7 @@ class RiotGear:
                 player.x += (dx / dist) * move_dist
                 player.y += (dy / dist) * move_dist
             # 自我拉拽期间全程免伤（刷新无敌计时；恢复后由 mix_playing 关闭）
-            if self.self_pull_immune and player is not None:
-                player.invincible_timer = max(getattr(player, "invincible_timer", 0), 0.1)
+            # v2.9.9：删除自我拉拽期间的通用无敌帧（只保留冲刺技能词条写入）
             # 钩爪线跟随玩家
             self.grapple_head_pos = [player.x, player.y]
 
@@ -444,8 +443,7 @@ class RiotGear:
         self._pull_stall_timer = 0.0
         self._pull_stall_dist = math.hypot(player_x - self.grapple_target_pos[0],
                                            player_y - self.grapple_target_pos[1])
-        if player is not None:
-            player.invincible_timer = max(getattr(player, "invincible_timer", 0), 0.1)
+        # v2.9.9：删除此处通用无敌帧（只保留冲刺技能词条写入）
 
     def update_grapple_lock(self, player_x, player_y, enemies, items=None,
                             aim_angle=None, aim_dist=None,
