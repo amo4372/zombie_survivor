@@ -2328,14 +2328,24 @@ def draw_charge_spread_fan(self, player, cam_x, cam_y, scale):
 
 
 def draw_bullet_tracers(self, cam_x, cam_y, scale):
-    """v2.8.8 弹道破空特效：高速子弹拖出一条渐隐的光迹
+    """v2.9.5 弹道破空：直接绘制一条白色烟雾线段
 
-    仅对"高速/穿透类"武器（AWM、轨道炮等）启用，模拟三角洲类游戏里
-    子弹划破空气留下的曳光。
+    v2.8.8 原实现为"三段渐隐"，且**每一段都新建一张全屏 SRCALPHA Surface
+    再 blit 一次** —— 一颗子弹就要分配 3 张全屏 Surface、做 3 次全屏合成。
+    轨道炮这类高射速武器同屏几十颗子弹时，光这部分就有上百次全屏像素
+    操作，是明显的性能热点（分屏模式下还会翻倍）。
+
+    现在改为**零 Surface 分配**：直接向主屏幕画线。
+     - 外层：较宽、暗灰白 → "烟雾"
+     - 内层：细而亮的白   → "弹道核心"
+    视觉上仍是子弹划破空气的白烟拖痕，开销从"全屏 ×3"降到两次 draw.line。
     """
     try:
         _g = self.game
         _projs = getattr(_g, 'projectiles', None) or []
+        if not _projs:
+            return
+        _sc = self.screen
         for _p in _projs:
             try:
                 if not getattr(_p, 'tracer', False):
@@ -2347,28 +2357,19 @@ def draw_bullet_tracers(self, cam_x, cam_y, scale):
                 _sp = math.hypot(_vx, _vy)
                 if _sp <= 0.01:
                     continue
-                _len = min(int(_sp * 0.055 * scale), int(260 * scale))
+                _len = min(int(_sp * 0.075 * scale), int(320 * scale))
                 _ux, _uy = _vx / _sp, _vy / _sp
                 _x0 = int(_x1 - _ux * _len)
                 _y0 = int(_y1 - _uy * _len)
-                _col = getattr(_p, 'tracer_color', (255, 230, 170))
-                # 三段渐隐：尾部细淡、头部粗亮
-                for _k in range(3):
-                    _t0 = _k / 3.0
-                    _t1 = (_k + 1) / 3.0
-                    _sx = int(_x0 + (_x1 - _x0) * _t0)
-                    _sy = int(_y0 + (_y1 - _y0) * _t0)
-                    _ex = int(_x0 + (_x1 - _x0) * _t1)
-                    _ey = int(_y0 + (_y1 - _y0) * _t1)
-                    _a = 70 + int(150 * _t1)
-                    _wd = max(1, int((1 + _t1 * 2) * scale))
-                    _s = pygame.Surface((self.screen.get_width(),
-                                         self.screen.get_height()), pygame.SRCALPHA)
-                    pygame.draw.line(_s, (*_col[:3], _a), (_sx, _sy), (_ex, _ey), _wd)
-                    self.screen.blit(_s, (0, 0))
+                # 烟雾层：宽、暗灰白
+                pygame.draw.line(_sc, (150, 150, 158), (_x0, _y0), (_x1, _y1),
+                                 max(2, int(5 * scale)))
+                # 核心层：细、亮白
+                pygame.draw.line(_sc, (245, 245, 255), (_x0, _y0), (_x1, _y1),
+                                 max(1, int(2 * scale)))
                 # 弹头亮点
-                _hs = max(2, int(3 * scale))
-                pygame.draw.circle(self.screen, _col, (_x1, _y1), _hs)
+                pygame.draw.circle(_sc, (255, 255, 255), (_x1, _y1),
+                                   max(2, int(3 * scale)))
             except Exception:
                 continue
     except Exception:
