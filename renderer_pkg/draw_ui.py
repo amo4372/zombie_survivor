@@ -518,6 +518,51 @@ class UiMixin:
             _bt = g.font.render(_lab, True, _col if _can else (140, 140, 140))
             self.screen.blit(_bt, _bt.get_rect(center=_r.center))
 
+    def _draw_setup_pages(self):
+        """v2.9.0 分阶段开局页面：地图 / 武器 / 角色（用 scenes.InfoPage 绘制）"""
+        from config import GameState as _GS
+        g = self.game
+        _st = g.state
+        _map = {_GS.MAP_SELECT: "map", _GS.WEAPON_SELECT_P1: "weapon_p1",
+                _GS.CHARACTER_SELECT_P1: "char_p1",
+                _GS.WEAPON_SELECT_P2: "weapon_p2",
+                _GS.CHARACTER_SELECT_P2: "char_p2"}
+        _step = _map.get(_st)
+        if _step is None:
+            return False
+        try:
+            from scenes.info_pages import build_info_page
+            _who = "P2" if _step.endswith("_p2") else "P1"
+            _kind = _step.split("_")[0]
+            _page = build_info_page(g, _kind, _who)
+            if _page is None:
+                return False
+            self.screen.fill((14, 14, 20))
+            _page.draw(self.screen, g.scale)
+            # 底部导航
+            import pygame
+            sc = getattr(g, 'scale', 1.0) or 1.0
+            _last = int(getattr(g, 'setup_index', 0)) >=                 len(getattr(g, 'setup_steps', []) or []) - 1
+            _lab = "开始游戏" if _last else "下一步"
+            _bw, _bh = int(200 * sc), int(56 * sc)
+            sw, sh = self.screen.get_size()
+            _r = pygame.Rect((sw - _bw) // 2, sh - int(80 * sc), _bw, _bh)
+            pygame.draw.rect(self.screen, (60, 160, 90), _r, border_radius=10)
+            pygame.draw.rect(self.screen, (140, 255, 180), _r, 2, border_radius=10)
+            _t = g.font.render(_lab, True, (255, 255, 255))
+            self.screen.blit(_t, _t.get_rect(center=_r.center))
+            g.setup_next_rect = _r
+            # 返回按钮
+            _rb = pygame.Rect(int(28 * sc), sh - int(80 * sc),
+                              int(140 * sc), _bh)
+            pygame.draw.rect(self.screen, (80, 80, 100), _rb, border_radius=10)
+            _rt = g.font.render("上一步", True, (230, 230, 230))
+            self.screen.blit(_rt, _rt.get_rect(center=_rb.center))
+            g.setup_back_rect = _rb
+            return True
+        except Exception:
+            return False
+
     def _draw_equip_select(self):
         """局外装备选择界面：两栏列表（点击仅选中）+ 每栏底部独立'解锁/升级'大按钮，避免误触"""
         self.screen.fill(VOID_BLACK)

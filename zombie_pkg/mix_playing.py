@@ -498,6 +498,12 @@ class PlayingMixin:
         except Exception:
             pass
 
+        # v2.9.0 抽卡演出推进
+        try:
+            self.update_gacha_fx(dt)
+        except Exception:
+            pass
+
         # v2.8.9 双子 Boss 每帧更新（能力/范围圈结算/时停/成就）
         try:
             self.update_twin_boss(dt)

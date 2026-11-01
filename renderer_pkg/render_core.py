@@ -105,6 +105,12 @@ class RenderCore:
                     _any_open = False
                 if _any_open:
                     self._draw_dev_panel()
+        elif state in (GameState.MAP_SELECT, GameState.WEAPON_SELECT_P1,
+                       GameState.CHARACTER_SELECT_P1,
+                       GameState.WEAPON_SELECT_P2,
+                       GameState.CHARACTER_SELECT_P2):
+            if not self._draw_setup_pages():
+                self._draw_equip_select()
         elif state == GameState.TUTORIAL:
             self._draw_tutorial()
         elif state == GameState.PLAYING:

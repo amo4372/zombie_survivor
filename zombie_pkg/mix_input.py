@@ -555,6 +555,12 @@ class InputMixin:
                         self._gacha_click(pos)
                     elif self.state == GameState.SLOT_MACHINE:
                         self._slot_click(pos)
+                    elif self.state in (getattr(GameState, 'MAP_SELECT', None),
+                                        getattr(GameState, 'WEAPON_SELECT_P1', None),
+                                        getattr(GameState, 'CHARACTER_SELECT_P1', None),
+                                        getattr(GameState, 'WEAPON_SELECT_P2', None),
+                                        getattr(GameState, 'CHARACTER_SELECT_P2', None)):
+                        self._handle_setup_click(pos)
                     elif self.state == GameState.EQUIP_SELECT:
                         try:
                             mx, _ = pygame.mouse.get_pos()
@@ -1212,6 +1218,36 @@ class InputMixin:
         elif self.state == GameState.UPDATE_NOTES:
             if key == pygame.K_ESCAPE:
                 self.state = GameState.MENU
+
+
+    def _handle_setup_click(self, pos):
+        """v2.9.0 分阶段开局：点击下一步 / 上一步"""
+        try:
+            _nr = getattr(self, "setup_next_rect", None)
+            _br = getattr(self, "setup_back_rect", None)
+            from config import GameState as _GS
+            if _nr is not None and _nr.collidepoint(pos):
+                _nx = self.setup_next()
+                if _nx is None:
+                    try:
+                        self.start_game()
+                    except Exception:
+                        pass
+                else:
+                    _st = self.setup_state_for(_nx)
+                    if _st is not None:
+                        self.state = _st
+                return True
+            if _br is not None and _br.collidepoint(pos):
+                _pv = self.setup_back()
+                _st = self.setup_state_for(_pv)
+                if _st is not None:
+                    self.state = _st
+                return True
+        except Exception:
+            pass
+        return False
+
 
     def _handle_keyup(self, key):
         import time

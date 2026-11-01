@@ -203,6 +203,12 @@ class GameState(Enum):
     UPDATE_NOTES = auto()  # 新增：更新说明/版本详情页面
     RUNE_VIEW = auto()  # 新增：符文查看界面（玩家拥有符文+详情）
     EQUIP_SELECT = auto()  # 新增：局外装备选择（武器+角色，开始游戏前）
+    # v2.9.0 多人分阶段开局：地图 → P1武器 → P1角色 → P2武器 → P2角色
+    MAP_SELECT = auto()
+    WEAPON_SELECT_P1 = auto()
+    CHARACTER_SELECT_P1 = auto()
+    WEAPON_SELECT_P2 = auto()
+    CHARACTER_SELECT_P2 = auto()
     HUD_EDIT = auto()  # 新增：HUD触控按钮自定义布局编辑
     PLAY_SELECT = auto()  # 新增：开始游戏 → 单人/多人选择
     MULTIPLAYER_SELECT = auto()  # 新增：多人 → 同屏双人/网络联机选择

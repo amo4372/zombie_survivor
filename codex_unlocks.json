@@ -2,6 +2,7 @@
   "monsters": [
     "ELITE_SORCERER",
     "ZOMBIE_CRAWLER",
+    "ZOMBIE_EXPLODER",
     "ZOMBIE_FAST",
     "ZOMBIE_LEAPER",
     "ZOMBIE_NORMAL",

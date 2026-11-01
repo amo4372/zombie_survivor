@@ -222,18 +222,33 @@ class ShopMixin:
                 _save = self.records.data.get("gacha_state")
             except Exception:
                 pass
-            # UP 限定池：取池中稀有度最高的若干把作为 UP
+            # v2.9.0 UP 池轮换（优先读数据库 gacha_banners，否则自动轮换）
             _up = []
             try:
-                _rank = {"legend": 5, "epic": 4, "rare": 3, "fine": 2, "common": 1}
-                _srt = sorted(_pool, key=lambda w: -_rank.get(w.get("quality", "common"), 1))
-                _up = [str(w.get("key")) for w in _srt[:4]]
+                from gacha import (banner_index, load_up_keys_from_db,
+                                   build_up_keys)
+                _idx = banner_index()
+                try:
+                    from gamedata import db as _gdb
+                    _db = _gdb.GameDatabase() if hasattr(_gdb, "GameDatabase") else None
+                    _up = load_up_keys_from_db(_db, _pool, _idx) if _db else []
+                except Exception:
+                    _up = []
+                if not _up:
+                    _up = build_up_keys(_pool, _idx)
+                self.gacha_banner_index = _idx
             except Exception:
                 _up = []
             self.gacha = GachaBanner(_pool, up_keys=_up, unlocked=_unlocked)
             if _save:
                 self.gacha.from_save(_save)
             self.slot_machine = SlotMachine()
+            # v2.9.0：出货演出（GachaFx）实例化
+            try:
+                from gacha import GachaFx
+                self.gacha_fx = GachaFx()
+            except Exception:
+                self.gacha_fx = None
             self.gacha_result = []
             self.gacha_tip = ""
             self.slot_bet = 50
@@ -241,6 +256,7 @@ class ShopMixin:
         except Exception:
             self.gacha = None
             self.slot_machine = None
+            self.gacha_fx = None
             self.gacha_result = []
             self.gacha_tip = "补给系统初始化失败"
 
@@ -254,6 +270,79 @@ class ShopMixin:
                 self.records.save()
         except Exception:
             pass
+
+    # ==================================================================
+    # v2.9.0 多人分阶段开局流程
+    # 同屏双人：地图 → P1武器 → P1角色 → P2武器 → P2角色 → 开始
+    # 单人：地图 → 武器 → 角色 → 开始
+    # ==================================================================
+    SETUP_STEPS_SINGLE = ["map", "weapon_p1", "char_p1"]
+    SETUP_STEPS_DUO = ["map", "weapon_p1", "char_p1", "weapon_p2", "char_p2"]
+
+    def setup_flow_init(self):
+        """开始一局前的准备流程初始化"""
+        try:
+            _duo = (getattr(self, "multiplayer_mode", None) == "same_screen")
+        except Exception:
+            _duo = False
+        self.setup_steps = list(self.SETUP_STEPS_DUO if _duo
+                                else self.SETUP_STEPS_SINGLE)
+        self.setup_index = 0
+        self.setup_done = False
+
+    @property
+    def setup_current_step(self):
+        _i = int(getattr(self, "setup_index", 0) or 0)
+        _s = getattr(self, "setup_steps", None) or self.SETUP_STEPS_SINGLE
+        return _s[_i] if _i < len(_s) else None
+
+    def setup_next(self):
+        """确认当前步骤并进入下一步；返回下一步名或 None（流程结束）"""
+        _s = getattr(self, "setup_steps", None) or self.SETUP_STEPS_SINGLE
+        self.setup_index = int(getattr(self, "setup_index", 0) or 0) + 1
+        if self.setup_index >= len(_s):
+            self.setup_done = True
+            return None
+        return _s[self.setup_index]
+
+    def setup_back(self):
+        """返回上一步"""
+        self.setup_index = max(0, int(getattr(self, "setup_index", 0) or 0) - 1)
+        self.setup_done = False
+        return self.setup_current_step
+
+    def setup_state_for(self, step):
+        """步骤 → GameState"""
+        from config import GameState as _GS
+        return {
+            "map": _GS.MAP_SELECT,
+            "weapon_p1": _GS.WEAPON_SELECT_P1,
+            "char_p1": _GS.CHARACTER_SELECT_P1,
+            "weapon_p2": _GS.WEAPON_SELECT_P2,
+            "char_p2": _GS.CHARACTER_SELECT_P2,
+        }.get(step)
+
+    def update_gacha_fx(self, dt):
+        """v2.9.0：每帧推进抽卡演出（由主循环调用）"""
+        try:
+            _fx = getattr(self, "gacha_fx", None)
+            if _fx is not None and getattr(_fx, "active", False):
+                _fx.update(dt)
+                return True
+        except Exception:
+            pass
+        return False
+
+    def skip_gacha_fx(self):
+        """跳过演出"""
+        try:
+            _fx = getattr(self, "gacha_fx", None)
+            if _fx is not None:
+                _fx.skip()
+                return True
+        except Exception:
+            pass
+        return False
 
     def do_gacha(self, n=1):
         """执行抽取（n=1 单抽 / n=10 十连），解锁武器并扣金币"""
@@ -294,6 +383,12 @@ class ShopMixin:
             except Exception:
                 pass
         self.gacha_result = _res
+        # v2.9.0：触发出货演出
+        try:
+            if getattr(self, "gacha_fx", None) is not None:
+                self.gacha_fx.play(_res)
+        except Exception:
+            pass
         # 提示：出紫/金时高亮
         _best = max((int(_r.get("star", 1)) for _r in _res), default=0)
         if _best >= 5:

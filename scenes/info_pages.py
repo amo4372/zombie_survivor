@@ -304,3 +304,77 @@ class CharacterSelectPage(InfoPage):
         if _up:
             _out.append(("升级对比", [(k, v) for k, v in _up]))
         return _out
+
+
+# ======================================================================
+# v2.9.0 工厂：按"种类 + 玩家"构建信息页（供分阶段开局流程调用）
+# ======================================================================
+def build_info_page(game, kind, who="P1"):
+    """构建信息页
+
+    kind: "map" / "weapon" / "char"
+    who : "P1" / "P2"（决定写入哪个选择字段）
+    """
+    try:
+        _p2 = str(who).upper() == "P2"
+        if kind == "map":
+            _rows = []
+            try:
+                from config import MAP_CONFIGS as _MC
+            except Exception:
+                _MC = None
+            try:
+                from config import MapType as _MT
+            except Exception:
+                _MT = None
+            for _k, _v in (_MC or {}).items():
+                _key = getattr(_k, "name", str(_k)) if _MT else str(_k)
+                _d = dict(_v) if isinstance(_v, dict) else {}
+                _rows.append({"key": _key, "name": _d.get("name", _key),
+                              "desc": _d.get("description", ""),
+                              "chapter": _d.get("chapter", "")})
+            _pg = MapSelectPage(game, items=_rows)
+            _pg.title = "选择地图"
+        elif kind == "weapon":
+            _rows = []
+            try:
+                from config import WeaponType as _WT
+                from weapons import Weapon as _W
+                for _wt in _WT:
+                    _n = getattr(_wt, "name", str(_wt))
+                    try:
+                        _w = _W(_wt)
+                        _rows.append({"key": _n, "name": _w.name,
+                                      "desc": getattr(_w, "desc", ""),
+                                      "damage": getattr(_w, "damage", 0),
+                                      "fire_rate": getattr(_w, "fire_rate", 0),
+                                      "range": getattr(_w, "range", 0),
+                                      "ammo": str(getattr(_w, "ammo", "∞"))})
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+            _pg = WeaponSelectPage(game, items=_rows)
+            _pg.title = f"P{who[1]} 选择武器" if _p2 else "选择武器"
+        elif kind == "char":
+            _rows = []
+            try:
+                from config import CHARACTERS as _CH
+                for _k, _v in (_CH or {}).items():
+                    _d = dict(_v) if isinstance(_v, dict) else {}
+                    _rows.append({"key": str(_k),
+                                  "name": _d.get("name", str(_k)),
+                                  "desc": _d.get("desc", ""),
+                                  "ability": _d.get("ability", ""),
+                                  "price": _d.get("price", 0)})
+            except Exception:
+                pass
+            _pg = CharacterSelectPage(game, items=_rows)
+            _pg.title = f"P{who[1]} 选择角色" if _p2 else "选择角色"
+        else:
+            return None
+        # 记录归属，供确认时写入对应字段
+        _pg._owner = "P2" if _p2 else "P1"
+        return _pg
+    except Exception:
+        return None

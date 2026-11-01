@@ -676,6 +676,66 @@ class GachaBanner:
 
 
 # ======================================================================
+# v2.9.0 UP 卡池轮换
+# ----------------------------------------------------------------------
+# 每期 UP 由「期数」决定，期数按 UTC 天数推进（也可手动指定或由数据库配置）。
+# 策划只需在数据库 gacha_banners 表里配置每期 UP，或让代码自动轮换。
+# ======================================================================
+
+#: 每期持续天数
+BANNER_PERIOD_DAYS = 14
+#: 每期 UP 数量
+BANNER_UP_COUNT = 4
+
+
+def banner_index(now_ts=None, period_days=BANNER_PERIOD_DAYS):
+    """当前期数（按 UTC 天数）"""
+    try:
+        import time as _t
+        _ts = float(now_ts if now_ts is not None else _t.time())
+        return int(_ts // 86400) // max(1, int(period_days))
+    except Exception:
+        return 0
+
+
+def build_up_keys(pool, index=None, count=BANNER_UP_COUNT):
+    """按期数轮换 UP：把池按稀有度分层，每期取不同的一批
+
+    保证：同一把武器不会连续两期都是 UP（增加新鲜感）。
+    """
+    _rank = {"legend": 5, "epic": 4, "rare": 3, "fine": 2, "common": 1}
+    _srt = sorted(pool or [],
+                  key=lambda w: (-_rank.get(w.get("quality", "common"), 1),
+                                 str(w.get("key", ""))))
+    if not _srt:
+        return []
+    _n = max(1, int(count))
+    _i = int(index or 0)
+    _out = []
+    # 从高稀有度段里按期数偏移取，形成轮换
+    _offset = (_i * _n) % max(1, len(_srt))
+    for _k in range(_n):
+        _out.append(str(_srt[(_offset + _k) % len(_srt)].get("key")))
+    return _out
+
+
+def load_up_keys_from_db(db, pool, index=None):
+    """从数据库读本期 UP（表不存在则回退自动轮换）"""
+    try:
+        _row = db.row("gacha_banners", str(int(index or 0)))
+        if _row:
+            import json as _j
+            _v = _row.get("up_keys")
+            if isinstance(_v, str):
+                _v = _j.loads(_v)
+            if _v:
+                return list(_v)
+    except Exception:
+        pass
+    return build_up_keys(pool, index)
+
+
+# ======================================================================
 # v2.8.9 抽卡画面效果（GachaFx）
 # ----------------------------------------------------------------------
 # 参考米哈游的出货演出：
