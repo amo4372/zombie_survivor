@@ -480,7 +480,7 @@ class PlayingMixin:
 
         # v2.8.9 投射物命中双子 Boss
         try:
-            if getattr(self, 'twin_boss_alive', False):
+            if False and getattr(self, 'twin_boss_alive', False):
                 _tb = self.twin_boss
                 for _pr in list(getattr(self, 'projectiles', []) or []):
                     for _b in (_tb.zheng, _tb.hui):
@@ -506,14 +506,14 @@ class PlayingMixin:
 
         # v2.8.9 双子 Boss 每帧更新（能力/范围圈结算/时停/成就）
         try:
-            self.update_twin_boss(dt)
+            pass  # v2.9.3 双子 Boss 已禁用
         except Exception:
             pass
 
         # v2.9.2：惠某「时间快进」此前只给玩家打了个 _hui_fast_forward 标记，
         # 没有任何逻辑读它 —— 玩家完全感觉不到。现在真正加速：移速与攻速提升。
         try:
-            _tb = getattr(self, 'twin_boss', None)
+            _tb = None  # v2.9.3 双子禁用
             _hui = getattr(_tb, 'hui', None) if _tb is not None else None
             if _hui is not None and getattr(_hui, 'alive', False):
                 for _p in (self.registered_players()
@@ -1121,6 +1121,17 @@ class PlayingMixin:
             elif _saved_aim is not None and not _p1_paused:
                 # 松开：按蓄力角开火一次，并立刻清空预瞄（预瞄线立即消失，不再卡死）
                 _fire_angle = _saved_aim
+                # v2.9.3 关键修复：散布值必须**先固化再清空**。
+                # 此前这里清掉 _awm_saved 后，下面的收敛计算走 else 分支把
+                # _charge_spread 置 None，等真正开火时读到的已是 None
+                # → 扇形在收窄、子弹却依然笔直。现在先把收敛结果存进
+                # _fire_spread 供本次开火使用。
+                _cs_now = getattr(self.player, "_charge_spread", None)
+                try:
+                    self.player._fire_spread = (
+                        float(_cs_now) if _cs_now is not None else None)
+                except Exception:
+                    self.player._fire_spread = None
                 self.player._awm_saved = None
                 self.player._charge_start_t = None
         elif getattr(self.player, "_awm_saved", None) is not None:
@@ -1165,9 +1176,11 @@ class PlayingMixin:
                     if _z0 <= 0.0:
                         _cam._zoom_base = float(getattr(_cam, "zoom", 1.0) or 1.0)
                         _z0 = _cam._zoom_base
-                    _z_min = float(getattr(_charge_w, "charge_zoom_min", 0.62) or 0.62)
+                    _z_min = float(getattr(_charge_w, "charge_zoom_min", 0.5) or 0.5)
                     _cam.zoom = _z0 + (_z_min - _z0) * _charge_ratio
                     self.player._charge_zoom_active = True
+                    # v2.9.3：记录目标，供渲染/其他模块读取
+                    self.player._charge_zoom_target = _cam.zoom
             except Exception:
                 pass
         elif getattr(self.player, "_charge_zoom_active", False):
@@ -1205,6 +1218,12 @@ class PlayingMixin:
                 weapon = self.player.get_current_weapon()
             # v2.5.6 蓄力武器：按住期间抑制开火（仅在松开瞬间开火一次）
             _shot_angle = _fire_angle if _fire_angle is not None else mouse_angle
+            # v2.9.3：固化散布只在本次开火生效，用完即清（平射回归基础散布）
+            if _fire_angle is None:
+                try:
+                    self.player._fire_spread = None
+                except Exception:
+                    pass
             if weapon is not None and getattr(weapon, "hold_charge", False) and _charge_blocked:
                 pass  # 蓄力中 → 本帧不开火（预瞄线由 draw 渲染）
             # v2.1.3：防御 weapon/weapon_type 为 None（异常存档/联机同步兜底，不再崩溃）
@@ -1390,7 +1409,10 @@ class PlayingMixin:
                 pass
             # v2.8.9：达到波次后有机会改刷双子 Boss（郑某 + 惠某）
             try:
-                if getattr(enemy, "is_boss", False) and self._maybe_spawn_twin():
+                # v2.9.3：双子 Boss 暂时禁用（表现异常 + 卡顿），
+                # 改为普通 Boss 流程。代码保留在 twin_boss.py / mix_twinboss.py。
+                if False and getattr(enemy, "is_boss", False) \
+                        and self._maybe_spawn_twin():
                     pass
             except Exception:
                 pass

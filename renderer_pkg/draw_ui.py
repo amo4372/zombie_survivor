@@ -529,8 +529,9 @@ class UiMixin:
             self.screen.blit(_bt, _bt.get_rect(center=_r.center))
 
     def draw_replay_list(self):
-        """v2.9.1 主菜单回放列表：可反复观看已保存的录像（含通关）"""
+        """v2.9.3 回放列表：按钮复用主菜单 Button 机制（此前自算 Rect 点不动）"""
         import pygame
+        from ui import Button as _RB
         g = self.game
         sc = getattr(g, 'scale', 1.0) or 1.0
         sw, sh = self.screen.get_size()
@@ -545,18 +546,39 @@ class UiMixin:
             _lst = list(g.records.data.get('saved_replays', []) or [])
         except Exception:
             pass
-        g.replay_list_rects = {}
-        _y = int(110 * sc)
-        _rh = int(64 * sc)
         if not _lst:
-            _e = g.font.render("还没有保存的回放 —— 在回放页点「保存」即可收藏", True, (150, 150, 165))
-            self.screen.blit(_e, (int(28 * sc), _y + int(20 * sc)))
+            _e = g.font.render("还没有保存的回放 —— 在回放页点「保存」即可收藏",
+                               True, (150, 150, 165))
+            self.screen.blit(_e, (int(28 * sc), int(130 * sc)))
+
+        _cache = getattr(g, 'replay_list_btns', None)
+        if _cache is None:
+            _cache = {}
+            g.replay_list_btns = _cache
+        _mp = pygame.mouse.get_pos()
+        _mpr = pygame.mouse.get_pressed()
+        _touch = getattr(g, 'touch_events', []) or []
+        _alive = set()
+
+        _y = int(110 * sc)
         for _i, _r in enumerate(_lst):
-            _ry = _y + _i * (_rh + int(8 * sc))
-            if _ry > sh - int(150 * sc):
-                break
-            _rect = pygame.Rect(int(28 * sc), _ry, sw - int(56 * sc), _rh)
+            _path = str(_r.get('path') or '')
             _kind = str(_r.get('kind', '') or '')
+            _row_y = int(110 + _i * 72)
+            if _i >= 7:
+                break
+            _key = (_path, _i)
+            _alive.add(_key)
+            _pr, _dr = _cache.get(_key, (None, None))
+            if _pr is None:
+                _pr = _RB(900, _row_y + 6, 100, 44, "播放",
+                          color=(45, 110, 70), hover_color=(70, 160, 100))
+                _dr = _RB(1010, _row_y + 6, 100, 44, "删除",
+                          color=(110, 50, 50), hover_color=(160, 75, 75))
+                _cache[_key] = (_pr, _dr)
+            # 行背景
+            _rect = pygame.Rect(int(28 * sc), int(_row_y * sc),
+                                sw - int(56 * sc), int(64 * sc))
             _col = (90, 170, 120) if _kind == 'victory' else (170, 110, 110)
             pygame.draw.rect(self.screen, (26, 24, 34), _rect, border_radius=8)
             pygame.draw.rect(self.screen, _col, _rect, max(1, int(2 * sc)), border_radius=8)
@@ -566,29 +588,56 @@ class UiMixin:
                 "通关" if _kind == 'victory' else "阵亡")
             _ms = g.font_small.render(_meta, True, (175, 175, 190))
             self.screen.blit(_ms, (_rect.x + int(12 * sc), _rect.y + int(38 * sc)))
-            # 播放 / 删除
-            _bw2 = int(90 * sc)
-            _pr = pygame.Rect(_rect.right - _bw2 * 2 - int(16 * sc),
-                              _rect.y + int(10 * sc), _bw2, int(44 * sc))
-            _dr = pygame.Rect(_rect.right - _bw2 - int(8 * sc),
-                              _rect.y + int(10 * sc), _bw2, int(44 * sc))
-            for _r2, _lab, _c2 in ((_pr, "播放", (60, 140, 90)),
-                                   (_dr, "删除", (140, 70, 70))):
-                pygame.draw.rect(self.screen, (35, 35, 45), _r2, border_radius=6)
-                pygame.draw.rect(self.screen, _c2, _r2, max(1, int(2 * sc)), border_radius=6)
-                _bt2 = g.font_small.render(_lab, True, _c2)
-                self.screen.blit(_bt2, _bt2.get_rect(center=_r2.center))
-            g.replay_list_rects[_i] = (_pr, _dr, _r.get('path'))
+            # 按钮点击（渲染层直接处理，同主菜单）
+            if _pr.update(_mp, _mpr, _touch, sc):
+                try:
+                    g.load_saved_replay(_path)
+                    return
+                except Exception:
+                    pass
+            if _dr.update(_mp, _mpr, _touch, sc):
+                try:
+                    g.delete_saved_replay(_path)
+                    return
+                except Exception:
+                    pass
+            _fnt = getattr(g, 'font_small', None) or getattr(g, 'font', None)
+            try:
+                _pr.draw(self.screen, _fnt, sc)
+            except Exception:
+                pass
+            try:
+                _dr.draw(self.screen, _fnt, sc)
+            except Exception:
+                pass
 
-        # 返回
-        _br = pygame.Rect(int(28 * sc), sh - int(80 * sc), int(160 * sc), int(52 * sc))
-        pygame.draw.rect(self.screen, (70, 70, 95), _br, border_radius=10)
-        _bt3 = g.font.render("返回主菜单", True, (230, 230, 240))
-        self.screen.blit(_bt3, _bt3.get_rect(center=_br.center))
-        g.replay_list_rects['back'] = _br
+        # 清理已删除条目的按钮
+        # v2.9.3：必须跳过 __back__ —— 否则返回按钮每帧被清理重建，
+        # Button 的 touch_pressed 跨帧状态丢失，导致"点了没反应"。
+        for _k in list(_cache.keys()):
+            if _k == "__back__":
+                continue
+            if _k not in _alive:
+                _cache.pop(_k, None)
+
+        # 返回按钮
+        _bk = _cache.get('__back__')
+        if _bk is None:
+            _bk = _RB(28, 640, 180, 56, "返回主菜单",
+                      color=(70, 70, 95), hover_color=(100, 100, 130))
+            _cache['__back__'] = _bk
+        if _bk.update(_mp, _mpr, _touch, sc):
+            from config import GameState as _GS
+            g.state = _GS.MENU
+            return
+        _bf = getattr(g, 'font_large', None) or getattr(g, 'font', None)
+        try:
+            _bk.draw(self.screen, _bf, sc)
+        except Exception:
+            pass
 
     def _draw_setup_pages(self):
-        """v2.9.0 分阶段开局页面：地图 / 武器 / 角色（用 scenes.InfoPage 绘制）"""
+        """v2.9.3 分阶段开局：地图 / 武器 / 角色（按钮复用主菜单 Button 机制）"""
         from config import GameState as _GS
         g = self.game
         _st = g.state
@@ -599,38 +648,101 @@ class UiMixin:
         _step = _map.get(_st)
         if _step is None:
             return False
+        import pygame
+        sc = getattr(g, 'scale', 1.0) or 1.0
+        sw, sh = self.screen.get_size()
+        self.screen.fill((14, 14, 20))
+
+        # ---- 内容（信息页）----
+        _page = None
         try:
             from scenes.info_pages import build_info_page
             _who = "P2" if _step.endswith("_p2") else "P1"
             _kind = _step.split("_")[0]
             _page = build_info_page(g, _kind, _who)
-            if _page is None:
-                return False
-            self.screen.fill((14, 14, 20))
-            _page.draw(self.screen, g.scale)
-            # 底部导航
-            import pygame
-            sc = getattr(g, 'scale', 1.0) or 1.0
-            _last = int(getattr(g, 'setup_index', 0)) >=                 len(getattr(g, 'setup_steps', []) or []) - 1
-            _lab = "开始游戏" if _last else "下一步"
-            _bw, _bh = int(200 * sc), int(56 * sc)
-            sw, sh = self.screen.get_size()
-            _r = pygame.Rect((sw - _bw) // 2, sh - int(80 * sc), _bw, _bh)
-            pygame.draw.rect(self.screen, (60, 160, 90), _r, border_radius=10)
-            pygame.draw.rect(self.screen, (140, 255, 180), _r, 2, border_radius=10)
-            _t = g.font.render(_lab, True, (255, 255, 255))
-            self.screen.blit(_t, _t.get_rect(center=_r.center))
-            g.setup_next_rect = _r
-            # 返回按钮
-            _rb = pygame.Rect(int(28 * sc), sh - int(80 * sc),
-                              int(140 * sc), _bh)
-            pygame.draw.rect(self.screen, (80, 80, 100), _rb, border_radius=10)
-            _rt = g.font.render("上一步", True, (230, 230, 230))
-            self.screen.blit(_rt, _rt.get_rect(center=_rb.center))
-            g.setup_back_rect = _rb
-            return True
         except Exception:
+            _page = None
+        if _page is None:
             return False
+        try:
+            _page.draw(self.screen, sc)
+        except Exception:
+            pass
+
+        # ---- 按钮（同主菜单：渲染层直接 update + 处理点击）----
+        _btns = getattr(g, 'setup_page_btns', None) or {}
+        _mp = pygame.mouse.get_pos()
+        _mpr = pygame.mouse.get_pressed()
+        _touch = getattr(g, 'touch_events', []) or []
+        _detail_mode = getattr(g, 'info_page_back', None) is not None
+        _last = int(getattr(g, 'setup_index', 0)) >= \
+            len(getattr(g, 'setup_steps', []) or []) - 1
+        try:
+            _btns["next"].text = ("返回" if _detail_mode else
+                                  ("开始游戏" if _last else "下一步"))
+        except Exception:
+            pass
+        for _k in ("next", "back"):
+            _b = _btns.get(_k)
+            if _b is None:
+                continue
+            _b.visible = (not _detail_mode) if _k == "back" else True
+            _b.enabled = True
+            if _b.update(_mp, _mpr, _touch, sc):
+                if _k == "next":
+                    # 详情页模式：直接返回来源页，不走流程推进
+                    if getattr(g, 'info_page_back', None) is not None:
+                        _back = g.info_page_back
+                        g.info_page_back = None
+                        g.state = _back
+                        return True
+                    _nx = g.setup_next()
+                    if _nx is None:
+                        try:
+                            g.start_game()
+                        except Exception:
+                            pass
+                    else:
+                        _st2 = g.setup_state_for(_nx)
+                        if _st2 is not None:
+                            g.state = _st2
+                else:
+                    _pv = g.setup_back()
+                    _st3 = g.setup_state_for(_pv)
+                    if _st3 is not None:
+                        g.state = _st3
+                return True
+            _sf = getattr(g, 'font_large', None) or getattr(g, 'font', None)
+            try:
+                _b.draw(self.screen, _sf, sc)
+            except Exception:
+                pass
+
+        # 步骤指示
+        try:
+            _idx = int(getattr(g, 'setup_index', 0) or 0)
+            _tot = len(getattr(g, 'setup_steps', []) or [])
+            _tip = g.font_small.render(f"第 {_idx + 1} / {_tot} 步", True, (150, 150, 170))
+            self.screen.blit(_tip, (sw - _tip.get_width() - int(28 * sc),
+                                    sh - int(34 * sc)))
+        except Exception:
+            pass
+        return True
+
+    def _open_info_page(self, kind, who="P1"):
+        """v2.9.3：打开武器/角色详情页（独立页面，可返回）"""
+        try:
+            from config import GameState as _GS
+            g = self.game
+            g.info_page_kind = str(kind)
+            g.info_page_who = str(who)
+            g.info_page_back = g.state
+            g.state = (_GS.WEAPON_SELECT_P1 if str(who).upper() != "P2"
+                       else _GS.WEAPON_SELECT_P2) if kind == "weapon" else (
+                _GS.CHARACTER_SELECT_P1 if str(who).upper() != "P2"
+                else _GS.CHARACTER_SELECT_P2)
+        except Exception:
+            pass
 
     def _draw_equip_select(self):
         """局外装备选择界面：两栏列表（点击仅选中）+ 每栏底部独立'解锁/升级'大按钮，避免误触"""
@@ -743,6 +855,33 @@ class UiMixin:
             pygame.draw.rect(self.screen, GRAY, w_op_rect, 2, border_radius=10)
         w_otxt = self.game.font.render(w_op[1] if w_op else "请选择武器", True, WHITE if w_op_enabled else LIGHT_GRAY)
         self.screen.blit(w_otxt, w_otxt.get_rect(center=w_op_rect.center))
+        # v2.9.3：武器详情页入口（数值 / 机制 / 背景故事 / 与初始对比）
+        try:
+            from ui import Button as _DB
+            if 'wdetail' not in getattr(self.game, 'equip_detail_btns', {}):
+                self.game.equip_detail_btns = getattr(self.game, 'equip_detail_btns', {})
+                self.game.equip_detail_btns['wdetail'] = _DB(
+                    wx + 6, wy + wh + 70, 180, 48, "武器详情",
+                    color=(60, 80, 120), hover_color=(90, 120, 170))
+                self.game.equip_detail_btns['cdetail'] = _DB(
+                    cx + 6, cy + ch + 70, 180, 48, "角色详情",
+                    color=(60, 80, 120), hover_color=(90, 120, 170))
+            _wb = self.game.equip_detail_btns.get('wdetail')
+            if _wb is not None:
+                import pygame as _pg
+                if _wb.update(_pg.mouse.get_pos(), _pg.mouse.get_pressed(),
+                              getattr(self.game, 'touch_events', []), scale):
+                    self._open_info_page("weapon", "P1")
+                _wb.draw(self.screen, self.game.font, scale)
+            _cb = self.game.equip_detail_btns.get('cdetail')
+            if _cb is not None:
+                import pygame as _pg2
+                if _cb.update(_pg2.mouse.get_pos(), _pg2.mouse.get_pressed(),
+                              getattr(self.game, 'touch_events', []), scale):
+                    self._open_info_page("char", "P1")
+                _cb.draw(self.screen, self.game.font, scale)
+        except Exception:
+            pass
         if clicked and w_op_enabled and w_op_rect.collidepoint(clicked):
             if w_op[0] == "unlock":
                 res = g.equip_buy_weapon(g.selected_weapon)
@@ -2682,11 +2821,11 @@ class UiMixin:
                 g.multi_room_tip = ("需先击败 王 才能解锁", 2.0)
             elif _r == "gacha_only":
                 g.multi_room_tip = ("武器仅可通过「军械库补给」抽取获得", 2.0)
-        _dd_box(pygame.Rect(rx, _cy, rw, rh), f"武器：{_wn}")
-        if not _handle_dd("pweapon", pygame.Rect(rx, _cy, rw, rh), _wopts, _pick_weapon, _wi):
-            _cy += rh + gap
-        else:
-            _cy += rh + gap
+        # v2.9.3：删除多人房间的武器下拉栏 —— 武器统一走单人模式的分阶段
+        # 选择流程（地图 → P1武器 → P1角色 → P2…），避免两套选择逻辑分叉。
+        # 这里只做只读展示，并给一个进入正式流程的入口。
+        _dd_box(pygame.Rect(rx, _cy, rw, rh), f"武器：{_wn}（流程内选择）")
+        _cy += rh + gap
         # 角色（v2.4.0 金币解锁：与单人共享 records）
         _ci = _clist.index(_cur.get("char")) if _cur.get("char") in _clist else 0
         _cn = _clist[_ci] if _clist else "—"

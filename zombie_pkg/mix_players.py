@@ -325,6 +325,11 @@ class PlayerRegistryMixin:
             _p = getattr(self, "player", None)
             if _cam is None or _p is None or not hasattr(_cam, "zoom"):
                 return
+            # v2.9.3：蓄力拉远正在进行时，通用逻辑**不要插手**。
+            # 此前两套逻辑同帧都写 cam.zoom，后执行的覆盖前者，
+            # 结果"长按瞄准时视野纹丝不动"。
+            if getattr(_p, "_charge_zoom_active", False):
+                return
             # v2.9.2：多人模式 —— 每个玩家的视口独立计算（此前只有 P1 生效）
             try:
                 _regs = list((self.registered_players() if hasattr(self, "registered_players") else []) or [])

@@ -1031,7 +1031,7 @@ class InputMixin:
         elif action == "kill_hostile":
             n = self._dev_kill_hostile_players(idx)
             self._dev_notify(idx, f"秒杀敌对玩家 x{n}", (255, 120, 120))
-        elif action == "spawn_twin_boss":
+        elif action == "spawn_twin_boss":  # v2.9.3 禁用
             try:
                 self.spawn_twin_boss()
             except Exception:

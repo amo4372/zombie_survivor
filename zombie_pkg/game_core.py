@@ -507,6 +507,19 @@ class GameCore:
             # v2.9.1：保存当前回放，之后可在主菜单回放列表里反复观看
             "save":   Button(920, 620, 110, 52, "保存", color=(40, 80, 55), hover_color=(60, 120, 80)),
         }
+        # v2.9.3：分阶段开局页 + 回放列表页的按钮 —— **持久化**在主菜单同款
+        # Button 对象上。此前这些页面自己算 Rect 再交给输入层 handler，
+        # 结果新状态没进输入白名单时按钮全死；现在改成和主菜单完全一样的
+        # 「渲染层 update + 直接处理点击」，跨帧状态（was_pressed /
+        # touch_pressed）也由 Button 自己维护，不会丢。
+        from ui import Button as _Btn2
+        self.setup_page_btns = {
+            "next": _Btn2(520, 640, 200, 56, "下一步",
+                          color=(45, 110, 70), hover_color=(70, 160, 100)),
+            "back": _Btn2(40, 640, 160, 56, "上一步",
+                          color=(80, 80, 100), hover_color=(110, 110, 135)),
+        }
+        self.replay_list_btns = {}
         self.gameover_replay_btn = Button(640 + 20, 720 - 218, 215, 48, "观看回放",
                                           color=(40, 55, 80), hover_color=(60, 85, 120))
 

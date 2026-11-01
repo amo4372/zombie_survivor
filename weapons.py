@@ -661,7 +661,11 @@ class Weapon:
             # 真正开火时仍用 self.spread（AWM 为 0），所以"扇形在收窄
             # 但子弹依然笔直"——散布根本没生效。
             _eff_spread = float(getattr(self, "spread", 0.0) or 0.0)
-            _cs = getattr(player, "_charge_spread", None)
+            # v2.9.3：优先用开火瞬间固化的 _fire_spread（松开时保留的收敛值），
+            # 其次才是仍在蓄力中的 _charge_spread
+            _cs = getattr(player, "_fire_spread", None)
+            if _cs is None:
+                _cs = getattr(player, "_charge_spread", None)
             if _cs is not None:
                 try:
                     _cs = float(_cs)
