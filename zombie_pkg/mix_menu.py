@@ -277,6 +277,8 @@ class MenuMixin:
             Button(cx, 785, 200, 45, "更新说明", color=GRAY),
             # v2.9.1：主菜单入口（放末尾，不打乱已有索引）
             Button(cx, 840, 200, 45, "回放列表", color=(80, 110, 150)),
+            # v2.9.2：军械库补给（抽取武器）直接放主菜单，不用先进装备页
+            Button(cx, 895, 200, 45, "军械库补给", color=(150, 120, 60)),
         ]
         # 模式选择按钮
         self.mode_select_buttons = [

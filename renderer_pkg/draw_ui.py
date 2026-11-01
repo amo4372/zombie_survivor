@@ -64,12 +64,12 @@ class UiMixin:
         notice_blocking = bool(getattr(self.game, 'update_notice', None))
         for i, btn in enumerate(self.game.menu_buttons):
             # 两列布局：左右各6个，列中心对称于屏幕中心640（左380/右700），行距64
-            if i < 6:
+            if i < 7:
                 btn.base_x = 380
                 btn.base_y = 250 + i * 64
             else:
                 btn.base_x = 700
-                btn.base_y = 250 + (i - 6) * 64
+                btn.base_y = 250 + (i - 7) * 64
             # 继续游戏按钮：无存档时禁用
             if i == 0:
                 btn.enabled = self.game.has_saved_game()
@@ -121,6 +121,13 @@ class UiMixin:
                 elif i == 12:
                     # v2.9.1 回放列表（主菜单末尾追加，不打乱既有索引）
                     self.game.state = GameState.REPLAY_LIST
+                elif i == 13:
+                    # v2.9.2 军械库补给（抽取武器）主菜单直达
+                    try:
+                        self.game.gacha_init()
+                    except Exception:
+                        pass
+                    self.game.state = GameState.GACHA
                 elif i == 10:
                     self.game.running = False
                 elif i == 11:
@@ -719,10 +726,11 @@ class UiMixin:
             if _wlocked:
                 w_op = ("disabled", f"未解锁: {_wlocked}")
             elif not _wowned:
-                w_op = ("unlock", f"解锁 {_wname}  {_wprice}金币")
+                # v2.9.2：武器不可直购——只能从军械库补给抽取
+                w_op = ("disabled", f"{_wname} 未解锁 · 需补给抽取")
             elif _wlevel < 5:
-                _up_p = g.get_weapon_upgrade_price(g.selected_weapon)
-                w_op = ("upgrade", f"升级 {_wname} 至Lv.{_wlevel + 1}  {_up_p}金币")
+                # v2.9.2：也不可直接升级——重复抽取自动叠加等级
+                w_op = ("disabled", f"{_wname} Lv.{_wlevel} · 重复抽取可叠加")
             else:
                 w_op = ("disabled", f"{_wname} 已满级 Lv.5")
         w_op_rect = pygame.Rect(wx + 6, wy + wh + 8, ww - 12, int(54 * scale))
@@ -742,8 +750,10 @@ class UiMixin:
                                  "locked_wang": "需先击败王某", "owned": "已拥有",
                                  "gacha_only": "武器仅可通过「军械库补给」抽取获得"}.get(res, "")
             else:
+                # v2.9.2：升级入口同样关闭，一律提示走抽取
                 res = g.upgrade_weapon_shop(g.selected_weapon)
-                g.equip_hover = {"ok": f"{_wname} 升至 Lv.{g.records.get_weapon_level(g.selected_weapon.name)}",
+                g.equip_hover = {"gacha_only": "武器升级只能靠重复抽取叠加",
+                                 "ok": f"{_wname} 升至 Lv.{g.records.get_weapon_level(g.selected_weapon.name)}",
                                  "no_coin": "金币不足", "max": "已满级"}.get(res, "")
 
         # ================== 角色栏 ==================
@@ -2892,6 +2902,13 @@ class UiMixin:
                     _default_w = _wlist[0]
                 if _default_w is not None:
                     g.selected_weapon = _default_w
+            except Exception:
+                pass
+            # v2.9.2：全模式走分阶段开局（地图 → P1武器 → P1角色 → P2…）
+            # 此前直接跳 PLAYING，新流程从未对玩家生效。
+            try:
+                if hasattr(g, 'begin_setup_flow') and g.begin_setup_flow():
+                    return
             except Exception:
                 pass
             g.state = GameState.PLAYING

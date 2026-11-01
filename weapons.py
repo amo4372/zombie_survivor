@@ -656,7 +656,20 @@ class Weapon:
         projectiles = []
         pellets = getattr(self, "pellets", 1)
         for i in range(pellets):
-            spread_angle = angle + random.uniform(-self.spread, self.spread)
+            # v2.9.2：蓄力武器在蓄力过程中会把收敛后的实际散布写进
+            # player._charge_spread。此前这个值只被扇形预览消费，
+            # 真正开火时仍用 self.spread（AWM 为 0），所以"扇形在收窄
+            # 但子弹依然笔直"——散布根本没生效。
+            _eff_spread = float(getattr(self, "spread", 0.0) or 0.0)
+            _cs = getattr(player, "_charge_spread", None)
+            if _cs is not None:
+                try:
+                    _cs = float(_cs)
+                    if _cs >= 0:
+                        _eff_spread = _cs
+                except Exception:
+                    pass
+            spread_angle = angle + random.uniform(-_eff_spread, _eff_spread)
             if pellets > 1:
                 spread_angle += (i - pellets // 2) * 0.1
 

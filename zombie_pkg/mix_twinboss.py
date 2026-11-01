@@ -243,6 +243,24 @@ class TwinBossMixin:
                 _sy = (_b["y"] - cam_y) * scale
                 pygame.draw.circle(screen, (255, 200, 90),
                                    (int(_sx), int(_sy)), max(2, int(4 * scale)))
+            # v2.9.2：时间类技能的**全屏视觉反馈**——此前只有一条字幕，
+            # 画面毫无变化，玩家根本不知道发生了什么。
+            _hui = _tb.hui
+            if getattr(_hui, 'rewind_active', 0.0) > 0:
+                _ov = pygame.Surface((screen.get_width(), screen.get_height()),
+                                     pygame.SRCALPHA)
+                _ov.fill((90, 60, 160, 85))     # 紫色：回溯
+                screen.blit(_ov, (0, 0))
+            if getattr(_hui, 'fast_forward_active', 0.0) > 0:
+                _ov2 = pygame.Surface((screen.get_width(), screen.get_height()),
+                                      pygame.SRCALPHA)
+                _ov2.fill((255, 190, 70, 70))   # 橙黄：快进
+                screen.blit(_ov2, (0, 0))
+            if getattr(_hui, 'freeze_active', 0.0) > 0:
+                _ov3 = pygame.Surface((screen.get_width(), screen.get_height()),
+                                      pygame.SRCALPHA)
+                _ov3.fill((180, 200, 255, 75))  # 冷蓝：时停
+                screen.blit(_ov3, (0, 0))
             # ---- 时停区域（惠某）----
             if _tb.hui.freeze_active > 0 and _tb.hui.freeze_center:
                 _fx = (_tb.hui.freeze_center[0] - cam_x) * scale + offset_x
@@ -255,16 +273,46 @@ class TwinBossMixin:
                                    _r, max(1, int(2 * scale)))
                 screen.blit(_s2, (0, 0))
             # ---- Boss 本体 ----
-            for _b, _col in ((_tb.zheng, (120, 220, 255)),
-                             (_tb.hui, (255, 150, 220))):
+            for _b, _col, _dark in ((_tb.zheng, (120, 220, 255), (30, 80, 120)),
+                                    (_tb.hui, (255, 150, 220), (110, 40, 90))):
                 if not _b.alive:
                     continue
                 _bx = (_b.x - cam_x) * scale + offset_x
                 _by = (_b.y - cam_y) * scale
                 _rr = max(8, int(34 * scale))
-                pygame.draw.circle(screen, _col, (int(_bx), int(_by)), _rr)
-                pygame.draw.circle(screen, (255, 255, 255), (int(_bx), int(_by)),
-                                   _rr, max(1, int(2 * scale)))
+                # v2.9.2：此前只是两个纯色圆，"贴图很奇怪"。
+                # 现在仿照其他 Boss 的画法：躯干 + 头部 + 眼睛 + 外发光，
+                # 并按朝向偏移，看起来才是"有形态的 Boss"。
+                # --- 外发光 ---
+                _glow = pygame.Surface((screen.get_width(), screen.get_height()),
+                                       pygame.SRCALPHA)
+                pygame.draw.circle(_glow, (*_col, 55),
+                                   (int(_bx), int(_by)), int(_rr * 1.9))
+                screen.blit(_glow, (0, 0))
+                # --- 躯干（椭圆）---
+                _body = pygame.Rect(int(_bx - _rr * 0.82), int(_by - _rr * 0.55),
+                                    int(_rr * 1.64), int(_rr * 1.5))
+                pygame.draw.ellipse(screen, _dark, _body)
+                pygame.draw.ellipse(screen, _col, _body, max(1, int(2 * scale)))
+                # --- 头部 ---
+                _hr = int(_rr * 0.5)
+                _hy = int(_by - _rr * 0.75)
+                pygame.draw.circle(screen, _dark, (int(_bx), _hy), _hr)
+                pygame.draw.circle(screen, _col, (int(_bx), _hy),
+                                   _hr, max(1, int(2 * scale)))
+                # --- 眼睛（朝玩家方向）---
+                try:
+                    _fa = math.radians(getattr(_b, "facing_angle", 0.0) or 0.0)
+                except Exception:
+                    _fa = 0.0
+                for _sgn in (-1, 1):
+                    _ex = _bx + math.cos(_fa) * _hr * 0.45 \
+                        - math.sin(_fa) * _hr * 0.42 * _sgn
+                    _ey = _hy + math.sin(_fa) * _hr * 0.45 \
+                        + math.cos(_fa) * _hr * 0.42 * _sgn
+                    pygame.draw.circle(screen, (255, 255, 255),
+                                       (int(_ex), int(_ey)),
+                                       max(1, int(3 * scale)))
                 # 血条
                 _bw = int(90 * scale)
                 _bh = max(3, int(7 * scale))

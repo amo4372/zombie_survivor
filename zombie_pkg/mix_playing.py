@@ -510,6 +510,27 @@ class PlayingMixin:
         except Exception:
             pass
 
+        # v2.9.2：惠某「时间快进」此前只给玩家打了个 _hui_fast_forward 标记，
+        # 没有任何逻辑读它 —— 玩家完全感觉不到。现在真正加速：移速与攻速提升。
+        try:
+            _tb = getattr(self, 'twin_boss', None)
+            _hui = getattr(_tb, 'hui', None) if _tb is not None else None
+            if _hui is not None and getattr(_hui, 'alive', False):
+                for _p in (self.registered_players()
+                           if hasattr(self, 'registered_players') else []):
+                    _ff = float(getattr(_p, '_hui_fast_forward', 0.0) or 0.0)
+                    if _ff > 0:
+                        _p._hui_fast_forward = max(0.0, _ff - dt)
+                        try:
+                            _p.speed_multiplier = float(
+                                getattr(_p, 'speed_multiplier', 1.0)) * (1.0 + 0.6)
+                            _p.attack_speed_mult = float(
+                                getattr(_p, 'attack_speed_mult', 1.0)) * (1.0 + 0.5)
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+
         # v2.8.9 通用动态视野：瞄准/射程超出屏幕时自动拉远（所有武器与技能）
         try:
             if hasattr(self, 'update_dynamic_zoom'):

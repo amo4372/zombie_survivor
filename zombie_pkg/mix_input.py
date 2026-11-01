@@ -519,7 +519,15 @@ class InputMixin:
             return mouse_pos, mouse_pressed
 
         # 菜单/设置/教程/剧情资料库/难度选择的滚轮和触摸滚动
-        if self.state in (GameState.MENU, GameState.SETTINGS, GameState.TUTORIAL, GameState.RECORDS, GameState.STORY_ARCHIVE, GameState.CODEX, GameState.MODE_SELECT, GameState.DIFFICULTY_SELECT, GameState.MOD_MANAGER, GameState.ACHIEVEMENTS, GameState.UPDATE, GameState.UPDATE_NOTES, GameState.EQUIP_SELECT, GameState.GACHA, GameState.SLOT_MACHINE):
+                # v2.9.2：新页面（回放列表 / 分阶段开局三个页面）此前**没进这个分支**，
+        # 导致这些页面里的按钮全部点不动——鼠标点击事件根本走不到 handler。
+        if self.state in (GameState.MENU, GameState.SETTINGS, GameState.TUTORIAL, GameState.RECORDS, GameState.STORY_ARCHIVE, GameState.CODEX, GameState.MODE_SELECT, GameState.DIFFICULTY_SELECT, GameState.MOD_MANAGER, GameState.ACHIEVEMENTS, GameState.UPDATE, GameState.UPDATE_NOTES, GameState.EQUIP_SELECT, GameState.GACHA, GameState.SLOT_MACHINE,
+                  getattr(GameState, 'REPLAY_LIST', None),
+                  getattr(GameState, 'MAP_SELECT', None),
+                  getattr(GameState, 'WEAPON_SELECT_P1', None),
+                  getattr(GameState, 'CHARACTER_SELECT_P1', None),
+                  getattr(GameState, 'WEAPON_SELECT_P2', None),
+                  getattr(GameState, 'CHARACTER_SELECT_P2', None)):
             for event in all_events:
                 if event.type == pygame.QUIT:
                     logger.info("收到退出事件")

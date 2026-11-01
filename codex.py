@@ -842,3 +842,27 @@ TWIN_BOSS_CODEX = {
 def get_twin_boss_entry(name):
     """按名字取双子 Boss 图鉴条目"""
     return TWIN_BOSS_CODEX.get(str(name))
+
+
+# ======================================================================
+# v2.9.2：把双子 Boss **真正并入** MONSTER_CODEX
+# 此前 TWIN_BOSS_CODEX 是独立字典，图鉴页面只遍历 MONSTER_CODEX，
+# 所以图鉴里根本看不到郑某/惠某。
+# ======================================================================
+def _merge_twin_into_monster_codex():
+    for _k, _v in (TWIN_BOSS_CODEX or {}).items():
+        if _k in MONSTER_CODEX:
+            continue
+        _entry = dict(_v or {})
+        _entry.setdefault("category", "BOSS")
+        _entry.setdefault("name", _k)
+        _entry.setdefault("hp", "—")
+        _entry.setdefault("damage", "—")
+        _entry.setdefault("speed", "—")
+        _entry.setdefault("title", _entry.get("title", "双子 Boss"))
+        _entry.setdefault("desc", _entry.get("desc", ""))
+        MONSTER_CODEX[_k] = _entry
+    return len(TWIN_BOSS_CODEX or {})
+
+
+_MERGED_TWIN_COUNT = _merge_twin_into_monster_codex()

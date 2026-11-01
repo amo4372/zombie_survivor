@@ -271,6 +271,48 @@ class PlayerRegistryMixin:
         _z = _halfw / _d
         return max(self.ZOOM_MIN, min(1.0, _z))
 
+    def update_dynamic_zoom_for(self, cam, player, dt):
+        """v2.9.2：为**任意**摄像机/玩家对计算动态 zoom（多人分屏各自独立）"""
+        try:
+            if cam is None or player is None or not hasattr(cam, "zoom"):
+                return
+            if getattr(cam, "_zoom_base", 0.0) <= 0.0:
+                cam._zoom_base = float(getattr(cam, "zoom", 1.0) or 1.0)
+            _base = cam._zoom_base
+            _want = 0.0
+            try:
+                _w = player.get_current_weapon()
+            except Exception:
+                _w = None
+            _ratio = float(getattr(player, "_charge_ratio", 0.0) or 0.0)
+            if _w is not None and getattr(_w, "hold_charge", False) \
+                    and getattr(player, "_awm_saved", None) is not None:
+                _want = float(getattr(_w, "range", 0) or 0) * (0.35 + 0.65 * _ratio)
+            else:
+                try:
+                    _wr = float(getattr(_w, "range", 0) or 0)
+                except Exception:
+                    _wr = 0.0
+                _want = max(float(getattr(player, "_aim_dist", 0.0) or 0.0),
+                            _wr * 0.5)
+            # 技能预瞄距离也算
+            try:
+                _want = max(_want, float(getattr(player, "_skill_aim_dist", 0.0) or 0.0))
+            except Exception:
+                pass
+            if _want <= 0:
+                _target = _base
+            else:
+                _vis = 0.5 * min(getattr(self, "scaled_width", 1280) or 1280,
+                                 getattr(self, "scaled_height", 720) or 720)
+                _z = _vis / max(1.0, float(_want))
+                _target = max(0.45, min(_base, _z))
+            _cur = float(getattr(cam, "zoom", 1.0) or 1.0)
+            _k = 1.0 - pow(0.001, max(0.0, float(dt)))
+            cam.zoom = _cur + (_target - _cur) * _k
+        except Exception:
+            pass
+
     def update_dynamic_zoom(self, dt, players=None):
         """每帧调用：按每位玩家的"要看的距离"调整主摄像机
 
@@ -282,6 +324,21 @@ class PlayerRegistryMixin:
             _cam = getattr(self, "camera", None)
             _p = getattr(self, "player", None)
             if _cam is None or _p is None or not hasattr(_cam, "zoom"):
+                return
+            # v2.9.2：多人模式 —— 每个玩家的视口独立计算（此前只有 P1 生效）
+            try:
+                _regs = list((self.registered_players() if hasattr(self, "registered_players") else []) or [])
+            except Exception:
+                _regs = []
+            if len(_regs) > 1:
+                for _rp in _regs:
+                    try:
+                        _rc = self.camera_for(_rp) if hasattr(self, "camera_for") else None
+                    except Exception:
+                        _rc = None
+                    if _rc is not None and _rc is not _cam:
+                        self.update_dynamic_zoom_for(_rc, _rp, dt)
+                self.update_dynamic_zoom_for(_cam, _p, dt)
                 return
             if getattr(_cam, "_zoom_base", 0.0) <= 0.0:
                 _cam._zoom_base = float(getattr(_cam, "zoom", 1.0) or 1.0)
@@ -297,7 +354,14 @@ class PlayerRegistryMixin:
             if _w is not None and getattr(_w, "hold_charge", False) \
                     and getattr(_p, "_awm_saved", None) is not None:
                 _want = float(getattr(_w, "range", 0) or 0) * (0.35 + 0.65 * _ratio)
+            # v2.9.2：不再只认蓄力武器 —— 任何武器/技能只要"要看的距离"
+            # 超出当前视口，就平滑拉远（全模式、全武器、全技能通用）
             else:
+                try:
+                    _wr = float(getattr(_w, "range", 0) or 0)
+                except Exception:
+                    _wr = 0.0
+                _want = max(_want, _wr * 0.5)
                 # 2) 瞄准距离（鼠标/摇杆方向上的瞄准点）
                 _aim = getattr(_p, "_aim_dist", 0.0)
                 try:

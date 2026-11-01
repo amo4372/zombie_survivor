@@ -279,6 +279,23 @@ class ShopMixin:
     SETUP_STEPS_SINGLE = ["map", "weapon_p1", "char_p1"]
     SETUP_STEPS_DUO = ["map", "weapon_p1", "char_p1", "weapon_p2", "char_p2"]
 
+    def begin_setup_flow(self):
+        """v2.9.2：从"开始游戏"进入分阶段流程（全模式通用）
+
+        此前 setup_flow_init 写好了却没人调用 —— 玩家点开始游戏仍是
+        直接跳到 EQUIP_SELECT 单页，新流程从未生效。
+        """
+        try:
+            self.setup_flow_init()
+            from config import GameState as _GS
+            _st = self.setup_state_for(self.setup_current_step)
+            if _st is not None:
+                self.state = _st
+                return True
+        except Exception:
+            pass
+        return False
+
     def setup_flow_init(self):
         """开始一局前的准备流程初始化"""
         try:
@@ -521,24 +538,11 @@ class ShopMixin:
             return 0
 
     def upgrade_weapon_shop(self, wt):
-        """局外升级武器（花费金币提升等级，最高5级）
+        """v2.9.2：武器不再能直接升级，只能靠重复抽取叠加等级（上限 5 级）。
 
-        v2.8.9：武器**获取**改为只能抽取，但已拥有的武器仍可花金币升级。
+        保留入口兼容旧调用点，一律返回 gacha_only（不扣金币、不升等级）。
         """
-        cur = self.records.get_weapon_level(wt.name)
-        if cur >= 5:
-            return "max"
-        next_lvl = cur + 1
-        price = int(WEAPON_PRICES.get(wt.name, 0) * 0.6 * next_lvl)
-        if price <= 0:
-            return "ok"
-        if self.records.get_coins() < price:
-            return "no_coin"
-        self.records.spend_coins(price)
-        self.records.upgrade_weapon_purchase(wt.name, next_lvl)
-        if self.selected_weapon == wt:
-            self.selected_weapon_level = next_lvl
-        return "ok"
+        return "gacha_only"
 
     def get_character_shop_rows(self):
         """返回角色商店行数据：[(name, price, owned, level, desc, ability, locked_reason)]"""

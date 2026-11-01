@@ -118,6 +118,14 @@ class SpaceZone:
             # 安全圈：圈**外**才受伤
             if _inside:
                 return 0.0, 0.0
+            # v2.9.2：此前"圈外"没有距离上限 —— 玩家跑到地图另一头
+            # 也在持续掉血，体感就是"判定很怪"。现在只在圈的影响范围内生效。
+            try:
+                _d = math.hypot(player.x - self.x, player.y - self.y)
+            except Exception:
+                _d = 0.0
+            if _d > self.radius * float(getattr(self, "safe_reach", 2.2)):
+                return 0.0, 0.0
             return self.dps * dt, 0.0
         if not _inside:
             return 0.0, 0.0
@@ -165,8 +173,8 @@ class SpaceZone:
 class BossZheng:
     """郑某 —— 空间系"""
 
-    #: 圈生成周期
-    ZONE_INTERVAL = 4.2
+    #: 圈生成周期（v2.9.2：4.2 → 6.5，此前过密导致"频率不正常"）
+    ZONE_INTERVAL = 6.5
     #: 低血量阈值（触发限制圈 + 弹幕）
     LOW_HP_RATIO = 0.35
 
@@ -185,13 +193,43 @@ class BossZheng:
         self.cage_zone = None
         self.bullets = []
 
+    # ---------------- 移动（v2.9.2：此前完全不动）----------------
+    MOVE_SPEED = 62.0
+    KEEP_DIST = 260.0
+
+    def _move_toward(self, players, dt):
+        _tp = None; _bd = 1e18
+        for _p in (players or []):
+            try:
+                _d = math.hypot(_p.x - self.x, _p.y - self.y)
+            except Exception:
+                continue
+            if _d < _bd:
+                _bd, _tp = _d, _p
+        if _tp is None:
+            return
+        _dx = _tp.x - self.x; _dy = _tp.y - self.y
+        _dist = math.hypot(_dx, _dy) or 1.0
+        if _dist > self.KEEP_DIST + 40:
+            _sx, _sy = _dx / _dist, _dy / _dist
+        elif _dist < self.KEEP_DIST - 40:
+            _sx, _sy = -_dx / _dist, -_dy / _dist
+        else:
+            _sx, _sy = -_dy / _dist, _dx / _dist
+        self.x += _sx * self.MOVE_SPEED * dt
+        self.y += _sy * self.MOVE_SPEED * dt
+        try:
+            self.facing_angle = math.degrees(math.atan2(_dy, _dx))
+        except Exception:
+            pass
+
     # ---------------- 圈生成 ----------------
     def _random_shape(self):
         return self.rng.choice([SHAPE_CIRCLE, SHAPE_TRIANGLE, SHAPE_RECT, SHAPE_HEART])
 
     def spawn_zones(self, players, count=None):
         """周期性生成一批范围圈"""
-        _n = count or self.rng.randint(2, 3)
+        _n = count or self.rng.randint(1, 2)
         for _ in range(_n):
             _kind = self.rng.choices(
                 [ZONE_DAMAGE, ZONE_SAFE, ZONE_HEAL],
@@ -259,6 +297,11 @@ class BossZheng:
         if not self.alive:
             return
         players = players or []
+        # v2.9.2：会移动（此前站着不动，脱离原有 Boss 框架）
+        try:
+            self._move_toward(players, dt)
+        except Exception:
+            pass
         # 生成圈
         self.zone_timer -= dt
         if self.zone_timer <= 0:
@@ -412,10 +455,43 @@ class BossHui:
         return math.hypot(x - self.freeze_center[0],
                           y - self.freeze_center[1]) <= self.freeze_radius
 
+    MOVE_SPEED = 78.0
+    KEEP_DIST = 300.0
+
+    def _move_toward(self, players, dt):
+        _tp = None; _bd = 1e18
+        for _p in (players or []):
+            try:
+                _d = math.hypot(_p.x - self.x, _p.y - self.y)
+            except Exception:
+                continue
+            if _d < _bd:
+                _bd, _tp = _d, _p
+        if _tp is None:
+            return
+        _dx = _tp.x - self.x; _dy = _tp.y - self.y
+        _dist = math.hypot(_dx, _dy) or 1.0
+        if _dist > self.KEEP_DIST + 40:
+            _sx, _sy = _dx / _dist, _dy / _dist
+        elif _dist < self.KEEP_DIST - 40:
+            _sx, _sy = -_dx / _dist, -_dy / _dist
+        else:
+            _sx, _sy = -_dy / _dist, _dx / _dist
+        self.x += _sx * self.MOVE_SPEED * dt
+        self.y += _sy * self.MOVE_SPEED * dt
+        try:
+            self.facing_angle = math.degrees(math.atan2(_dy, _dx))
+        except Exception:
+            pass
+
     def update(self, dt, players=None, now=0.0, player_bullets=None):
         if not self.alive:
             return None
         players = players or []
+        try:
+            self._move_toward(players, dt)
+        except Exception:
+            pass
         self.record(players, dt, now)
         self.rewind_cd -= dt
         self.ff_cd -= dt
