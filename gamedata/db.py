@@ -444,22 +444,7 @@ class GameDatabase:
     # ------------------------------------------------------------------
     # 领域读取（带内置兜底）
     # ------------------------------------------------------------------
-    def _merge_fallback(row, fallback):
-    """v2.8.9：用 fallback 补全 DB 行缺失的列
-
-    数据库 weapons 表可能没有 hold_charge / damage_vs_player 等新增列，
-    若直接以 DB 行为准，这些字段会静默丢失 → 蓄力武器退化成普通武器。
-    """
-    if not fallback:
-        return row
-    _out = dict(fallback)
-    for _k, _v in (row or {}).items():
-        if _v is not None:
-            _out[_k] = _v
-    return _out
-
-
-def weapon(self, weapon_type, fallback=None):
+    def weapon(self, weapon_type, fallback=None):
         """武器配置 → dict。数据库没这一行时返回 fallback（代码原值）"""
         _k = getattr(weapon_type, "name", str(weapon_type))
         _r = self.row("weapons", _k)

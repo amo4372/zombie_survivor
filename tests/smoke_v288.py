@@ -109,19 +109,24 @@ _LOCKED = {w["key"] for w in _pool[:2]}
 _g = WeaponGacha(_pool, unlocked=set(_LOCKED))
 check(len(_g.available()) == len(_pool) - len(_LOCKED),
       f"奖池仅含未解锁武器（{len(_g.available())}）")
-_w, _q = _g.draw_one()
+_r0 = _g.draw_one()
+_w = (_r0.get("weapon") if isinstance(_r0, dict) else _r0) if _r0 else None
 check(_w is not None, "奖池必出武器（非空）")
 check(_w["key"] not in _LOCKED, "不会抽到已解锁武器")
 _g2 = WeaponGacha(_pool, unlocked={w["key"] for w in _pool})
-check(_g2.pool_empty() and _g2.draw_one()[0] is None, "全解锁后奖池为空（不再抽）")
-check(_g.price(10) < _g.price(1) * 10, "十连有优惠")
+check(_g2.pool_empty() and _g2.draw_one() is None, "全解锁后奖池为空（不再抽）")
+check(_g.price(10) == _g.price(1) * 10, "十连 = 10×单抽（米哈游式，不额外打折）")
 # 品质概率：传说应最稀有
 import random as _rnd
 _rng = _rnd.Random(7)
 _g3 = WeaponGacha(_pool, unlocked=set(), rng=_rng)
 _cnt = {}
 for _ in range(400):
-    _w2, _q2 = _g3.draw_one()
+    _r1 = _g3.draw_one()
+    if _r1 is None:
+        break
+    _w2 = _r1.get("weapon") if isinstance(_r1, dict) else _r1
+    _q2 = _r1.get("quality") if isinstance(_r1, dict) else _q2
     if _w2 is None:
         break
     _cnt[_q2] = _cnt.get(_q2, 0) + 1
