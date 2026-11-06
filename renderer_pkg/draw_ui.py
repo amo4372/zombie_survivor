@@ -4419,7 +4419,10 @@ class UiMixin:
         _rb.visible = True
         if _db.update(mouse_pos, mouse_pressed, self.game.touch_events, scale):
             # v2.8.2：进入独立页面（不再用反人类的结算页浮层）
-            from config import GameState
+            # v2.9.10 修复：这里原先有一条函数内的局部导入语句，会让
+            # GameState 在整个函数里被编译成**局部变量**；玩家点
+            # "返回菜单"时没走这个分支，下方的 MENU 赋值就抛
+            # UnboundLocalError。模块顶部的通配导入已够用，直接删掉即可。
             self.game.show_death_detail = True
             self.game.death_detail_scroll = 0
             self.game.state = GameState.DEATH_DETAIL

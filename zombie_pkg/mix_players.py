@@ -1044,8 +1044,31 @@ class PlayerRegistryMixin:
             pass
 
     def _dmg_num(self, x, y, dmg, color):
+        """v2.9.10 修复：`DamageNumber` 实际定义在 ui_pkg.fx，
+        原写法 `from entities import DamageNumber` 必然 ImportError →
+        返回 None → 被 append 进 damage_numbers → 每帧 dn.update(dt)
+        抛 AttributeError（日志里 1309 次静默忽略 + 9 次崩溃全是它）。
+        现在按正确位置导入，且**永不返回 None**（兜底对象保证可 update/draw）。
+        """
         try:
-            from entities import DamageNumber
+            from ui_pkg.fx import DamageNumber
             return DamageNumber(x, y, dmg, color=color)
         except Exception:
-            return None
+            pass
+        try:
+            from ui import DamageNumber as _DN2
+            return _DN2(x, y, dmg, color=color)
+        except Exception:
+            pass
+        # 最后兜底：一个具备 update / is_alive / draw 的最小对象，
+        # 宁可显示不出数字，也绝不能把 None 塞进列表打崩主循环。
+        class _DummyDN:
+            def __init__(self):
+                self._t = 0.45
+            def update(self, dt):
+                self._t -= dt
+            def is_alive(self):
+                return self._t > 0
+            def draw(self, *a, **kw):
+                pass
+        return _DummyDN()

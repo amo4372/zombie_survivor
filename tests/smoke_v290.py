@@ -17,10 +17,12 @@ class _G(ShopMixin):
         s.started = False
     def start_game(s): s.started = True
 g = _G(duo=True); g.setup_flow_init()
-check(g.setup_steps == ["map","weapon_p1","char_p1","weapon_p2","char_p2"],
-      "同屏双人五步流程")
-check(g.setup_current_step == "map", "从地图页开始")
-_seq = ["map"]
+# v2.9.10 同步：用户要求"移除多人模式的地图选择页面"，
+# 双人流程由 5 步改为 4 步，直接从 P1 武器页开始（单人仍保留地图页）。
+check(g.setup_steps == ["weapon_p1","char_p1","weapon_p2","char_p2"],
+      "同屏双人四步流程（无地图页）")
+check(g.setup_current_step == "weapon_p1", "从 P1 武器页开始")
+_seq = ["weapon_p1"]
 while True:
     _n = g.setup_next()
     if _n is None: break
@@ -35,7 +37,7 @@ for _st in ("MAP_SELECT","WEAPON_SELECT_P1","CHARACTER_SELECT_P1",
             "WEAPON_SELECT_P2","CHARACTER_SELECT_P2"):
     check(hasattr(GS, _st), f"状态 {_st} 存在")
 check(g.setup_state_for("weapon_p2") == GS.WEAPON_SELECT_P2, "步骤→状态映射")
-g.setup_index = 4; check(g.setup_back() == "weapon_p2", f"可返回上一步（{g.setup_current_step}）")
+g.setup_index = 3; check(g.setup_back() == "weapon_p2", f"可返回上一步（{g.setup_current_step}）")
 
 print("[B] 信息页构建")
 import pygame; pygame.init()
@@ -62,7 +64,8 @@ check(fx.phase == GachaFx.PHASE_CHARGE, "进入蓄力")
 for _ in range(200): fx.update(0.05)
 check(not fx.active, "自动结束")
 fx2 = GachaFx(); fx2.play([{"star":4,"weapon":{"name":"x"},"is_up":False,"level":1}])
-fx2.skip(); check(fx2.phase == GachaFx.PHASE_REVEAL, "skip 跳到展示")
+# v2.9.7 起演出拆成 铺垫→闪光→揭示 三段，skip 逐段推进（不会一次跳完）
+fx2.skip(); check(fx2.phase == GachaFx.PHASE_FLASH, "skip 从铺垫推进到闪光")
 _shop = open("zombie_pkg/mix_shop.py", encoding="utf-8").read()
 check("self.gacha_fx" in _shop, "gacha_fx 已实例化")
 check("def update_gacha_fx" in _shop, "每帧更新入口")

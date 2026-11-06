@@ -146,7 +146,8 @@ check(all(g.records.is_weapon_owned((r.get("weapon") or {}).get("key")) for r in
       "抽到的武器已写入存档")
 # v2.8.9：未满级武器**仍留在池**（可重复抽取叠等级），只有满级才出池
 _n_before = len(g.gacha.available())
-check(_n_before == 32, "未解锁/未满级武器仍可再抽（叠等级）")
+# v2.9.10 同步：手雷/燃烧弹/烟雾弹改为投掷道具并移出奖池 → 32 变 29
+check(_n_before == 29, "未解锁/未满级武器仍可再抽（叠等级）")
 _k1 = (_res[0].get("weapon") or {}).get("key")
 g.gacha.levels[_k1] = 5
 check(not any((w.get("key") == _k1) for w in g.gacha.available()),

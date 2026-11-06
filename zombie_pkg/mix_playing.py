@@ -400,47 +400,80 @@ class PlayingMixin:
         return hit_any
 
     def _enemy_collide_damage(self, enemy, player, camera):
-        """近战碰撞伤害（P1/P2 共用）：推挤、伤害、盾反、debuff、震屏"""
-        if (not enemy.grappled) and enemy.get_rect().colliderect(player.get_rect()):
-            dx = enemy.x - player.x
-            dy = enemy.y - player.y
-            dist = math.hypot(dx, dy)
-            if dist > 0:
-                min_dist = enemy.size + player.size + 2
-                if dist < min_dist:
-                    push_x = (dx / dist) * (min_dist - dist) * 0.5
-                    push_y = (dy / dist) * (min_dist - dist) * 0.5
-                    enemy.x += push_x
-                    enemy.y += push_y
-                    player.x -= push_x
-                    player.y -= push_y
-            if enemy.knockdown_timer <= 0:
-                angle_to_enemy = math.atan2(dy, dx)
-                facing_rad = math.radians(player.facing_angle)
-                angle_diff = abs(math.atan2(math.sin(angle_to_enemy - facing_rad),
-                                           math.cos(angle_to_enemy - facing_rad)))
-                from_front = angle_diff < math.pi / 3
-                if player.riot_gear.equipped and from_front:
-                    shield_rect = player.riot_gear.get_shield_rect(player.x, player.y)
-                    if shield_rect and shield_rect.colliderect(enemy.get_rect()):
-                        push_back = 15
-                        enemy.x += math.cos(angle_to_enemy) * push_back
-                        enemy.y += math.sin(angle_to_enemy) * push_back
-                        player.take_damage(enemy.damage, "melee", True, enemy.x, enemy.y)
-                    else:
-                        player.take_damage(enemy.damage, "melee", from_front, enemy.x, enemy.y)
-                else:
-                    player.take_damage(enemy.damage, "melee", from_front, enemy.x, enemy.y)
-                etype = enemy.enemy_type
-                if etype == EnemyType.ZOMBIE_FAST and random.random() < 0.25:
-                    player.buff_manager.add_buff(BuffType.BLEED, duration=4.0)
-                elif etype == EnemyType.ZOMBIE_TANK and random.random() < 0.3:
-                    player.buff_manager.add_buff(BuffType.FRACTURE, duration=5.0)
-                elif etype == EnemyType.ZOMBIE_NORMAL and random.random() < 0.1:
-                    player.buff_manager.add_buff(BuffType.BLEED, duration=3.0)
-                player.ensure_safe_position(self.world)
-                if self.config.screen_shake and camera is not None:
-                    camera.shake(6, 0.4)
+        """近战伤害（P1/P2… 共用）
+
+        v2.9.10 重做：加入**攻击间隔**与**攻击范围**。
+
+        旧实现每帧只要 `colliderect` 就 `take_damage`，靠玩家 0.3s 无敌帧
+        限频；无敌帧按要求删除后，贴身僵尸每帧扣一次血 → 玩家瞬间暴毙。
+        现在：
+          · 物理推挤与伤害解耦（重叠才推开，不再等于挨打）
+          · 用**中心距离**判定攻击范围：`size_enemy + size_player + reach`，
+            擦身而过 / 矩形角擦边不再白扣血
+          · 每个 (敌人, 玩家) 独立 CD，CD 内不再结算，也不再刷 debuff/震屏
+        """
+        if enemy.grappled or not getattr(player, 'alive', True):
+            return
+        dx = enemy.x - player.x
+        dy = enemy.y - player.y
+        dist = math.hypot(dx, dy)
+
+        # ---- 1) 物理推挤：只有真正重叠才分离，与伤害判定解耦 ----
+        min_dist = enemy.size + player.size + 2
+        if dist > 0 and dist < min_dist:
+            push = (min_dist - dist) * 0.5
+            enemy.x += (dx / dist) * push
+            enemy.y += (dy / dist) * push
+            player.x -= (dx / dist) * push
+            player.y -= (dy / dist) * push
+
+        # ---- 2) 攻击范围（中心距离，而非矩形碰撞） ----
+        reach = float(getattr(enemy, 'melee_attack_reach', 10.0) or 10.0)
+        attack_range = enemy.size + player.size + reach
+        if dist > attack_range:
+            return
+
+        # ---- 3) 每个 (敌人, 玩家) 独立的攻击 CD ----
+        timers = getattr(enemy, 'melee_attack_timers', None)
+        if not isinstance(timers, dict):
+            timers = {}
+            enemy.melee_attack_timers = timers
+        _key = id(player)
+        if float(timers.get(_key, 0.0)) > 0:
+            return
+        if enemy.knockdown_timer > 0:
+            return
+        cd = max(0.15, float(getattr(enemy, 'melee_attack_cooldown', 1.2) or 1.2))
+        timers[_key] = cd
+
+        # ---- 4) 真正结算一次伤害（以下每帧只会进一次 / CD） ----
+        angle_to_enemy = math.atan2(dy, dx)
+        facing_rad = math.radians(player.facing_angle)
+        angle_diff = abs(math.atan2(math.sin(angle_to_enemy - facing_rad),
+                                    math.cos(angle_to_enemy - facing_rad)))
+        from_front = angle_diff < math.pi / 3
+        if player.riot_gear.equipped and from_front:
+            shield_rect = player.riot_gear.get_shield_rect(player.x, player.y)
+            if shield_rect and shield_rect.colliderect(enemy.get_rect()):
+                push_back = 15
+                enemy.x += math.cos(angle_to_enemy) * push_back
+                enemy.y += math.sin(angle_to_enemy) * push_back
+                player.take_damage(enemy.damage, "melee", True, enemy.x, enemy.y)
+            else:
+                player.take_damage(enemy.damage, "melee", from_front, enemy.x, enemy.y)
+        else:
+            player.take_damage(enemy.damage, "melee", from_front, enemy.x, enemy.y)
+        # debuff 也只在真实命中时按概率触发（旧版每帧 10% ≈ 必中）
+        etype = enemy.enemy_type
+        if etype == EnemyType.ZOMBIE_FAST and random.random() < 0.25:
+            player.buff_manager.add_buff(BuffType.BLEED, duration=4.0)
+        elif etype == EnemyType.ZOMBIE_TANK and random.random() < 0.3:
+            player.buff_manager.add_buff(BuffType.FRACTURE, duration=5.0)
+        elif etype == EnemyType.ZOMBIE_NORMAL and random.random() < 0.1:
+            player.buff_manager.add_buff(BuffType.BLEED, duration=3.0)
+        player.ensure_safe_position(self.world)
+        if self.config.screen_shake and camera is not None:
+            camera.shake(6, 0.4)
 
     def _update_playing(self, dt):
         # v2.2.3 争分夺秒加时反馈计时（HUD "+N 秒"淡出）
@@ -1587,7 +1620,7 @@ class PlayingMixin:
                     angle = random.uniform(0, math.pi * 2)
                     spawn_x = enemy.x + math.cos(angle) * 100
                     spawn_y = enemy.y + math.sin(angle) * 100
-                    minion = Enemy(spawn_x, spawn_y, random.choice([EnemyType.ZOMBIE_FAST, EnemyType.ZOMBIE_CRAWLER, EnemyType.ZOMBIE_SPITTER]), 1, self.difficulty)
+                    minion = Enemy(spawn_x, spawn_y, random.choice([EnemyType.ZOMBIE_FAST, EnemyType.ZOMBIE_CRAWLER, EnemyType.ZOMBIE_SPITTER]), 1, self.config.difficulty)
                     self.enemies.append(minion)
                     try:
                         _cu = codex_unlock_manager.unlock_monster(minion.enemy_type.name if hasattr(minion, "enemy_type") else minion.type.name)
@@ -1975,12 +2008,15 @@ class PlayingMixin:
                 self.particles.spawn_explosion(enemy.x, enemy.y, BLOOD_RED, 40)
 
             elif result == "queen_summon":
+                # v2.9.10：原写 self.difficulty —— Game 上没有这个属性，
+                # 只有 Config 有；经 PlayerRegistryMixin.__getattr__ 抛
+                # AttributeError: difficulty，导致 Boss 召唤直接崩帧。
                 # 尸潮女王召唤小怪
                 for _ in range(3):
                     angle = random.uniform(0, math.pi * 2)
                     spawn_x = enemy.x + math.cos(angle) * 80
                     spawn_y = enemy.y + math.sin(angle) * 80
-                    minion = Enemy(spawn_x, spawn_y, random.choice([EnemyType.ZOMBIE_NORMAL, EnemyType.ZOMBIE_FAST, EnemyType.ZOMBIE_CRAWLER]), 1, self.difficulty)
+                    minion = Enemy(spawn_x, spawn_y, random.choice([EnemyType.ZOMBIE_NORMAL, EnemyType.ZOMBIE_FAST, EnemyType.ZOMBIE_CRAWLER]), 1, self.config.difficulty)
                     self.enemies.append(minion)
                     try:
                         _cu = codex_unlock_manager.unlock_monster(minion.enemy_type.name if hasattr(minion, "enemy_type") else minion.type.name)
@@ -2573,8 +2609,17 @@ class PlayingMixin:
 
         if getattr(self, 'particles', None) is not None:
             self.particles.update(dt)
+        # v2.9.10：先剔除 None（任何路径误塞进来的都在这里兜住），
+        # 避免 `None.update()` 打断整帧 update。
+        if any(_d is None for _d in self.damage_numbers):
+            self.damage_numbers[:] = [_d for _d in self.damage_numbers
+                                      if _d is not None]
         for dn in self.damage_numbers[:]:
-            dn.update(dt)
+            try:
+                dn.update(dt)
+            except Exception:
+                self.damage_numbers.remove(dn)
+                continue
             if not dn.is_alive():
                 self.damage_numbers.remove(dn)
         for ft in self.floating_texts[:]:

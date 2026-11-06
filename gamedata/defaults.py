@@ -235,12 +235,42 @@ def extract_weapons():
                                      func_name="_setup_weapon", var_name="configs")
 
 
+def enemy_melee_defaults(etype_name, config):
+    """v2.9.10：近战攻击间隔 / 攻击范围余量的**唯一默认值来源**
+
+    enemy.py 与数据库播种都调用这里，避免两处规则分叉。
+    策划在数据库 enemies 表 extra 里改这两个键即可覆盖（数据库权威）。
+    """
+    _cd = 1.2
+    if (config.get("is_boss") or config.get("is_titan")
+            or config.get("is_elite")):
+        _cd = 1.6
+    elif str(etype_name) in ("ZOMBIE_FAST", "ZOMBIE_CRAWLER", "ZOMBIE_LEAPER",
+                             "ZOMBIE_GHOUL", "ZOMBIE_BERSERKER"):
+        _cd = 0.9
+    elif config.get("is_ranged") or config.get("can_throw"):
+        _cd = 1.4
+    return _cd, 10.0
+
+
 def extract_enemies():
-    """从 entities_pkg/enemy.py 抽取敌人基础配置"""
+    """从 entities_pkg/enemy.py 抽取敌人基础配置
+
+    v2.9.10：AST 只能看到 base_configs 字面量，看不到运行时注入的字段；
+    这里把近战攻击参数显式补进每个条目，确保它们会写进数据库 extra，
+    策划能在数据库软件里直接编辑。
+    """
     import os
     _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    return _extract_dict_from_source(os.path.join(_root, "entities_pkg", "enemy.py"),
+    _out = _extract_dict_from_source(os.path.join(_root, "entities_pkg", "enemy.py"),
                                      func_name=None, var_name="base_configs")
+    for _k, _cfg in _out.items():
+        if not isinstance(_cfg, dict):
+            continue
+        _cd, _reach = enemy_melee_defaults(_k, _cfg)
+        _cfg.setdefault("melee_attack_cooldown", _cd)
+        _cfg.setdefault("melee_attack_reach", _reach)
+    return _out
 
 
 def extract_buffs():

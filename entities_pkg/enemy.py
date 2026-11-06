@@ -47,6 +47,9 @@ class Enemy:
         self.throw_cd = random.uniform(7.0, 11.0)  # 投掷道具CD
         self.buff_damage_events = []
         self._setup_enemy()
+        # v2.9.10：每名玩家独立的近战攻击 CD（key = id(player)）。
+        # 一个僵尸咬了 P1 不应妨碍它咬 P2，P1..Pn 在数据层平等。
+        self.melee_attack_timers = {}
         # Boss控制抗性设置（在_setup_enemy后设置is_boss）
         if getattr(self, 'is_boss', False):
             self.control_resistance = 0.85  # Boss 85%概率免疫控制
@@ -301,6 +304,21 @@ class Enemy:
             config = _gdb.enemy(self.enemy_type, fallback=config)
         except Exception:
             pass
+        # ---- v2.9.10：近战攻击间隔 + 攻击范围 ----
+        # 以前靠玩家 0.3s 无敌帧给近战限频；无敌帧删除后变成**每帧扣血**，
+        # 玩家贴一下就暴毙。现在每个僵尸自己有攻击 CD 和明确的攻击距离。
+        # 两个字段落在 config 里 → 会自动进数据库 enemies 表的 extra，
+        # 策划可直接在数据库软件里按僵尸类型调整（数据库权威）。
+        _en = getattr(self.enemy_type, "name", str(self.enemy_type))
+        try:
+            from gamedata.defaults import enemy_melee_defaults
+            _cd, _reach = enemy_melee_defaults(_en, config)
+        except Exception:
+            _cd, _reach = 1.2, 10.0
+        # 数据库 extra 里若已有策划设定值，setdefault 不会覆盖它
+        config.setdefault("melee_attack_cooldown", _cd)
+        # 攻击距离余量：中心距离 <= size_enemy + size_player + reach 才够得着
+        config.setdefault("melee_attack_reach", _reach)
         for k, v in config.items():
             setattr(self, k, v)
 
@@ -328,6 +346,18 @@ class Enemy:
         self.anim_timer = 0
 
     def update(self, dt, player_x, player_y, player, world=None):
+        # v2.9.10：推进每名玩家的近战攻击 CD
+        _mt = getattr(self, "melee_attack_timers", None)
+        if _mt:
+            for _pk in list(_mt.keys()):
+                _left = _mt[_pk] - dt
+                if _left <= 0:
+                    del _mt[_pk]
+                else:
+                    _mt[_pk] = _left
+            # 防御：玩家对象重建后旧 id 会残留，条目过多时整体重置
+            if len(_mt) > 12:
+                _mt.clear()
         # 更新Buff系统（持续伤害/治疗等）
         _, self.buff_damage_events = self.buff_manager.update(dt, self)
         # DOT致死安全检查：确保持续伤害能杀死怪物
