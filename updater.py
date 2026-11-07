@@ -241,14 +241,10 @@ def check_for_updates(timeout=6):
         if download_url:
             download_url = _gh_proxy_url(download_url, mirror=UPDATE_STATE.get("mirror"))
 
-        # v2.8.1 增量更新：记录 manifest.json 资产地址（用于只下载变化的文件）
-        _manifest_url = None
-        for asset in assets:
-            if asset.get("name", "").lower() == "manifest.json":
-                _manifest_url = _gh_proxy_url(asset.get("browser_download_url"),
-                                              mirror=UPDATE_STATE.get("mirror"))
-                break
-        UPDATE_STATE["manifest_url"] = _manifest_url
+        # v2.9.13：增量更新已移除，不再读取 Release 的 manifest.json 资产。
+        # 注意：包内 assets/manifest.json 是「资源完整性清单」，仍由 verify_assets 使用，
+        # 与增量更新无关，保持不变。
+        UPDATE_STATE["manifest_url"] = None
 
         # v2.8.5：记录策划数值库资产地址（可选；用于把改好的数值随版本分发）
         UPDATE_STATE["gamedata_url"] = None
@@ -489,22 +485,7 @@ def handle_boot_failure(error_text="", status_cb=None, progress_cb=None):
         _ver, _tag = _rb
         if status_cb:
             status_cb(f"正在回退到 v{_ver}...")
-        # 优先增量（差异文件少），失败再全量
-        try:
-            UPDATE_STATE["manifest_url"] = None
-            _r = _release_api(f"/releases/tags/{_tag}")
-            for _a in _r.get("assets", []):
-                if str(_a.get("name", "")).lower() == "manifest.json":
-                    UPDATE_STATE["manifest_url"] = _gh_proxy_url(
-                        _a.get("browser_download_url"), mirror=UPDATE_STATE.get("mirror"))
-                    break
-            _inc_ok, _ic, _ip = try_incremental_update(_ver, progress_cb=progress_cb, status_cb=None)
-            if _inc_ok:
-                if status_cb:
-                    status_cb(f"已回退到 v{_ver}，即将重启")
-                return True
-        except Exception:
-            pass
+        # v2.9.13：回退版本同样直接走完整包（增量已移除）
         _zip = download_version_zip(_tag, progress_cb)
         if _zip:
             try:
@@ -1410,6 +1391,14 @@ def sync_gamedata(status_cb=None):
 
 
 def try_incremental_update(latest_version, progress_cb=None, status_cb=None):
+    """[已移除 v2.9.13] 增量更新。
+
+    实测：manifest 比对 + 逐文件下载 + 残留清理 + 应用后复查，环节多、
+    弱网下任一环失败都要回退全量，收益却只有几十 KB。已统一改为完整包。
+    保留此函数仅为兼容旧调用点，永远返回失败，由调用方走全量。
+    """
+    return False, 0, 0
+    # ---- 以下为历史实现（保留供查阅，不执行） ----
     """尝试增量更新。返回 (是否成功, 已应用文件数, pending数)
 
     失败时（拿不到 manifest / 下载异常 / 变化文件过多）返回 (False, 0, 0)，
@@ -1563,30 +1552,12 @@ def perform_full_update(progress_cb=None, status_cb=None):
         if status_cb:
             status_cb(f"发现新版本 v{latest_version}，开始下载...")
 
-        # 2. v2.8.1：优先增量更新（只下载真正变化的文件）
-        _inc_ok, _inc_applied, _inc_pending = try_incremental_update(
-            latest_version, progress_cb=progress_cb, status_cb=status_cb)
-        if _inc_ok:
-            if status_cb:
-                _n = UPDATE_STATE.get("incremental_files", 0)
-                if _n == 0:
-                    status_cb(f"无需下载，已是最新文件，新版本 v{latest_version}")
-                else:
-                    status_cb(f"增量更新成功！下载 {_n} 个文件，应用 {_inc_applied} 个，"
-                              f"新版本 v{latest_version}，即将重启...")
-            try:
-                sync_gamedata(status_cb=status_cb)
-            except Exception:
-                pass
-            cleanup_cache()
-            time.sleep(2)
-            restart_game()
-            return
-        # 增量不可用 → 回退全量包
+        # v2.9.13：增量更新已移除（实测收益低、环节多易出错）。
+        # 点「下载并更新」一律走完整包，一次下载、一次覆盖、一次校验。
         UPDATE_STATE["force_update"] = False
         UPDATE_STATE["error"] = None
         if status_cb:
-            status_cb("增量更新不可用，改为下载完整更新包...")
+            status_cb("正在下载完整更新包...")
 
         zip_path = download_update(download_url, progress_callback=progress_cb, version=latest_version)
         if not zip_path:

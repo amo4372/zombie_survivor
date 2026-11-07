@@ -156,14 +156,15 @@ class Config:
                     self.update_auto_check = data.get("update_auto_check", True)
                     _hl = data.get("hud_layout", {})
                     if isinstance(_hl, dict):
-                        self.hud_layout = {k: list(v) for k, v in _hl.items() if isinstance(v, (list, tuple)) and len(v) == 2}
+                        self.hud_layout = {k: list(v) for k, v in _hl.items() if isinstance(v, (list, tuple)) and len(v) >= 2}
                     _p1 = data.get("mp_p1_layout", {})
                     if isinstance(_p1, dict):
                         self.mp_p1_layout = {k: list(v) for k, v in _p1.items() if isinstance(v, (list, tuple)) and len(v) == 2}
                     _p2 = data.get("p2_hud_layout", {})
                     if isinstance(_p2, dict):
-                        self.p2_hud_layout = {k: list(v) for k, v in _p2.items() if isinstance(v, (list, tuple)) and len(v) == 2}
+                        self.p2_hud_layout = {k: list(v) for k, v in _p2.items() if isinstance(v, (list, tuple)) and len(v) >= 2}
                     self.hud_layout_version = data.get("hud_layout_version", 0)
+                    self.hud_bars = data.get("hud_bars", self.hud_bars)
                     # v2.5.7 多人房间配置持久化
                     _mrc = data.get("mp_room_cfgs", {})
                     if isinstance(_mrc, dict):
@@ -191,6 +192,7 @@ class Config:
             "enable_logging": self.enable_logging,
             "update_auto_check": self.update_auto_check,
             "hud_layout": self.hud_layout,
+            "hud_bars": getattr(self, "hud_bars", {}),
             "mp_p1_layout": self.mp_p1_layout,
             "p2_hud_layout": self.p2_hud_layout,
             "hud_layout_version": getattr(self, 'hud_layout_version', 2),
@@ -332,6 +334,7 @@ class GameCore:
         self.rune_buffs = {}  # 符文永久buff（局内）
         self.exp_orbs = []
         self.damage_numbers = []
+        self._damage_merge = {}   # v2.9.13：merge_key -> [上次时间, DamageNumber]
         self.floating_texts = []
         self.slash_arcs = []  # 刀光弧斩特效（死神镰刀横扫/处决/枪械曳光）
         # v2.9.12：近战多段连斩 + 剑气统一渲染系统
@@ -370,6 +373,12 @@ class GameCore:
         # 被跳过、输入与渲染也只认一个 selector —— 就是"卡住干等"的根因。
         self._upgrade_pause_player = None
         self.hud_layout_feedback = None  # HUD布局保存/重置的屏幕反馈提示
+        # v2.9.13：血条/体力条样式（缩放、透明度），HUD 编辑页可调
+        self.hud_bars = getattr(self.config, "hud_bars", None) or {
+            "hp": {"scale": 1.0, "alpha": 255},
+            "stamina": {"scale": 1.0, "alpha": 255},
+        }
+        self.config.hud_bars = self.hud_bars
         self.skill_tree_renderer = SkillTreeRenderer()
         # 加载 mod
         try:
@@ -1370,6 +1379,10 @@ class GameCore:
             self.projectiles = []
             self.exp_orbs = []
             self.damage_numbers = []
+            try:
+                self._damage_merge.clear()
+            except Exception:
+                self._damage_merge = {}
             self.floating_texts = []
             self.slash_arcs = []
             try:
@@ -1628,11 +1641,68 @@ class GameCore:
         except Exception:
             return self.player
 
+    @staticmethod
+    def incoming_angle_of(proj):
+        """由投射物速度反推「玩家→攻击者」方向（度），供盾牌/格挡判定。
+
+        命中瞬间 attack_x/y 是弹丸当前位置，已贴在玩家身边，角度近乎随机 ——
+        这是旧版盾牌"判定与面朝方向相反"的根因。
+        """
+        try:
+            vx, vy = float(proj.vx or 0), float(proj.vy or 0)
+            if math.hypot(vx, vy) > 1e-3:
+                return math.degrees(math.atan2(-vy, -vx)) % 360.0
+            ex, ey = getattr(proj, "laser_end_x", None), getattr(proj, "laser_end_y", None)
+            if ex is not None and ey is not None:
+                return math.degrees(math.atan2(proj.y - ey, proj.x - ex)) % 360.0
+        except Exception:
+            pass
+        return None
+
+    # ==================== v2.9.13 伤害数字合并 ====================
+    def spawn_damage(self, x, y, damage, merge_key=None, color=None,
+                     is_crit=False, damage_type="normal"):
+        """生成伤害数字；merge_key 相同且 0.5s 内连续命中时累加成一个跳动数字。
+
+        用于轨道炮这类「1 帧 1 伤」的持续光束：不会刷出几百个数字，
+        而是同一个数字不断跳大，玩家一眼看出累计伤害。
+        """
+        try:
+            if not getattr(self.config, "show_damage_numbers", True):
+                return None
+            import time as _t
+            now = _t.time()
+            if merge_key is not None:
+                rec = self._damage_merge.get(merge_key)
+                if rec and (now - rec[0]) < 0.5:
+                    dn = rec[1]
+                    if dn in self.damage_numbers and dn.is_alive():
+                        dn.add(damage)
+                        dn.x, dn.y = x, y
+                        rec[0] = now
+                        return dn
+            dn = DamageNumber(x, y, damage, color=color, is_crit=is_crit,
+                              damage_type=damage_type)
+            dn.merge_key = merge_key
+            self.damage_numbers.append(dn)
+            if merge_key is not None:
+                self._damage_merge[merge_key] = [now, dn]
+                if len(self._damage_merge) > 64:
+                    for k in list(self._damage_merge)[:16]:
+                        self._damage_merge.pop(k, None)
+            return dn
+        except Exception:
+            return None
+
     # ==================== v2.5.2 钩爪玩家锁定辅助 ====================
     def _pvp_dmg_to_player(self, base, owner_proj=None):
         """v2.5.5 PvP 玩家互伤：默认大幅削减（×0.2 防止死太快）；
         单发特高伤武器（AWM/轨道炮，pvp_no_atten）不作衰减反而小幅加强（×1.2）"""
         try:
+            # v2.9.13：damage_vs_player 是策划设定的 PvP 权威值，优先于通用系数
+            _dv = getattr(owner_proj, 'damage_vs_player', None)
+            if _dv is not None:
+                return int(_dv)
             _no = bool(getattr(owner_proj, 'pvp_no_atten', False))
             return int(base * (1.2 if _no else 0.2))
         except Exception:

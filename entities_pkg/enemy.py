@@ -318,28 +318,28 @@ class Enemy:
             },
         }
 
-        config = base_configs.get(self.enemy_type, base_configs[EnemyType.ZOMBIE_NORMAL])
-        # v2.8.3 数据与行为分离：以数据库 enemies 表为准，缺失时回退内置值
+        # v2.9.13 模板化：数值 / 近战参数 / 统一行为全部由模板层给出。
+        # 优先级：SQLite enemies 表(extra 覆盖) > 内置模板 > 旧 base_configs 兜底。
+        # base_configs 保留仅为兼容旧存档与老测试，不再是数值来源。
         try:
-            from gamedata import db as _gdb
-            config = _gdb.enemy(self.enemy_type, fallback=config)
+            from entities_pkg.templates import resolve_config, template_for
+            config, self.behavior = resolve_config(
+                self.enemy_type,
+                fallback=base_configs.get(self.enemy_type,
+                                          base_configs[EnemyType.ZOMBIE_NORMAL]))
+            self.template = template_for(self.enemy_type)
         except Exception:
-            pass
-        # ---- v2.9.10：近战攻击间隔 + 攻击范围 ----
-        # 以前靠玩家 0.3s 无敌帧给近战限频；无敌帧删除后变成**每帧扣血**，
-        # 玩家贴一下就暴毙。现在每个僵尸自己有攻击 CD 和明确的攻击距离。
-        # 两个字段落在 config 里 → 会自动进数据库 enemies 表的 extra，
-        # 策划可直接在数据库软件里按僵尸类型调整（数据库权威）。
-        _en = getattr(self.enemy_type, "name", str(self.enemy_type))
-        try:
-            from gamedata.defaults import enemy_melee_defaults
-            _md = enemy_melee_defaults(_en, config)
-        except Exception:
-            _md = {"melee_attack_cooldown": 1.2, "melee_attack_reach": 10.0,
-                   "melee_windup": 0.35, "melee_recover": 0.25}
-        # 数据库 extra 里若已有策划设定值，setdefault 不会覆盖它
-        for _mk, _mv in _md.items():
-            config.setdefault(_mk, _mv)
+            config = base_configs.get(self.enemy_type,
+                                      base_configs[EnemyType.ZOMBIE_NORMAL])
+            _en = getattr(self.enemy_type, "name", str(self.enemy_type))
+            try:
+                from gamedata.defaults import enemy_melee_defaults
+                _md = enemy_melee_defaults(_en, config)
+            except Exception:
+                _md = {"melee_attack_cooldown": 1.2, "melee_attack_reach": 10.0,
+                       "melee_windup": 0.35, "melee_recover": 0.25}
+            for _mk, _mv in _md.items():
+                config.setdefault(_mk, _mv)
         for k, v in config.items():
             setattr(self, k, v)
 
@@ -389,6 +389,15 @@ class Enemy:
         return max(0.0, min(1.0, 1.0 - self.melee_state_timer / _tot))
 
     def update(self, dt, player_x, player_y, player, world=None):
+        # v2.9.13：战术层选出的目标（多玩家时不再永远只追 P1）
+        _tt = getattr(self, "_tactical_target", None)
+        if _tt is not None and getattr(_tt, "alive", True) \
+                and not getattr(_tt, "downed", False):
+            try:
+                player = _tt
+                player_x, player_y = float(_tt.x), float(_tt.y)
+            except Exception:
+                pass
         # ---- v2.9.12：结构化状态推进（流血/燃烧/中毒每 0.5s 结算一次 DOT） ----
         try:
             _st = getattr(self, 'status', None)

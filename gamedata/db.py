@@ -299,6 +299,18 @@ class GameDatabase:
             #   1) 版本号变了（新版本新增了表/行）
             #   2) 关键表行数不足（用户删过行 / 建库时漏了）——只读检查，开销极小
             _need = (str(_prev) != str(_cur))
+            # v2.9.13：数据版本（DATA_VERSION）独立于游戏版本号。
+            # 否则"代码数值改了但游戏版本号没再变"时不会二次同步，
+            # 玩家端数据库仍停在旧数值 —— 表现为改了代码却不生效。
+            try:
+                _dvr = conn.execute(
+                    "SELECT value FROM meta WHERE key='data_version'").fetchone()
+                _dv_prev = str(_dvr[0]) if _dvr else "0"
+                from .seed import DATA_VERSION as _DATA_VER
+                if _dv_prev != str(_DATA_VER):
+                    _need = True
+            except Exception:
+                pass
             if not _need:
                 try:
                     from . import defaults as _D
@@ -342,6 +354,12 @@ class GameDatabase:
                 self._sync_stats = (0, 0, 0)
             conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)",
                          ("seed_version", str(_cur)))
+            try:
+                from .seed import DATA_VERSION as _DATA_VER2
+                conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)",
+                             ("data_version", str(_DATA_VER2)))
+            except Exception:
+                pass
             conn.commit()
             self._last_sync = (_prev, _cur)
             return f"synced({_prev}->{_cur})"

@@ -68,6 +68,10 @@ class DamageNumber:
         self.damage_type = damage_type
         self.is_crit = is_crit
         self._surf_cache = None  # 渲染缓存：字体surface只生成一次，避免大伤害时每帧重渲染
+        # v2.9.13 快速连续伤害合并：同一 merge_key 在 0.5s 窗口内累加，
+        # 数字每次跳动一下（轨道炮 1 帧 1 伤不会刷出 500 个数字）
+        self.pulse = 0.0
+        self.merge_key = None
         # 暴击优先用暴击色
         if is_crit:
             self.color = self.TYPE_COLORS["crit"]
@@ -99,10 +103,23 @@ class DamageNumber:
         if self.is_dot:
             self.size_mult *= 1.15
 
+    def add(self, amount):
+        """合并一次伤害：数值累加、寿命刷新、触发跳动动画"""
+        try:
+            self.damage = float(self.damage) + float(amount)
+        except Exception:
+            self.damage = float(amount)
+        self.lifetime = 1.0
+        self.vy = -2
+        self.pulse = 1.0
+        self._surf_cache = None      # 文字变了，缓存必须失效
+        return self.damage
+
     def update(self, dt):
         self.y += self.vy * dt * 60
         self.vy += 0.05 * dt * 60
         self.lifetime -= dt
+        self.pulse = max(0.0, self.pulse - dt * 4.5)
 
     def draw(self, screen, font, camera_x=0, camera_y=0, scale=1.0):
         alpha = int(255 * self.lifetime)
@@ -116,8 +133,26 @@ class DamageNumber:
                 new_w = max(4, int(orig_w * self.size_mult))
                 new_h = max(4, int(orig_h * self.size_mult))
                 text_surf = pygame.transform.smoothscale(text_surf, (new_w, new_h))
+            # 字号随累计值变化（大数字更大）
+            base = self.size_mult
+            if self.damage >= 100:
+                base = max(base, 1.65)
+            if self.damage >= 300:
+                base = max(base, 2.0)
+            if base != self.size_mult and text_surf.get_size()[0] > 0:
+                _o = text_surf.get_size()
+                text_surf = pygame.transform.smoothscale(
+                    text_surf, (max(4, int(_o[0] * base / self.size_mult)),
+                                max(4, int(_o[1] * base / self.size_mult))))
             self._surf_cache = text_surf
         text_surf = self._surf_cache
+        # 跳动：脉冲期间放大一点点（小 Surface，开销可忽略）
+        if self.pulse > 0.01:
+            try:
+                _k = 1.0 + 0.34 * self.pulse
+                text_surf = pygame.transform.rotozoom(text_surf, 0, _k)
+            except Exception:
+                pass
         text_surf.set_alpha(alpha)
         px = int((self.x - camera_x) * scale)
         py = int((self.y - camera_y) * scale)

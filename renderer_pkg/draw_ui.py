@@ -2988,6 +2988,7 @@ class UiMixin:
                     rect, (bx, by), r = _rect_for(ctrl, radius)
                     if rect.collidepoint(e["pos"]):
                         self.game.hud_edit_drag = {"key": key, "touch_id": e.get("id")}
+                        self.game.hud_edit_selected = key
                         break
             elif e["type"] == "move":
                 _drag = getattr(self.game, "hud_edit_drag", None)
@@ -3020,6 +3021,7 @@ class UiMixin:
                 rect, (bx, by), r = _rect_for(ctrl, radius)
                 if rect.collidepoint(mouse_pos):
                     self.game.hud_edit_drag = {"key": key, "touch_id": None}
+                    self.game.hud_edit_selected = key
                     break
 
         # 3) 绘制控件（半透明框 + 名称）
@@ -3040,6 +3042,64 @@ class UiMixin:
             if side == "below" or lbl_y < int(20 * scale):
                 lbl_y = by + r + 22
             self.screen.blit(lbl, lbl.get_rect(center=(bx, lbl_y)))
+
+        # ---- v2.9.13 样式调整：按钮尺寸 / 透明度 / 血条体力条 ----
+        _sel = getattr(self.game, "hud_edit_selected", None)
+        _btarget = getattr(self.game, "hud_edit_bar_target", "button")
+        _item_map = {it[0]: it[2] for it in items if len(it) >= 3}
+        _adj_y = int(sh - 132 * scale)
+        _adj_w = int(96 * scale)
+        _adj_h = int(36 * scale)
+        _adj_x0 = int(sw // 2 - 2.5 * _adj_w - 8 * scale)
+        _adj_defs = [
+            ("尺寸 -", "size_dn"), ("尺寸 +", "size_up"),
+            ("透明 -", "alpha_dn"), ("透明 +", "alpha_up"),
+            ("切目标", "switch"),
+        ]
+        for _i, (_lab, _act) in enumerate(_adj_defs):
+            _r = pygame.Rect(int(_adj_x0 + _i * (_adj_w + 8 * scale)), _adj_y,
+                             _adj_w, _adj_h)
+            pygame.draw.rect(self.screen, (45, 70, 105), _r, border_radius=6)
+            pygame.draw.rect(self.screen, (170, 205, 245), _r, 1, border_radius=6)
+            _t = self.game.font_small.render(_lab, True, (225, 240, 255))
+            self.screen.blit(_t, _t.get_rect(center=_r.center))
+            if self._clicked(_r, mouse_pos, mouse_pressed, touches, "hud_" + _act):
+                self.game.hud_edit_dirty = True
+                if _act == "switch":
+                    _order = ["button", "hp", "stamina"]
+                    self.game.hud_edit_bar_target = _order[
+                        (_order.index(_btarget) + 1) % len(_order)]
+                    _btarget = self.game.hud_edit_bar_target
+                elif _btarget in ("hp", "stamina"):
+                    _d = self.game.hud_bars.setdefault(
+                        _btarget, {"scale": 1.0, "alpha": 255})
+                    if _act == "size_dn":
+                        _d["scale"] = max(0.6, round(_d["scale"] - 0.1, 2))
+                    elif _act == "size_up":
+                        _d["scale"] = min(1.8, round(_d["scale"] + 0.1, 2))
+                    elif _act == "alpha_dn":
+                        _d["alpha"] = max(60, _d["alpha"] - 25)
+                    else:
+                        _d["alpha"] = min(255, _d["alpha"] + 25)
+                else:
+                    _c = _item_map.get(_sel)
+                    if _c is not None:
+                        if _act == "size_dn":
+                            _c.size_scale = max(0.5, round(
+                                float(getattr(_c, "size_scale", 1.0)) - 0.1, 2))
+                        elif _act == "size_up":
+                            _c.size_scale = min(2.0, round(
+                                float(getattr(_c, "size_scale", 1.0)) + 0.1, 2))
+                        elif _act == "alpha_dn":
+                            _c.alpha = max(40, int(getattr(_c, "alpha", 255)) - 25)
+                        else:
+                            _c.alpha = min(255, int(getattr(_c, "alpha", 255)) + 25)
+        _tip2 = self.game.font_small.render(
+            "当前调整: %s%s" % (
+                {"button": "按钮", "hp": "血条", "stamina": "体力条"}.get(_btarget, "按钮"),
+                ("（选中 %s）" % _sel) if _btarget == "button" and _sel else ""),
+            True, (180, 210, 240))
+        self.screen.blit(_tip2, _tip2.get_rect(center=(sw // 2, _adj_y - int(14 * scale))))
 
         # 4) 底部操作按钮：保存 / 重置 / 返回
         by0 = int(sh - int(70 * scale))

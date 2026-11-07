@@ -21,15 +21,54 @@ _PLAYING_STATES = ("PLAYING",)
 
 class BlockMixin:
     # ------------------------------------------------------------ 基础
-    def _block_stick_geom(self):
+    def _block_stick_geom(self, player=None, viewport_x=0):
         s = float(getattr(self, "scale", 1.0) or 1.0)
-        return (BLOCK_STICK_X * s, BLOCK_STICK_Y * s, BLOCK_STICK_R * s)
+        p2 = getattr(self, "player2", None)
+        # 同屏双人：P1 摇杆在左半屏右下，P2 在右半屏右下
+        if player is not None and getattr(self, "multiplayer_mode", "") == "same_screen" \
+                and p2 is not None:
+            sw = float(getattr(self, "scaled_width", 1280 * s) or 1280 * s)
+            if player is p2:
+                return (sw - (1280 - BLOCK_STICK_X) * s, BLOCK_STICK_Y * s,
+                        BLOCK_STICK_R * s)
+            return (sw * 0.5 - (1280 - BLOCK_STICK_X) * s, BLOCK_STICK_Y * s,
+                    BLOCK_STICK_R * s)
+        return (BLOCK_STICK_X * s + viewport_x, BLOCK_STICK_Y * s, BLOCK_STICK_R * s)
+
+    # ---------- 常驻格挡 CD（键控也能看见） ----------
+    def draw_block_cd(self, screen, player, x, y, scale=1.0, font=None):
+        """血条旁的格挡冷却圆环 + 剩余秒数。每位玩家各画一份。"""
+        blk = getattr(player, "block", None) if player else None
+        if blk is None:
+            return
+        try:
+            r = max(14, int(22 * scale))
+            cx, cy = int(x), int(y)
+            cd = float(getattr(blk, "cooldown", 0.0) or 0.0)
+            tot = max(0.01, float(getattr(blk, "cooldown_total", 1.0) or 1.0))
+            active = bool(getattr(blk, "active", False))
+            col = (110, 200, 255) if active else ((140, 80, 80) if cd > 0 else (80, 110, 140))
+            pygame.draw.circle(screen, (18, 24, 34), (cx, cy), r)
+            pygame.draw.circle(screen, col, (cx, cy), r, max(2, int(3 * scale)))
+            if cd > 0:
+                frac = min(1.0, cd / tot)
+                pygame.draw.arc(screen, (255, 120, 90),
+                                pygame.Rect(cx - r, cy - r, r * 2, r * 2),
+                                -math.pi / 2, -math.pi / 2 + math.pi * 2 * frac,
+                                max(2, int(4 * scale)))
+            if font:
+                txt = f"{cd:.1f}s" if cd > 0 else ("挡" if active else "格挡")
+                lab = font.render(txt, True, (225, 235, 250))
+                screen.blit(lab, (cx - lab.get_width() // 2, cy + r + 2))
+        except Exception:
+            pass
 
     def _block_owner_for_pos(self, pos):
         """分屏时按左右半屏决定驱动哪位玩家"""
         p2 = getattr(self, "player2", None)
-        if (getattr(self, "multiplayer_mode", "") == "same_screen"
-                and p2 is not None and getattr(self, "split_screen", False)):
+        # v2.9.13：不再依赖可能不存在的 split_screen 属性 —— 只要同屏双人
+        # 有 P2，就按左右半屏分配格挡摇杆（此前 P2 触控永远驱动 P1）。
+        if p2 is not None and getattr(self, "multiplayer_mode", "") == "same_screen":
             try:
                 return p2 if pos[0] >= self.scaled_width * 0.5 else self.player
             except Exception:
@@ -48,18 +87,18 @@ class BlockMixin:
         """从统一事件流调用（down / move / up）"""
         if not self._is_playing():
             return
-        try:
-            cx, cy, r = self._block_stick_geom()
-        except Exception:
-            return
         ids = getattr(self, "_block_touch_ids", None)
         if ids is None:
             ids = self._block_touch_ids = {}
         if kind == "down":
-            if math.hypot(pos[0] - cx, pos[1] - cy) > r:
-                return
             pl = self._block_owner_for_pos(pos)
             if pl is None or getattr(pl, "block", None) is None:
+                return
+            try:
+                cx, cy, r = self._block_stick_geom(pl)
+                if math.hypot(pos[0] - cx, pos[1] - cy) > r:
+                    return
+            except Exception:
                 return
             ids[fid] = pl
             ang = math.degrees(math.atan2(pos[1] - cy, pos[0] - cx))
@@ -135,7 +174,7 @@ class BlockMixin:
         self._block_key_held = set()
 
     # ------------------------------------------------------------ 渲染：摇杆
-    def draw_block_stick(self, screen, font, scale=1.0):
+    def draw_block_stick(self, screen, font, scale=1.0, player=None):
         """HUD 上的格挡摇杆（仅触控模式显示）"""
         try:
             from config import ControlMode
@@ -144,8 +183,8 @@ class BlockMixin:
                 return
         except Exception:
             pass
-        cx, cy, r = self._block_stick_geom()
-        pl = getattr(self, "player", None)
+        cx, cy, r = self._block_stick_geom(player)
+        pl = player or getattr(self, "player", None)
         blk = getattr(pl, "block", None) if pl else None
         active = bool(blk and blk.active)
         cd = float(blk.cooldown) if blk else 0.0

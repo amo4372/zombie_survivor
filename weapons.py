@@ -76,6 +76,12 @@ class Projectile:
         self.gravity = gravity
         self.is_scythe_throw = is_scythe_throw
         self.is_scythe_slash = is_scythe_slash
+        # v2.9.13：PvP 专用伤害（AWM=80 / 轨道炮=1），由 Weapon.fire 写入。
+        # 之前 damage_vs_player 只写在武器表里、从未被消费，导致 AWM 打玩家
+        # 实际是 200×1.2=240 而不是 100。
+        self.damage_vs_player = None
+        self.beam_total = 0
+        self.beam_dealt = 0
         self.owner = None  # v2.2.7 PvPvE：投射物归属玩家（判定阵营用）
         self.lifetime = 3.0 if is_flame else (laser_duration if is_laser else 10.0)
         # v2.8.8 弹道破空特效：高速实弹 / 轨道炮射线才显示曳光，
@@ -360,11 +366,15 @@ class Weapon:
             WeaponType.RAILGUN: {
                 # v2.8.8：轨道炮改为**每帧 30 点基础伤害**（帧伤武器，
                 # 对玩家同值），不再是单次 560 的瞬时高伤
-                "name": "轨道炮", "damage": 30, "fire_rate": 1.6,
+                "name": "轨道炮", "damage": 1, "fire_rate": 1.6,
+                # v2.9.13：改为「1 帧 1 伤」的持续贯穿光束，吃满 500。
+                # 对僵尸 / Boss / 玩家走同一条帧伤链路，不再出现
+                # "玩家被每帧打 36、僵尸只吃一次 30" 的分裂行为。
                 "damage_per_frame": True,
-                "damage_vs_player": 30,
+                "damage_vs_player": 1,
+                "beam_total": 500,
                 "range": 1800, "speed": 0, "spread": 0, "pierce": 99,
-                "is_laser": True, "laser_width": 25, "laser_duration": 0.8,
+                "is_laser": True, "laser_width": 25, "laser_duration": 8.5,
                 "color": PURPLE, "projectile_size": 15, "shake": 25,
                 "desc": "充能武器：射速大增/弹夹5发/换弹稍长，粗激光穿透一切（v2.5.5 加强）；"
                         "v2.5.6 起与 AWM 一样按住显示预瞄线、松开开火",
@@ -482,7 +492,7 @@ class Weapon:
                 # v2.8.8：AWM 基础伤害 420 → 对僵尸 200 / 对玩家 100
                 # （原值过高且对玩家与僵尸同伤，PvP 里一枪秒人）
                 "name": "AWM", "damage": 200, "fire_rate": 1.1,
-                "damage_vs_player": 100,
+                "damage_vs_player": 80,   # v2.9.13：PvP 由 100 削到 80
                 "range": 2600, "speed": 34, "spread": 0, "pierce": 30,
                 "color": GREEN, "projectile_size": 8, "shake": 12,
                 "desc": "传奇狙击枪：射速更快/弹夹10发/射程与穿透大幅提升/按住拖动显示弹道预瞄线，松开开火（v2.5.6 修复蓄力开火）",
@@ -672,6 +682,8 @@ class Weapon:
                 bool(getattr(self, "is_scythe", False))
             )
             proj.owner = player  # v2.2.7 PvPvE 归属
+            proj.damage_vs_player = getattr(self, "damage_vs_player", None)
+            proj.beam_total = int(getattr(self, "beam_total", 0) or 0)
             # v2.5.5 单发特高伤武器（AWM/轨道炮）标志：PvP 互伤不作衰减反而加强
             proj.pvp_no_atten = bool(getattr(self, "pvp_no_atten", False))
             projectiles.append(proj)

@@ -173,6 +173,9 @@ class Player:
         死亡、眩晕、冻结、恐惧状态下不可操作；v2.9.12 格挡期间同样禁止"""
         if not self.alive:
             return False
+        # v2.9.13：肘击缴械（由 update 递减）
+        if float(getattr(self, 'elbow_disarm_timer', 0.0) or 0.0) > 0:
+            return False
         _blk = getattr(self, 'block', None)
         if _blk is not None and _blk.blocks_attack:
             return False
@@ -420,6 +423,8 @@ class Player:
         if self.riot_gear.equipped or self.riot_gear.riot_gear_cd_timer > 0 or self.riot_gear.grapple_active or self.riot_gear.grapple_cooldown > 0:
             self.riot_gear.update(dt, self.x, self.y, self.facing_angle, self.speed_mult, cd_reduction_mult=self.cooldown_mult, player=self)
 
+        if float(getattr(self, 'elbow_disarm_timer', 0.0) or 0.0) > 0:
+            self.elbow_disarm_timer = max(0.0, self.elbow_disarm_timer - dt)
         if self.riot_gear_cooldown > 0:
             self.riot_gear_cooldown -= dt
 
@@ -552,7 +557,7 @@ class Player:
         except Exception:
             pass
 
-    def take_damage(self, damage, damage_type="melee", from_front=False, attack_x=None, attack_y=None, bypass_dodge=False, source="zombie"):
+    def take_damage(self, damage, damage_type="melee", from_front=False, attack_x=None, attack_y=None, bypass_dodge=False, source="zombie", incoming_angle=None):
         # 开发者模式：无敌
         if getattr(self, 'dev_god', False):
             return 0
@@ -586,7 +591,8 @@ class Player:
         # ---- v2.9.12：主动格挡（覆盖近战/子弹/技能/AOE 全部一次性伤害） ----
         _blk = getattr(self, 'block', None)
         if _blk is not None:
-            _br = _blk.try_block(damage, attack_x, attack_y, damage_type)
+            _br = _blk.try_block(damage, attack_x, attack_y, damage_type,
+                                 incoming_angle=incoming_angle)
             if _br.blocked:
                 if _br.perfect:
                     return 0            # 完美格挡：完全免伤
@@ -659,7 +665,9 @@ class Player:
         blocked = False
         if self.riot_gear.equipped and not self.riot_gear.shield_broken and attack_x is not None and attack_y is not None:
             try:
-                blocked = self.riot_gear.check_shield_block(self.x, self.y, attack_x, attack_y)
+                blocked = self.riot_gear.check_shield_block(
+                    self.x, self.y, attack_x, attack_y,
+                    incoming_angle=incoming_angle)
             except Exception:
                 blocked = from_front
         actual_damage = self.riot_gear.take_damage(damage, damage_type, from_front, attack_x, attack_y, blocked=blocked)

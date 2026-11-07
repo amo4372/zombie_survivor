@@ -254,6 +254,10 @@ class HudMixin:
                 try:
                     ctrl.base_x = int(lay[key][0])
                     ctrl.base_y = int(lay[key][1])
+                    if len(lay[key]) >= 3:
+                        ctrl.size_scale = max(0.5, min(2.0, float(lay[key][2])))
+                    if len(lay[key]) >= 4:
+                        ctrl.alpha = max(40, min(255, int(lay[key][3])))
                 except (TypeError, IndexError, ValueError):
                     pass
         _set(self.joystick, "joystick")
@@ -271,7 +275,9 @@ class HudMixin:
         layout = {}
         def _put(ctrl, key):
             if ctrl is not None:
-                layout[key] = [int(ctrl.base_x), int(ctrl.base_y)]
+                layout[key] = [int(ctrl.base_x), int(ctrl.base_y),
+                               round(float(getattr(ctrl, "size_scale", 1.0) or 1.0), 2),
+                               int(getattr(ctrl, "alpha", 255) or 255)]
         if target == "P2" and self.p2_controls:
             c2 = self.p2_controls
             _put(c2["joystick"], "joystick")

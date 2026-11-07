@@ -85,6 +85,9 @@ class Button:
         self.text_color = text_color
         self.font_size = font_size
         self.border_radius = border_radius
+        # v2.9.13 HUD 自定义：按钮整体缩放与不透明度（编辑页可调）
+        self.size_scale = 1.0
+        self.alpha = 255
         self.hovered = False
         self.pressed = False
         self.touch_pressed = False  # 触控按下状态（跨帧保持，独立于鼠标悬停）
@@ -109,12 +112,19 @@ class Button:
             return int(time.time() * 1000)
 
     def get_scaled_rect(self, scale=1.0):
-        return pygame.Rect(
+        _r = pygame.Rect(
             int(self.base_x * scale),
             int(self.base_y * scale),
             int(self.base_w * scale),
             int(self.base_h * scale)
         )
+        _ss = float(getattr(self, "size_scale", 1.0) or 1.0)
+        if _ss != 1.0:
+            _c = _r.center
+            _r.w = max(8, int(_r.w * _ss))
+            _r.h = max(8, int(_r.h * _ss))
+            _r.center = _c
+        return _r
 
     def update(self, mouse_pos, mouse_pressed, touch_events=None, scale=1.0):
         if not self.visible or not self.enabled:
@@ -167,8 +177,25 @@ class Button:
             color = self.hover_color if self.hovered else self.color
         if self.pressed or self.touch_pressed:
             color = tuple(max(0, c - 40) for c in color)
+        text_surf = font.render(self.text, True, self.text_color)
+        _a = int(getattr(self, "alpha", 255) or 255)
+        if 0 <= _a < 250:
+            # 局部小 Surface 应用整体透明度（不新建全屏 Surface）
+            try:
+                _s = pygame.Surface((max(1, scaled_rect.w), max(1, scaled_rect.h)),
+                                    pygame.SRCALPHA)
+                _loc = pygame.Rect(0, 0, scaled_rect.w, scaled_rect.h)
+                pygame.draw.rect(_s, (*color[:3], 255), _loc,
+                                 border_radius=self.border_radius)
+                pygame.draw.rect(_s, (*self.text_color[:3], 255), _loc, 2,
+                                 border_radius=self.border_radius)
+                _s.blit(text_surf, text_surf.get_rect(center=_loc.center))
+                _s.set_alpha(_a)
+                screen.blit(_s, scaled_rect.topleft)
+                return
+            except Exception:
+                pass
         pygame.draw.rect(screen, color, scaled_rect, border_radius=self.border_radius)
         pygame.draw.rect(screen, self.text_color, scaled_rect, 2, border_radius=self.border_radius)
-        text_surf = font.render(self.text, True, self.text_color)
         text_rect = text_surf.get_rect(center=scaled_rect.center)
         screen.blit(text_surf, text_rect)

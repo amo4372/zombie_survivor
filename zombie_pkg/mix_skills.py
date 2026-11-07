@@ -1227,7 +1227,10 @@ class SkillsMixin:
                         _df = abs((_ang - bash_angle + 180) % 360 - 180)
                         if _df > half_arc:
                             continue
-                    _dmg = rg.charge_damage * 1.6 * player.damage_mult
+                    # v2.9.13：PvP 肘击定位从"爆发伤害"改为"控制开团"。
+                    # 原 160×1.6=256（再吃伤害乘区），一肘接近秒人；
+                    # 现在约 35 点，换来更长眩晕 + 更强击退 + 短缴械。
+                    _dmg = rg.charge_damage * 0.22 * player.damage_mult
                     try:
                         _dmg *= player.buff_manager.get_damage_mult()
                     except Exception:
@@ -1240,11 +1243,20 @@ class SkillsMixin:
                         pass
                     try:
                         _op.apply_buff(BuffType.STUN,
-                                       duration=rg.charge_stun_duration * 0.6)
+                                       duration=rg.charge_stun_duration * 2.2)
+                        # 缴械：短时间内连射击也按不出来（can_act 消费）
+                        try:
+                            _op.elbow_disarm_timer = 1.4
+                        except Exception:
+                            pass
+                        try:
+                            _op.apply_buff(BuffType.SLOW, duration=1.8)
+                        except Exception:
+                            pass
                     except Exception:
                         pass
                     if _dist > 0:
-                        _kb = rg.charge_knockback * 0.9
+                        _kb = rg.charge_knockback * 1.6
                         _op.x += (_op.x - player.x) / _dist * _kb
                         _op.y += (_op.y - player.y) / _dist * _kb
                     self.damage_numbers.append(DamageNumber(

@@ -160,7 +160,7 @@ class BlockController:
 
     # ------------------------------------------------------------ 结算
     def try_block(self, damage: float, attack_x=None, attack_y=None,
-                  damage_type: str = "melee") -> BlockResult:
+                  damage_type: str = "melee", incoming_angle=None) -> BlockResult:
         """一次攻击到达时调用。返回是否格挡、完美与否、最终伤害与冷却。"""
         dmg = max(0.0, float(damage or 0.0))
         if str(damage_type).lower() in NO_BLOCK_TYPES:
@@ -168,7 +168,14 @@ class BlockController:
         if not self.active or self.on_cooldown:
             return BlockResult(False, damage=dmg, reason="inactive")
         # 方向判定：攻击来源必须落在格挡弧内
-        if attack_x is not None and attack_y is not None:
+        if incoming_angle is not None:
+            # v2.9.13：优先用显式来向（弹丸速度反推），避免贴身坐标随机化
+            try:
+                if angle_diff(float(incoming_angle), self.angle) > ARC_DEG:
+                    return BlockResult(False, damage=dmg, reason="behind")
+            except Exception:
+                pass
+        elif attack_x is not None and attack_y is not None:
             try:
                 src_ang = math.degrees(math.atan2(
                     float(attack_y) - float(self.player.y),

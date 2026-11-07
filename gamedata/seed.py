@@ -164,7 +164,9 @@ def seed_skills(conn):
 #   发布包 dataver <= 本地行 dataver → 保留（玩家/策划手工调过，不覆盖）
 #   本地缺行                          → 插入
 # 这样既"游戏一律读数据库"，又保证"发布的新数值能推到玩家端"。
-DATA_VERSION = 1
+# v2.9.13：武器/敌人数值有实质调整（AWM PvP 80、轨道炮 1/帧×500、
+# 模板层近战参数），提升数据版本让未锁定行随更新同步生效。
+DATA_VERSION = 2
 
 
 def ensure_dataver_columns(conn):
@@ -204,9 +206,15 @@ def sync_rows_from_code(conn, data_version=None, force=False):
         for _k, _v in _rows.items():
             if not isinstance(_v, dict):
                 continue
-            _sets, _vals = [], []
+            _sets, _vals, _extra = [], [], {}
             for _f, _fv in _v.items():
-                if _f not in _cols or _f == "key":
+                if _f == "key":
+                    continue
+                if _f not in _cols:
+                    # v2.9.13：非列字段（laser_duration / beam_total /
+                    # damage_vs_player / melee_* ...）必须一起写进 extra，
+                    # 否则"代码里改了这些值"在数据库权威下永远不生效。
+                    _extra[_f] = _fv
                     continue
                 if isinstance(_fv, (tuple, list)) and len(_fv) >= 3:
                     _sets.append(f"{_f}=?"); _vals.append(_color(_fv))
@@ -216,6 +224,10 @@ def sync_rows_from_code(conn, data_version=None, force=False):
                     _sets.append(f"{_f}=?"); _vals.append(_fv)
                 elif isinstance(_fv, str):
                     _sets.append(f"{_f}=?"); _vals.append(_fv)
+            if _extra and "extra" in _cols:
+                import json as _json
+                _sets.append("extra=?")
+                _vals.append(_json.dumps(_extra, ensure_ascii=False, default=str))
             if not _sets:
                 continue
             try:
@@ -236,11 +248,13 @@ def sync_rows_from_code(conn, data_version=None, force=False):
                 continue
             _local = _row[0] or 0
             if force or int(_local) < _dv:
-                _vals.append(_k)
                 try:
+                    # 参数顺序：..., dataver=?, key=? → [_dv, _k]
+                    # v2.8.8 起这里写成 [_k, _dv]，导致 UPDATE 永远匹配不到行，
+                    # dataver 同步形同虚设 —— 表现为"改了代码数值却不生效"。
                     conn.execute(
                         f"UPDATE {_table} SET {', '.join(_sets)}, dataver=? WHERE key=?",
-                        _vals + [_dv])
+                        _vals + [_dv, _k])
                     _updated += 1
                 except Exception:
                     pass

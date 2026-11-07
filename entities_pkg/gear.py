@@ -621,17 +621,39 @@ class RiotGear:
         shield_cy = player_y + math.sin(angle_rad) * self.shield_offset
         return (shield_cx, shield_cy, self.facing_angle, 60)
 
-    def check_shield_block(self, player_x, player_y, attack_x, attack_y):
+    def check_shield_block(self, player_x, player_y, attack_x, attack_y,
+                           incoming_angle=None):
+        """盾牌是否挡住这次攻击。
+
+        v2.9.13 修复"判定与面朝方向相反"：
+        旧版先用**轴对齐矩形** collidepoint —— 盾牌矩形不随 facing_angle
+        旋转，背面来的攻击一样落在矩形里被判定为格挡；而方向判定用的
+        attack_x/y 是**弹丸命中瞬间的位置**（已贴身，角度近乎随机），
+        于是正面/背面全凭运气，表现就是"判定反了"。
+
+        现在统一用「攻击来源方向 vs 盾牌朝向」的扇形判定，且渲染层
+        用同一个 get_shield_arc() 画弧，所见即所判。
+        incoming_angle：玩家→攻击者方向（度）。远程弹丸请显式传，
+        用 -atan2(vy, vx) 从弹丸速度反推，避免用贴身坐标。
+        """
         if not self.equipped or self.shield_broken:
             return False
-        shield_rect = self.get_shield_rect(player_x, player_y)
-        if shield_rect and shield_rect.collidepoint(attack_x, attack_y):
-            return True
-        dx = attack_x - player_x
-        dy = attack_y - player_y
-        attack_angle = math.degrees(math.atan2(dy, dx))
-        angle_diff = abs((attack_angle - self.facing_angle + 180) % 360 - 180)
-        return angle_diff < 60
+        if incoming_angle is None:
+            try:
+                dx = float(attack_x) - float(player_x)
+                dy = float(attack_y) - float(player_y)
+                if math.hypot(dx, dy) < 1e-3:
+                    return False
+                incoming_angle = math.degrees(math.atan2(dy, dx))
+            except Exception:
+                return False
+        diff = abs((float(incoming_angle) - float(self.facing_angle) + 180) % 360 - 180)
+        return diff <= 60.0
+
+    def get_shield_arc(self, player_x, player_y):
+        """给渲染层用的判定弧（与 check_shield_block 完全一致）"""
+        return (float(player_x), float(player_y), float(self.facing_angle), 60.0,
+                self.shield_offset + self.shield_width * 0.5)
 
     def take_damage(self, damage, damage_type="melee", from_front=True, attack_x=None, attack_y=None, blocked=None):
         """v2.2.0 优化格挡判定：blocked（盾牌几何命中）优先，其次 from_front 方向判定；

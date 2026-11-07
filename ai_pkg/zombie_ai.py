@@ -78,6 +78,25 @@ class ZombieTreeAI:
             tree = self._get_tree(enemy)
             ctx["_tree"] = tree["name"]
             tree["root"].tick(ctx)
+            # v2.9.13 战术层：群体分离 / 包围扇区 / 弹幕规避 / 多玩家目标选择 /
+            # Boss 血量阶段。纯函数、异常安全，失败不影响原决策树输出。
+            try:
+                from ai_pkg.tactics import apply_tactics
+                players = getattr(world, "all_players", None)
+                if not players:
+                    _g = getattr(world, "game", None)
+                    if _g is not None and hasattr(_g, "_all_players"):
+                        try:
+                            players = _g._all_players()
+                        except Exception:
+                            players = None
+                ctx["players"] = players
+                apply_tactics(ctx)
+                _tt = ctx.get("tactical_target")
+                if _tt is not None:
+                    enemy._tactical_target = _tt
+            except Exception:
+                pass
             self.stats["decisions"] += 1
             self.stats["tree_hits"][tree["name"]] = self.stats["tree_hits"].get(tree["name"], 0) + 1
             if ctx["skill"]:

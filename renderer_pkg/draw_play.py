@@ -10,6 +10,32 @@ import mod_loader
 import math
 import random
 from config import *
+
+# v2.9.13：HUD 血条/体力条整体透明度（由 _draw_hud 每帧设置）
+_HUD_BAR_ALPHA = 255
+
+
+def _hbar(surface, color, rect, width=0, border_radius=0, alpha=None):
+    """HUD 条绘制：支持整体透明度（局部小 Surface，不开全屏 Surface）"""
+    _a = _HUD_BAR_ALPHA if alpha is None else alpha
+    if _a >= 250:
+        pygame.draw.rect(surface, color, rect, width, border_radius=border_radius)
+        return
+    try:
+        _r = pygame.Rect(rect)
+        _s = pygame.Surface((max(1, _r.w), max(1, _r.h)), pygame.SRCALPHA)
+        pygame.draw.rect(_s, (*color[:3], 255), (0, 0, _r.w, _r.h), width,
+                         border_radius=border_radius)
+        _s.set_alpha(max(0, min(255, int(_a))))
+        surface.blit(_s, _r.topleft)
+    except Exception:
+        pygame.draw.rect(surface, color, rect, width, border_radius=border_radius)
+
+
+import mod_loader
+import math
+import random
+from config import *
 from buff import BuffType
 from codex import codex_unlock_manager
 from weapons import Weapon
@@ -1357,9 +1383,28 @@ class PlayMixin:
 
     def _draw_hud(self):
         scale = self.game.scale
-        # v2.9.12：独立格挡摇杆（仅触控模式绘制）
+        # v2.9.13：格挡摇杆（触控）——同屏双人时 P1/P2 各一份
         try:
-            self.game.draw_block_stick(self.screen, self.game.font_small, scale)
+            self.game.draw_block_stick(self.screen, self.game.font_small, scale,
+                                       self.game.player)
+            if getattr(self.game, "player2", None) is not None and \
+                    self.game.is_multiplayer_active():
+                self.game.draw_block_stick(self.screen, self.game.font_small, scale,
+                                           self.game.player2)
+        except Exception:
+            pass
+        # 常驻格挡 CD：键控/触控都显示，双人各一份
+        try:
+            _cdb = int(70 * scale)
+            self.game.draw_block_cd(self.screen, self.game.player,
+                                    _cdb, int(self.game.scaled_height * 0.30),
+                                    scale, self.game.font_small)
+            if getattr(self.game, "player2", None) is not None and \
+                    self.game.is_multiplayer_active():
+                self.game.draw_block_cd(self.screen, self.game.player2,
+                                        int(self.game.scaled_width * 0.5) + _cdb,
+                                        int(self.game.scaled_height * 0.30),
+                                        scale, self.game.font_small)
         except Exception:
             pass
         # v2.5.6：世界按窗口铺满（可视区域 = 窗口/scale），
@@ -1496,33 +1541,42 @@ class PlayMixin:
         # ========== 底部中央状态栏（大尺寸、明显） ==========
         screen_w = self.screen.get_width()
         screen_h = self.screen.get_height()
-        bar_w = int(460 * scale)
+        # v2.9.13：血条 / 体力条样式（HUD 编辑页可调缩放与透明度）
+        global _HUD_BAR_ALPHA
+        _bstyle = getattr(self.game, "hud_bars", {}) or {}
+        _hpst = _bstyle.get("hp", {}) or {}
+        _stst = _bstyle.get("stamina", {}) or {}
+        _HUD_BAR_ALPHA = min(int(_hpst.get("alpha", 255) or 255),
+                             int(_stst.get("alpha", 255) or 255))
+        _bsc = max(0.6, min(1.8, max(float(_hpst.get("scale", 1.0) or 1.0),
+                                     float(_stst.get("scale", 1.0) or 1.0))))
+        bar_w = int(460 * scale * _bsc)
         bar_x = (screen_w - bar_w) // 2
         bar_bottom = screen_h - int(20 * scale)
 
         # 经验条（最底部）
         exp_ratio = player.exp / player.exp_to_level
-        exp_h = max(4, int(12 * scale))
+        exp_h = max(4, int(12 * scale * _bsc))
         exp_y = bar_bottom - exp_h
-        pygame.draw.rect(self.screen, (15, 25, 35), (bar_x, exp_y, bar_w, exp_h), border_radius=3)
-        pygame.draw.rect(self.screen, (60, 200, 230), (bar_x, exp_y, int(bar_w * exp_ratio), exp_h), border_radius=3)
-        pygame.draw.rect(self.screen, (*WHITE[:3], 160), (bar_x, exp_y, bar_w, exp_h), max(1, int(scale * 0.7)), border_radius=3)
+        _hbar(self.screen, (15, 25, 35), (bar_x, exp_y, bar_w, exp_h), border_radius=3)
+        _hbar(self.screen, (60, 200, 230), (bar_x, exp_y, int(bar_w * exp_ratio), exp_h), border_radius=3)
+        _hbar(self.screen, (*WHITE[:3], 160), (bar_x, exp_y, bar_w, exp_h), max(1, int(scale * 0.7)), border_radius=3)
         exp_label = self.game.font_small.render(f"EXP {int(player.exp)}/{int(player.exp_to_level)}", True, (120, 220, 240))
         # 经验条文字放在经验条右侧，避免与左侧标签重叠
         self.screen.blit(exp_label, (bar_x + bar_w + int(10*scale), exp_y - 1))
 
         # 体力条（中间）
         stamina_ratio = player.stamina / player.max_stamina if player.max_stamina > 0 else 0
-        stamina_h = max(4, int(14 * scale))
+        stamina_h = max(4, int(14 * scale * _bsc))
         stamina_y = exp_y - stamina_h - int(6 * scale)
         stamina_color = (70, 170, 255)
         if player.stamina_exhausted:
             stamina_color = (220, 70, 70)
         elif player.sprinting:
             stamina_color = (255, 200, 70)
-        pygame.draw.rect(self.screen, (20, 25, 40), (bar_x, stamina_y, bar_w, stamina_h), border_radius=4)
-        pygame.draw.rect(self.screen, stamina_color, (bar_x, stamina_y, int(bar_w * stamina_ratio), stamina_h), border_radius=4)
-        pygame.draw.rect(self.screen, (*WHITE[:3], 180), (bar_x, stamina_y, bar_w, stamina_h), max(1, int(scale * 0.8)), border_radius=4)
+        _hbar(self.screen, (20, 25, 40), (bar_x, stamina_y, bar_w, stamina_h), border_radius=4)
+        _hbar(self.screen, stamina_color, (bar_x, stamina_y, int(bar_w * stamina_ratio), stamina_h), border_radius=4)
+        _hbar(self.screen, (*WHITE[:3], 180), (bar_x, stamina_y, bar_w, stamina_h), max(1, int(scale * 0.8)), border_radius=4)
         sta_label = self.game.font_small.render(
             f"体力 {int(player.stamina)}/{int(player.max_stamina)}", True, (*stamina_color[:3], 220))
         # 体力标签+数字放在体力条右侧
@@ -1530,20 +1584,20 @@ class PlayMixin:
 
         # HP条（顶部，最粗最明显）
         hp_ratio = player.hp / player.max_hp
-        hp_h = max(6, int(24 * scale))
+        hp_h = max(6, int(24 * scale * _bsc))
         hp_y = stamina_y - hp_h - int(6 * scale)
-        pygame.draw.rect(self.screen, (35, 8, 8), (bar_x, hp_y, bar_w, hp_h), border_radius=6)
+        _hbar(self.screen, (35, 8, 8), (bar_x, hp_y, bar_w, hp_h), border_radius=6)
         if hp_ratio > 0.5:
             hp_color = (50, 210, 90)
         elif hp_ratio > 0.25:
             hp_color = (235, 180, 40)
         else:
             hp_color = (225, 50, 50)
-        pygame.draw.rect(self.screen, hp_color, (bar_x, hp_y, int(bar_w * hp_ratio), hp_h), border_radius=6)
+        _hbar(self.screen, hp_color, (bar_x, hp_y, int(bar_w * hp_ratio), hp_h), border_radius=6)
         # HP条高光
         if hp_ratio > 0.05:
             highlight_h = max(1, int(hp_h * 0.35))
-            pygame.draw.rect(self.screen, (*WHITE[:3], 60), (bar_x + 2, hp_y + 2, int(bar_w * hp_ratio) - 4, highlight_h), border_radius=3)
+            _hbar(self.screen, (*WHITE[:3], 60), (bar_x + 2, hp_y + 2, int(bar_w * hp_ratio) - 4, highlight_h), border_radius=3)
         pygame.draw.rect(self.screen, (*WHITE[:3], 200), (bar_x, hp_y, bar_w, hp_h), max(1, int(scale)), border_radius=6)
         hp_text = self.game.font.render(f"{int(player.hp)}/{int(player.max_hp)}", True, WHITE)
         # HP文字放在HP条右侧

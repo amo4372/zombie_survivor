@@ -480,7 +480,17 @@ class MultiplayerMixin:
         elif _p2_saved is not None:
             p2._awm_saved = None                       # 已切换到非蓄力武器 → 清理残留预瞄
         _p2_shoot_now = bool(shoot) and not _p2_charge_blocked
-        if (_p2_shoot_now or _p2_fire_angle is not None) and p2.can_act():
+        # v2.9.13：P2 装备防爆套装后，射击键改为盾牌肘击，且**不能射击**。
+        # 旧版 P2 完全没走这条分支，举着盾还能突突突。
+        _p2_riot = getattr(p2, "riot_gear", None)
+        _p2_shield_on = bool(_p2_riot and getattr(_p2_riot, "equipped", False))
+        if _p2_shield_on and _p2_shoot_now and p2.can_act():
+            try:
+                if _p2_riot.can_bash():
+                    self._perform_bash(math.degrees(math.radians(angle)), player=p2)
+            except Exception:
+                pass
+        if not _p2_shield_on and (_p2_shoot_now or _p2_fire_angle is not None) and p2.can_act():
             _p2_angle = _p2_fire_angle if _p2_fire_angle is not None else math.radians(angle)
             if _veh2 is not None and _veh2.alive and _veh2.can_shoot:
                 # v2.2.0 P2 载具开火

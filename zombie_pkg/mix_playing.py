@@ -2296,11 +2296,70 @@ class PlayingMixin:
                         if len(proj.hits) >= proj.pierce:
                             proj.alive = False
                         _pvp_d = self._pvp_dmg_to_player(proj.damage, proj)
-                        _pp.take_damage(_pvp_d, damage_type='ranged', attack_x=proj.x, attack_y=proj.y, bypass_dodge=True, source='player')
+                        _pp.take_damage(_pvp_d, damage_type='ranged', attack_x=proj.x, attack_y=proj.y,
+                                        bypass_dodge=True, source='player',
+                                        incoming_angle=self.incoming_angle_of(proj))
                         self.damage_numbers.append(DamageNumber(_pp.x, _pp.y, _pvp_d, color=RED))
                         self._on_player_hit_by_projectile(_pp, proj)
 
-            # 激光束碰撞检测
+            # v2.9.13 持续光束帧伤（轨道炮）：僵尸 / Boss / 玩家走**完全相同**的
+            # 「1 帧 1 伤、单目标累计上限 beam_total(500)」链路。
+            # 旧实现：敌人被 proj.hits 去重只吃一次，玩家却每帧都扣血 ——
+            # 表现为"轨道炮对玩家帧伤、对僵尸不是帧伤"。
+            if proj.is_laser and int(getattr(proj, "beam_total", 0) or 0) > 0:
+                _cap = int(proj.beam_total)
+                if getattr(proj, "beam_targets", None) is None:
+                    proj.beam_targets = {}
+                _bt = proj.beam_targets
+                _dx = proj.laser_end_x - proj.x
+                _dy = proj.laser_end_y - proj.y
+                _ll = _dx * _dx + _dy * _dy
+                _tick = float(proj.damage or 1.0)
+                if _ll > 0:
+                    for _e in self.enemies:
+                        if not getattr(_e, "alive", True):
+                            continue
+                        _k = id(_e)
+                        if _bt.get(_k, 0) >= _cap:
+                            continue
+                        _t = max(0.0, min(1.0,
+                            ((_e.x - proj.x) * _dx + (_e.y - proj.y) * _dy) / _ll))
+                        _cx, _cy = proj.x + _t * _dx, proj.y + _t * _dy
+                        if math.hypot(_e.x - _cx, _e.y - _cy) < getattr(_e, "size", 16) + proj.laser_width:
+                            _d = min(_tick, _cap - _bt.get(_k, 0))
+                            _e._last_hit_team = getattr(proj.owner, "team_id", 0)
+                            _e._last_hit_player = proj.owner
+                            _e.take_damage(_d)
+                            _bt[_k] = _bt.get(_k, 0) + _d
+                            self.spawn_damage(_e.x, _e.y, _d,
+                                              merge_key=("beam", _k),
+                                              damage_type="ranged")
+                            if not _e.alive:
+                                self._on_enemy_death(_e)
+                    if getattr(self.config, "pvp_enabled", False) and proj.owner is not None:
+                        for _pp in self._all_players():
+                            if _pp is proj.owner or not getattr(_pp, "alive", True) or getattr(_pp, "downed", False):
+                                continue
+                            if getattr(_pp, "team_id", 1) == getattr(proj.owner, "team_id", 0):
+                                continue
+                            _k = id(_pp)
+                            if _bt.get(_k, 0) >= _cap:
+                                continue
+                            _t = max(0.0, min(1.0,
+                                ((_pp.x - proj.x) * _dx + (_pp.y - proj.y) * _dy) / _ll))
+                            _cx, _cy = proj.x + _t * _dx, proj.y + _t * _dy
+                            if math.hypot(_pp.x - _cx, _pp.y - _cy) < getattr(_pp, "size", 20) + proj.laser_width:
+                                _pd = self._pvp_dmg_to_player(_tick, proj)
+                                _pp.take_damage(_pd, damage_type="ranged",
+                                                attack_x=proj.x, attack_y=proj.y,
+                                                bypass_dodge=True, source="player")
+                                _bt[_k] = _bt.get(_k, 0) + _pd
+                                self.spawn_damage(_pp.x, _pp.y, _pd,
+                                                  merge_key=("beam", _k),
+                                                  color=RED, damage_type="ranged")
+                continue
+
+            # 激光束碰撞检测（一次性激光技能，保持原有逻辑）
             if proj.is_laser:
                 # 激光束对路径上的所有敌人造成伤害
                 for enemy in self.enemies:
@@ -2348,7 +2407,9 @@ class PlayingMixin:
                             _cly = proj.y + _t2 * _lldy
                             if math.hypot(_pp.x - _clx, _pp.y - _cly) < getattr(_pp, 'size', 20) + proj.laser_width:
                                 _pvp_d = self._pvp_dmg_to_player(proj.damage, proj)
-                                _pp.take_damage(_pvp_d, damage_type='ranged', attack_x=proj.x, attack_y=proj.y, bypass_dodge=True, source='player')
+                                _pp.take_damage(_pvp_d, damage_type='ranged', attack_x=proj.x, attack_y=proj.y,
+                                                bypass_dodge=True, source='player',
+                                                incoming_angle=self.incoming_angle_of(proj))
                                 self.damage_numbers.append(DamageNumber(_pp.x, _pp.y, _pvp_d, color=RED))
                 continue
 
