@@ -1659,6 +1659,35 @@ class GameCore:
             pass
         return None
 
+    def _capped_hit(self, target, raw):
+        """v2.9.14 生命偷取口径：按**实际打掉的血量**算，溢出不计。
+        敌人 100 血挨 200 伤害 → 只按 100 计。玩家目标没有该字段时用原值。
+        """
+        try:
+            a = getattr(target, "last_actual_damage", None)
+            if a is None:
+                return float(raw)
+            return max(0.0, min(float(raw), float(a)))
+        except Exception:
+            return float(raw)
+
+    def spawn_heal_fx(self, x, y, amount, who=None):
+        """v2.9.14 所有生命回复统一视觉反馈（世界坐标 → 分屏各视口可见）"""
+        try:
+            if amount <= 0:
+                return
+            from ui_pkg import FloatingText
+            _tag = (" P2" if who is not None and who is getattr(self, "player2", None)
+                    else "")
+            self.floating_texts.append(FloatingText(
+                x, y - 34, "+%d%s" % (int(amount), _tag),
+                color=(120, 245, 150), lifetime=1.1))
+            if hasattr(self, "particles"):
+                self.particles.spawn(x, y, (110, 240, 140), 8, (2, 5), (-2, 2), (0.3, 0.7))
+            self.heal_flash = min(1.0, float(getattr(self, "heal_flash", 0.0)) + 0.35)
+        except Exception:
+            pass
+
     # ==================== v2.9.13 伤害数字合并 ====================
     def spawn_damage(self, x, y, damage, merge_key=None, color=None,
                      is_crit=False, damage_type="normal"):

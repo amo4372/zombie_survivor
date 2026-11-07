@@ -234,6 +234,53 @@ BEHAVIOR_PRESETS = {
     "MELEE":    dict(move="surround",       target="nearest",      aggression=0.70, spacing=40,  flank=0.45, dodge=0.20, phase_hp=[]),
 }
 
+# v2.9.14：每一种特殊僵尸的专属行为（原决策树之外的语义层）。
+# 键 = EnemyType.name；字段由 ai_pkg.tactics.apply_special_behavior 消费。
+# 策划可在数据库 enemies.extra 里用 special_* 前缀覆盖任一字段。
+SPECIAL_AI = {
+    "ZOMBIE_FROST":     dict(kite=0.45, aura=0.0, burst=0.0, tag="frost",
+                             note="保持中距，攻击附带减速"),
+    "ZOMBIE_VENOM":     dict(kite=0.55, aura=0.0, burst=0.0, tag="venom",
+                             note="放风筝叠毒，不与玩家贴身"),
+    "ZOMBIE_SPITTER":   dict(kite=0.70, aura=0.0, burst=0.0, tag="spit",
+                             note="远程吐酸，距离过近主动后撤"),
+    "ZOMBIE_LEAPER":    dict(kite=-0.3, aura=0.0, burst=0.85, tag="leap",
+                             note="蓄势后突进扑击，落点有硬直"),
+    "ZOMBIE_BOMBER":    dict(kite=0.25, aura=0.0, burst=0.0, tag="bomb",
+                             note="保持投掷距离，不主动近身"),
+    "ZOMBIE_HUNTER":    dict(kite=0.80, aura=0.0, burst=0.0, tag="hunt",
+                             note="远距离精准点射，优先残血目标"),
+    "ZOMBIE_CRAWLER":   dict(kite=-0.2, aura=0.0, burst=0.0, tag="crawl",
+                             note="贴地快速接近，侧绕规避正面"),
+    "ZOMBIE_GHOUL":     dict(kite=-0.5, aura=0.0, burst=0.0, tag="ghoul",
+                             note="啃咬持续伤害，死咬不放"),
+    "ZOMBIE_BERSERKER": dict(kite=-0.8, aura=0.0, burst=0.5, tag="berserk",
+                             note="残血狂暴，越打越猛"),
+    "ZOMBIE_SPLITTER":  dict(kite=0.1, aura=0.0, burst=0.0, tag="split",
+                             note="死亡分裂，避免被远程秒杀"),
+    "ZOMBIE_SHIELD":    dict(kite=-0.1, aura=0.0, burst=0.0, tag="shield",
+                             note="正面推进， shield 免疫侧后"),
+    "ZOMBIE_HEALER":    dict(kite=0.9, aura=0.85, burst=0.0, tag="heal",
+                             note="躲在群体后方，持续治疗同伙"),
+    "ZOMBIE_SHAMAN":    dict(kite=0.9, aura=0.75, burst=0.0, tag="shaman",
+                             note="后方增益光环，给同伙加速加伤"),
+    "ZOMBIE_PHANTOM":   dict(kite=0.2, aura=0.0, burst=0.6, tag="phantom",
+                             note="隐身侧袭，绕到玩家背后"),
+    "ZOMBIE_WRAITH":    dict(kite=0.2, aura=0.0, burst=0.6, tag="wraith",
+                             note="穿墙接近 + 恐惧"),
+    "ZOMBIE_EXPLODER":  dict(kite=-1.0, aura=0.0, burst=1.0, tag="explode",
+                             note="直冲自爆，不做任何规避"),
+    "ZOMBIE_JUGGERNAUT":dict(kite=-0.6, aura=0.0, burst=0.0, tag="juggernaut",
+                             note="重甲正面碾压，免疫击退"),
+    "ZOMBIE_TANK":      dict(kite=-0.4, aura=0.0, burst=0.0, tag="tank",
+                             note="缓慢正面推进"),
+}
+
+
+def special_behavior(key):
+    return SPECIAL_AI.get(str(key), {})
+
+
 MELEE_DEFAULTS = dict(melee_attack_cooldown=1.2, melee_attack_reach=10.0,
                       melee_windup=0.35, melee_recover=0.25)
 BOSS_MELEE_DEFAULTS = dict(melee_attack_cooldown=1.6, melee_attack_reach=18.0,
@@ -360,4 +407,4 @@ def summary():
 
 __all__ = ["BUILTIN_TEMPLATES", "BEHAVIOR_PRESETS", "BehaviorProfile",
            "EnemyTemplate", "template_for", "resolve_config", "all_templates",
-           "archetype_of", "summary"]
+           "archetype_of", "summary", "SPECIAL_AI", "special_behavior"]

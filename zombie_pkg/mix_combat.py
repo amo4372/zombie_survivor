@@ -606,7 +606,7 @@ class CombatMixin:
                         pass
                     try:
                         if hasattr(self, '_vampire_heal'):
-                            self._vampire_heal(_pd, sx=_pp.x, sy=_pp.y)
+                            self._vampire_heal(self._capped_hit(None, _pd), sx=_pp.x, sy=_pp.y)
                     except Exception:
                         pass
                     self.damage_numbers.append(DamageNumber(_pp.x, _pp.y, int(_pd), is_crit=_crit, color=RED))

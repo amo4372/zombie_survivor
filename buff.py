@@ -109,8 +109,8 @@ BUFF_CONFIGS = {
     # === Debuff ===
     BuffType.BLEED: {
         "name": "流血", "icon": "[BLD]", "color": BLOOD_RED, "is_debuff": True,
-        "desc": "每秒流失3%最大生命值",
-        "tick_interval": 0.5, "damage_percent": 0.015,
+        "desc": "每 0.5 秒流失 7 点生命",
+        "tick_interval": 0.5, "tick_damage": 7,
         "fx_particle": BLOOD_RED, "fx_rate": 0.15, "fx_count": 3, "fx_size": (4, 8),
         "fx_mode": "splatter", "screen_flash": (180, 30, 30, 30), "screen_shake": 2,
     },
@@ -123,8 +123,8 @@ BUFF_CONFIGS = {
     },
     BuffType.BURN: {
         "name": "燃烧", "icon": "[FIRE]", "color": FIRE_ORANGE, "is_debuff": True,
-        "desc": "每秒流失4%生命值，受到伤害+20%",
-        "tick_interval": 0.5, "damage_percent": 0.02, "damage_taken_mult": 1.2,
+        "desc": "每 0.5 秒流失 9 点生命，受到伤害+20%",
+        "tick_interval": 0.5, "tick_damage": 9, "damage_taken_mult": 1.2,
         "fx_particle": FIRE_ORANGE, "fx_rate": 0.08, "fx_count": 5, "fx_size": (8, 16),
         "fx_second_color": FIRE_YELLOW, "fx_mode": "attached", "fx_attached_lift": True,
         "screen_flash": (200, 100, 20, 25), "screen_shake": 3, "aura_color": FIRE_ORANGE,
@@ -138,8 +138,8 @@ BUFF_CONFIGS = {
     },
     BuffType.POISON: {
         "name": "中毒", "icon": "[X]", "color": POISON_GREEN, "is_debuff": True,
-        "desc": "每秒流失2%生命值，移动速度-20%",
-        "tick_interval": 1.0, "damage_percent": 0.02, "speed_mult": 0.8,
+        "desc": "每秒流失 8 点生命，移动速度-20%",
+        "tick_interval": 1.0, "tick_damage": 8, "speed_mult": 0.8,
         "fx_particle": POISON_GREEN, "fx_rate": 0.25, "fx_count": 2, "fx_size": (5, 10),
         "fx_mode": "attached", "fx_attached_lift": True, "aura_color": POISON_GREEN,
     },
@@ -333,6 +333,12 @@ class BuffManager:
                         dmg += entity.max_hp * dmg_pct * buff.stacks
                     if tick_dmg > 0:
                         dmg += tick_dmg * buff.stacks
+                    # v2.9.14：所有持续/魔法伤害改为固定值；即便策划日后
+                    # 又加了 damage_percent，Boss 也按「每跳最多 0.2% 最大血」
+                    # 限幅，杜绝 6000 血 Boss 被烫 3 下就没。
+                    if dmg > 0 and getattr(entity, "is_boss", False):
+                        _cap = max(1.0, float(getattr(entity, "max_hp", 100)) * 0.002)
+                        dmg = min(dmg, _cap * max(1, buff.stacks))
                     if dmg > 0 and hasattr(entity, 'take_damage'):
                         dmg = max(1, int(dmg + 0.999))  # DOT伤害向上取整至少1点
                         entity.take_damage(dmg, damage_type="dot")

@@ -84,7 +84,7 @@ class LightingSystem:
             "projectile_lights": True,
             "boss_lights": True,
             "flicker": True,
-            "gradient_layers": 28,
+            "gradient_layers": 12,   # v2.9.14 28→12：渐变生成 O(层数×圆面积)
             "vignette": True,
             "flashlight": True,
         },
@@ -139,7 +139,10 @@ class LightingSystem:
         self.vignette_enabled = preset.get("vignette", False)
         self.flashlight_enabled = preset.get("flashlight", False)
         # v2.1.3 性能优化：移动端/中低配降采样渲染（性能=2，均衡=2，高=1 全分辨率）
-        self._render_scale = 2 if quality in ("performance", "balanced") else 1
+        # v2.9.14：quality 档原本用 1（全分辨率）做整屏暗层合成 +
+        # smoothscale 后处理，1920x1200 下纯 CPU 每帧几百万像素 → 卡顿主因。
+        # 现在三档统一降采样 2，画质损失极小（暗层是低频信号），开销降 4 倍。
+        self._render_scale = 2
         # v2.1.5：仅高画质启用动态光照；低档完全关闭（黑屏+性能根因）
         self.enabled = (quality == "quality")
         self._init_surfaces()
@@ -190,6 +193,33 @@ class LightingSystem:
         if len(self._gradient_cache) > 128:
             oldest = list(self._gradient_cache.keys())[0]
             del self._gradient_cache[oldest]
+        return surf
+
+    def _get_flashlight_cone(self, length):
+        """按长度档缓存朝向 0° 的手电筒锥，使用时旋转即可"""
+        key = int(length // 16) * 16
+        cache = getattr(self, "_cone_cache", None)
+        if cache is None:
+            cache = self._cone_cache = {}
+        if key in cache:
+            return cache[key]
+        L = max(8, key)
+        surf = pygame.Surface((L * 2, L * 2), pygame.SRCALPHA)
+        half = 0.3
+        for layer in range(8, 0, -1):
+            t = layer / 8
+            r = int(L * t)
+            a = int(110 * (1 - t) ** 1.5)
+            if a <= 0 or r <= 0:
+                continue
+            pts = [(L, L)]
+            for i in range(13):
+                ang = -half + 2 * half * i / 12
+                pts.append((int(L + math.cos(ang) * r), int(L + math.sin(ang) * r)))
+            pygame.draw.polygon(surf, (255, 250, 220, a // 3), pts)
+        cache[key] = surf
+        if len(cache) > 24:
+            cache.pop(next(iter(cache)))
         return surf
 
     def add_light(self, x, y, radius, color, intensity=1.0, lifetime=None, flicker=False):
@@ -279,29 +309,15 @@ class LightingSystem:
                 flash_angle = getattr(_pl, 'aim_angle', getattr(self, '_flashlight_angle', 0.0))
                 flash_length = max(8, int(350 * scale / rs))
                 flash_width = 0.6  # 弧度，约35度
-                # 绘制锥形光（用多个扇形叠加模拟渐变）
-                for layer in range(8, 0, -1):
-                    t = layer / 8
-                    cone_len = int(flash_length * t)
-                    cone_alpha = int(120 * (1 - t) ** 1.5)
-                    if cone_alpha <= 0:
-                        continue
-                    cone_surf = pygame.Surface((cone_len * 2, cone_len * 2), pygame.SRCALPHA)
-                    # 绘制扇形
-                    start_angle = math.degrees(flash_angle - flash_width / 2)
-                    end_angle = math.degrees(flash_angle + flash_width / 2)
-                    pygame.draw.arc(cone_surf, (255, 250, 220, cone_alpha),
-                                    (0, 0, cone_len * 2, cone_len * 2),
-                                    start_angle, end_angle, cone_len)
-                    # 填充扇形
-                    for ang_i in range(int(start_angle), int(end_angle), 3):
-                        rad = math.radians(ang_i)
-                        end_x = cone_len + math.cos(rad) * cone_len
-                        end_y = cone_len + math.sin(rad) * cone_len
-                        pygame.draw.line(cone_surf, (255, 250, 220, cone_alpha // 2),
-                                         (cone_len, cone_len), (int(end_x), int(end_y)), 2)
-                    self._light_surface.blit(cone_surf, (px - cone_len, py - cone_len),
-                                              special_flags=pygame.BLEND_RGBA_ADD)
+                # v2.9.14：锥形光**预渲染缓存**。旧版每帧每玩家建 8 张
+                # Surface、每张再画几十条 line —— quality 档最重的一块。
+                # 现在按 (长度档, 角度量化到 15°) 缓存，每帧只做一次 blit。
+                cone = self._get_flashlight_cone(flash_length)
+                ang_deg = math.degrees(flash_angle)
+                rot = pygame.transform.rotate(cone, -ang_deg)
+                self._light_surface.blit(rot,
+                    (px - rot.get_width() // 2, py - rot.get_height() // 2),
+                    special_flags=pygame.BLEND_RGBA_ADD)
 
         # 2. 燃烧/发光的敌人（受画质控制；屏幕外裁剪）
         if enemies and getattr(self, 'enemy_lights_enabled', True):
@@ -329,7 +345,8 @@ class LightingSystem:
 
         # 3. 投射物尾迹光（受画质控制；屏幕外裁剪）
         if projectiles and getattr(self, 'projectile_lights_enabled', True):
-            for proj in projectiles:
+            # v2.9.14：弹幕时不为每一颗子弹都生成径向渐变 + BLEND_RGBA_ADD
+            for proj in projectiles[:24]:
                 if not getattr(proj, 'alive', True):
                     continue
                 proj_x = int((proj.x - camera_x) * scale / rs) - (viewport_x // rs)
@@ -342,7 +359,7 @@ class LightingSystem:
                                               special_flags=pygame.BLEND_RGBA_ADD)
 
         # 4. 动态光源（爆炸、技能特效等；屏幕外裁剪）
-        for light in self.lights:
+        for light in self.lights[:20]:
             if not light.alive:
                 continue
             lx = int((light.x - camera_x) * scale / rs) - (viewport_x // rs)

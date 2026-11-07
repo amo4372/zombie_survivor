@@ -1188,7 +1188,7 @@ class SkillsMixin:
                 is_crit = random.random() < player.crit_chance
                 actual_damage = rg.charge_damage * 1.6 * player.damage_mult * player.buff_manager.get_damage_mult() * (player.crit_damage if is_crit else 1)
                 enemy.take_damage(actual_damage)
-                self._vampire_heal(actual_damage)
+                self._vampire_heal(self._capped_hit(enemy, actual_damage))
                 _is_boss = getattr(enemy, "is_boss", False)
                 enemy.apply_buff(BuffType.STUN, duration=rg.charge_stun_duration * (0.5 if _is_boss else 1.0))
                 enemy.knockdown(1.0 if not _is_boss else 0.5)
@@ -1340,7 +1340,7 @@ class SkillsMixin:
             actual_damage = rg.charge_damage * _mult * pl.damage_mult * pl.buff_manager.get_damage_mult() * (pl.crit_damage if is_crit else 1)
             enemy.take_damage(actual_damage)
             enemy._last_hit_player = pl
-            self._vampire_heal(actual_damage)
+            self._vampire_heal(self._capped_hit(enemy, actual_damage))
             # 强控制：眩晕（对 boss 控制效果减半）
             enemy.apply_buff(BuffType.STUN, duration=rg.charge_stun_duration * (0.5 if _is_boss else 1.0))
             enemy.knockdown(1.0 if not _is_boss else 0.5)

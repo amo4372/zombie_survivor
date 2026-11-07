@@ -763,7 +763,20 @@ class Player:
             return []
 
     def heal(self, amount):
+        _before = float(self.hp)
         self.hp = min(self.hp + amount, self.max_hp)
+        # v2.9.14：全模式统一的回复可视化事件（由 Game 每帧消费）。
+        # 不在这里直接依赖 game，避免实体层与渲染层耦合。
+        try:
+            _real = self.hp - _before
+            if _real > 0:
+                if getattr(self, "_heal_fx_events", None) is None:
+                    self._heal_fx_events = []
+                self._heal_fx_events.append(float(_real))
+                if len(self._heal_fx_events) > 8:
+                    del self._heal_fx_events[:len(self._heal_fx_events) - 8]
+        except Exception:
+            pass
 
     def use_skill(self, skill_type):
         if skill_type in self.active_skills:

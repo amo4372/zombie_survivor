@@ -437,6 +437,14 @@ class Enemy:
             # 防御：玩家对象重建后旧 id 会残留，条目过多时整体重置
             if len(_mt) > 12:
                 _mt.clear()
+        # v2.9.14 前摇定身：攻击一旦发起，僵尸（含 Boss）**固定在原地**，
+        # 玩家可抓前摇 Timing 走位躲开已经挥出的这一击。预警扇形用的
+        # 是 begin_melee_windup 时锁定的角度/半径，不会跟着玩家转。
+        if getattr(self, "melee_state", "idle") in ("windup", "impact", "recover") \
+                or float(getattr(self, "special_windup_timer", 0.0) or 0.0) > 0:
+            self._attack_rooted = True
+            return
+        self._attack_rooted = False
         # 更新Buff系统（持续伤害/治疗等）
         _, self.buff_damage_events = self.buff_manager.update(dt, self)
         # DOT致死安全检查：确保持续伤害能杀死怪物
@@ -1466,6 +1474,9 @@ class Enemy:
                     break
         except Exception:
             pass
+        # v2.9.14：记录「真正打掉的血量」（溢出不计），供生命偷取结算。
+        # 100 血敌人挨 200 伤害 → last_actual_damage = 100。
+        self.last_actual_damage = max(0.0, min(float(damage), max(0.0, float(self.hp))))
         self.hp -= damage
         # v2.8.0 命中反馈：这里是**所有伤害的统一出口**（射击 / 近战 / 技能 /
         # AOE / DOT 全都经过），在此登记命中事件，游戏侧每帧消费并生成
@@ -1633,7 +1644,16 @@ class Enemy:
             shield_s = int(35 * scale)
             pygame.draw.circle(screen, BLUE, (px, py), shield_s, max(2,int(3*scale)))
         # v2.5.0 冰冻冰块渲染：冻结时覆盖全身淡蓝冰块（多边形冰晶 + 高光点）
-        if getattr(self, 'buff_manager', None) is not None and self.buff_manager.is_frozen():
+        _frozen = False
+        try:
+            _frozen = (self.buff_manager is not None and self.buff_manager.is_frozen())
+            if not _frozen and getattr(self, "status", None) is not None:
+                _st = self.status
+                _frozen = bool(getattr(_st, "has", lambda k: False)("freeze")) or \
+                          ("freeze" in getattr(_st, "states", {}))
+        except Exception:
+            pass
+        if _frozen:
             _ice_s = s + max(2, int(3 * scale))
             _ice = pygame.Surface((_ice_s * 2 + 8, _ice_s * 2 + 8), pygame.SRCALPHA)
             _cx, _cy = _ice_s + 4, _ice_s + 4

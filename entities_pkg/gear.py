@@ -59,7 +59,9 @@ class RiotGear:
         self.grapple_scythe_max_cooldown = self.grapple_max_cooldown
         self.grapple_aiming = False           # 长按瞄准中（显示预瞄线+锁定圈）
         self.grapple_locked_target = None     # 瞄准圈锁定的僵尸（松开后直飞目标）
-        self.grapple_lock_radius = 200        # 锁定圈半径（世界单位，v2.2.6 拉远便于锁定远处目标）
+        # v2.9.14：初始/最大锁定圈 200 → 72（用户反馈全模式太大）。
+        # 锁定判定与绘制共用同一个值，不会"看着小却锁很远"。
+        self.grapple_lock_radius = 72
         self.self_pull_active = False         # 自我拉拽中（未命中目标 → 把自己拉向目标点）
         self.self_pull_speed = 560            # v2.2.7 自我拉拽速度（提速；期间禁用玩家额外位移）
         self.self_pull_immune = False         # 自我拉拽期间免伤标记
@@ -842,7 +844,19 @@ class RiotGear:
 
         # v2.2.7/11 瞄准锁定圈：中心=锚点（预瞄终点，随瞄准实时移动），半径随蓄力由小到大
         # v2.8.7：只在本人视口绘制
+        # v2.9.14：把预瞄线也一起收进这个条件。此前 `aim_line` 的绘制
+        # 挂在函数更早的位置且**没有 own_view 判断**，所以 P2 在瞄准
+        # 时 P1 屏幕上仍能看到那条绿线（锁定圈藏了、线没藏）。
         if own_view and self.grapple_aiming and not self.grapple_active:
+            try:
+                _pa = math.radians(getattr(self, "aim_line_angle", 0.0) or 0.0)
+                _plen = float(getattr(self, "grapple_max_range", 600) or 600)
+                pygame.draw.line(screen, (110, 200, 130), (px, py),
+                                 (int(px + math.cos(_pa) * _plen * scale),
+                                  int(py + math.sin(_pa) * _plen * scale)),
+                                 max(1, int(2 * scale)))
+            except Exception:
+                pass
             _anch = getattr(self, 'grapple_aim_anchor', None)
             if _anch is not None:
                 _ax, _ay = _anch
@@ -850,8 +864,9 @@ class RiotGear:
                 _a = math.radians(self.aim_line_angle)
                 _ax = player_x + math.cos(_a) * self.grapple_max_range
                 _ay = player_y + math.sin(_a) * self.grapple_max_range
-            _charge = getattr(self, '_grapple_aim_charge', 1.0) or 1.0
-            _r = self.grapple_lock_radius * max(0.0, _charge)
+            _charge = getattr(self, '_grapple_aim_charge', 0.0) or 0.0
+            # 由 0 开始涨到阈值，初始不再是一个大圈
+            _r = self.grapple_lock_radius * max(0.0, min(1.0, _charge))
             axp = int((_ax - camera_x) * scale)
             ayp = int((_ay - camera_y) * scale)
             lr = int(_r * scale)

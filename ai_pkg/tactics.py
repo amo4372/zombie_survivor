@@ -186,6 +186,42 @@ def apply_tactics(ctx):
             vx *= k
             vy *= k
 
+        # ---- v2.9.14 特殊僵尸专属行为 ----
+        try:
+            from entities_pkg.templates import special_behavior
+            _key = getattr(getattr(e, "enemy_type", None), "name", None)
+            _spec = special_behavior(_key) or {}
+            if _spec:
+                ctx["special_tag"] = _spec.get("tag")
+                _kt = float(_spec.get("kite", 0.0) or 0.0)
+                _burst = float(_spec.get("burst", 0.0) or 0.0)
+                _aura = float(_spec.get("aura", 0.0) or 0.0)
+                nx2, ny2 = ctx.get("nx", 0.0), ctx.get("ny", 0.0)
+                # kite>0 保持距离 / <0 更激进贴身
+                if _kt > 0:
+                    vx -= nx2 * _kt * 0.35
+                    vy -= ny2 * _kt * 0.35
+                elif _kt < 0:
+                    vx += nx2 * (-_kt) * 0.30
+                    vy += ny2 * (-_kt) * 0.30
+                # 治疗/增益型：朝同伙质心靠拢而非玩家
+                if _aura > 0:
+                    _mates = ctx.get("teammates") or []
+                    if _mates:
+                        _mx = sum(float(getattr(m, "x", e.x)) for m in _mates[:6]) / min(6, len(_mates))
+                        _my = sum(float(getattr(m, "y", e.y)) for m in _mates[:6]) / min(6, len(_mates))
+                        _dd = math.hypot(_mx - ex, _my - ey)
+                        if _dd > 60:
+                            vx += (_mx - ex) / _dd * _aura * 0.5
+                            vy += (_my - ey) / _dd * _aura * 0.5
+                # 残血狂暴 / 扑击型：血越低越猛
+                if _burst > 0:
+                    _rage = 1.0 + _burst * (1.0 - hp_ratio)
+                    vx *= _rage
+                    vy *= _rage
+        except Exception:
+            pass
+
         n = math.hypot(vx, vy)
         if n > 1.0:
             vx, vy = vx / n, vy / n

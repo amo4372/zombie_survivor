@@ -15,6 +15,50 @@ from config import *
 _HUD_BAR_ALPHA = 255
 
 
+def is_frozen_entity(ent):
+    """v2.9.14：同时兼容旧 BuffManager 与新结构化 EntityStatus 的冰冻。"""
+    try:
+        bm = getattr(ent, "buff_manager", None)
+        if bm is not None and bm.is_frozen():
+            return True
+    except Exception:
+        pass
+    try:
+        st = getattr(ent, "status", None)
+        if st is not None and hasattr(st, "has") and st.has("freeze"):
+            return True
+        if st is not None and hasattr(st, "states"):
+            return ("freeze" in st.states) or ("frozen" in st.states)
+    except Exception:
+        pass
+    return False
+
+
+def draw_frozen_overlay(screen, ent, camera_x, camera_y, scale, size=None):
+    """玩家 / 丧尸统一「冰块状被冻住」：淡蓝六边冰晶 + 高光 + 十字霜纹"""
+    try:
+        if not is_frozen_entity(ent):
+            return
+        px = int((getattr(ent, "x", 0) - camera_x) * scale)
+        py = int((getattr(ent, "y", 0) - camera_y) * scale)
+        r = int((size or getattr(ent, "size", 18) or 18) * scale) + max(2, int(3 * scale))
+        surf = pygame.Surface((r * 2 + 8, r * 2 + 8), pygame.SRCALPHA)
+        cx = cy = r + 4
+        pts = [(cx - r, cy), (cx - r // 2, cy - r), (cx + r // 2, cy - r),
+               (cx + r, cy), (cx + r // 2, cy + r), (cx - r // 2, cy + r)]
+        pygame.draw.polygon(surf, (150, 210, 255, 105), pts)
+        pygame.draw.polygon(surf, (225, 248, 255, 205), pts, max(1, int(2 * scale)))
+        pygame.draw.line(surf, (235, 252, 255, 225), (cx, cy - r + 2), (cx, cy + r - 2), 1)
+        pygame.draw.line(surf, (235, 252, 255, 225), (cx - r + 2, cy), (cx + r - 2, cy), 1)
+        # 内部霜裂
+        for dx, dy in ((0.35, 0.2), (-0.3, -0.35), (0.15, -0.5)):
+            pygame.draw.line(surf, (255, 255, 255, 150),
+                             (cx, cy), (cx + int(r * dx), cy + int(r * dy)), 1)
+        screen.blit(surf, (px - cx, py - cy))
+    except Exception:
+        pass
+
+
 def _hbar(surface, color, rect, width=0, border_radius=0, alpha=None):
     """HUD 条绘制：支持整体透明度（局部小 Surface，不开全屏 Surface）"""
     _a = _HUD_BAR_ALPHA if alpha is None else alpha
@@ -771,6 +815,7 @@ class PlayMixin:
                     # 的钩爪预瞄线与锁定圈在多人模式里全都不画。
                     p.draw(self.screen, cam_x, cam_y, self.game.font, scale,
                            own_view=(p is player))
+                draw_frozen_overlay(self.screen, p, cam_x, cam_y, scale)
                 # v2.5.4 头顶状态：血条 + 名字/阵营色（PvP 敌方红、队友绿）
                 try:
                     _px = int((p.x - cam_x) * scale)
@@ -815,6 +860,7 @@ class PlayMixin:
                     pass
             else:
                 player.draw(self.screen, cam_x, cam_y, self.game.font, scale)
+                draw_frozen_overlay(self.screen, player, cam_x, cam_y, scale)
                 # v2.9.12：主动格挡弧 / 完美格挡闪光
                 try:
                     self.game.draw_block_fx(self.screen, player, cam_x, cam_y,
@@ -965,7 +1011,10 @@ class PlayMixin:
 
         # v2.8.8 蓄力武器的散布扇形（按住开火键时显示，随蓄力收敛）
         try:
-            if getattr(player, '_awm_saved', None) is not None:
+            # v2.9.14：只看 _charge_spread，不再要求 _awm_saved 非空。
+            # 分屏时每个视口传入的 player 就是视口主人，所以 P2 的扇形
+            # 只会出现在 P2 屏幕（此前 P2 根本没有这个状态）。
+            if getattr(player, '_charge_spread', None) is not None:
                 draw_charge_spread_fan(self, player, cam_x, cam_y, scale)
         except Exception:
             pass
@@ -2488,28 +2537,28 @@ def draw_charge_spread_fan(self, player, cam_x, cam_y, scale):
         _R = max(60, min(_R, 1400))
         _px = int((getattr(player, 'x', 0) - cam_x) * scale)
         _py = int((getattr(player, 'y', 0) - cam_y) * scale)
-        _half = math.radians(max(0.0, float(_spread)) * 180.0 / math.pi * 0.5 * 57.2958)
-        # spread 是弧度比例，这里直接当作半角的正切，转成扇形半角
-        _half = max(0.004, min(1.2, float(_spread) * 2.2))
+        # v2.9.14：_spread 本身就是**弧度半角**（fire 里直接用
+        # random.uniform(-s, s)），旧版又乘 2.2 把扇形画成实际弹道的
+        # 两倍宽，看着"扇形很大但子弹笔直"。现在所见即所得。
+        _half = max(0.004, min(1.2, float(_spread)))
         _a0 = math.radians(_ang) - _half
         _a1 = math.radians(_ang) + _half
         _stable = _ratio >= 0.999
         _col = (120, 255, 170) if _stable else (255, 190, 90)
-        _surf = pygame.Surface((self.screen.get_width(), self.screen.get_height()),
-                               pygame.SRCALPHA)
+        # v2.9.14：不再每帧新建全屏 SRCALPHA Surface（多人分屏时翻倍），
+        # 直接往主屏幕画多边形/折线，零 Surface 分配。
         _pts = [(_px, _py)]
-        _steps = 24
+        _steps = 20
         for _i in range(_steps + 1):
             _a = _a0 + (_a1 - _a0) * (_i / _steps)
             _pts.append((int(_px + math.cos(_a) * _R), int(_py + math.sin(_a) * _R)))
-        pygame.draw.polygon(_surf, (*_col, 46), _pts)
-        pygame.draw.lines(_surf, (*_col, 150), True, _pts[1:], max(1, int(2 * scale)))
-        # 中线（实际弹道方向）
-        pygame.draw.line(_surf, (*_col, 210), (_px, _py),
+        pygame.draw.polygon(self.screen, (max(0, _col[0] // 3), max(0, _col[1] // 3),
+                                         max(0, _col[2] // 3)), _pts)
+        pygame.draw.lines(self.screen, _col, True, _pts[1:], max(1, int(2 * scale)))
+        pygame.draw.line(self.screen, _col, (_px, _py),
                          (int(_px + math.cos(math.radians(_ang)) * _R),
                           int(_py + math.sin(math.radians(_ang)) * _R)),
                          max(1, int(2 * scale)))
-        self.screen.blit(_surf, (0, 0))
         # 收敛进度文字
         try:
             _g = self.game

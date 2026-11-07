@@ -81,6 +81,7 @@ class Projectile:
         # 实际是 200×1.2=240 而不是 100。
         self.damage_vs_player = None
         self.beam_total = 0
+        self.beam_dps = 0                # 每秒伤害（帧率无关）
         self.beam_dealt = 0
         self.owner = None  # v2.2.7 PvPvE：投射物归属玩家（判定阵营用）
         self.lifetime = 3.0 if is_flame else (laser_duration if is_laser else 10.0)
@@ -182,15 +183,13 @@ class Projectile:
             ey = int((self.laser_end_y - camera_y) * scale)
             lw = max(3, int(self.laser_width * scale))
 
-            # 外发光
-            glow_surf = pygame.Surface((screen.get_width(), screen.get_height()), pygame.SRCALPHA)
-            pygame.draw.line(glow_surf, (*self.color[:3], 40), (sx, sy), (ex, ey), lw * 4)
-            screen.blit(glow_surf, (0, 0))
-            # 中层光
+            # v2.9.14 性能优化：旧版每束激光每帧新建一张**全屏** SRCALPHA
+            # Surface 画外发光再整屏 blit —— 同屏几束就是几次全屏像素合成，
+            # 这是"发射的激光多了游戏就卡"的主因之一。
+            # 改为直接往主屏幕画三条线，零 Surface 分配（沿用 v2.9.5 破空思路）。
+            pygame.draw.line(screen, (*self.color[:3], 40), (sx, sy), (ex, ey), lw * 4)
             pygame.draw.line(screen, (*self.color[:3], 120), (sx, sy), (ex, ey), lw * 2)
-            # 核心光束
             pygame.draw.line(screen, WHITE, (sx, sy), (ex, ey), lw)
-            # 闪烁核心
             if random.random() < 0.5:
                 pygame.draw.line(screen, (255, 255, 220), (sx, sy), (ex, ey), max(1, lw // 2))
             return
@@ -367,14 +366,401 @@ class Weapon:
                 # v2.8.8：轨道炮改为**每帧 30 点基础伤害**（帧伤武器，
                 # 对玩家同值），不再是单次 560 的瞬时高伤
                 "name": "轨道炮", "damage": 1, "fire_rate": 1.6,
-                # v2.9.13：改为「1 帧 1 伤」的持续贯穿光束，吃满 500。
-                # 对僵尸 / Boss / 玩家走同一条帧伤链路，不再出现
-                # "玩家被每帧打 36、僵尸只吃一次 30" 的分裂行为。
+                # v2.9.14：持续时间 8.5s → 3s，吃满 500 → 240。
+                # 帧伤改为按 dt 累计（beam_dps=80/s），与帧率无关：
+                # 60fps 下约 1.33/帧，低帧率设备也不会少打伤害。
+                # 僵尸 / Boss / 玩家仍走同一条帧伤链路。
                 "damage_per_frame": True,
                 "damage_vs_player": 1,
-                "beam_total": 500,
-                "range": 1800, "speed": 0, "spread": 0, "pierce": 99,
-                "is_laser": True, "laser_width": 25, "laser_duration": 8.5,
+                "beam_dps": 80, "beam_total": 240,
+                "range": 1800, "speed": 0, "spread": 0.14, "pierce": 99,
+                "charge_spread_max": 0.38, "charge_spread_min": 0.015,
+                "charge_full_time": 1.4,
+                "is_laser": True, "laser_width": 25, "laser_duration": 3.0,
+                "color": PURPLE, "projectile_size": 15, "shake": 25,
+                "desc": "充能武器：射速大增/弹夹5发/换弹稍长，粗激光穿透一切（v2.5.5 加强）；"
+                        "v2.5.6 起与 AWM 一样按住显示预瞄线、松开开火",
+                "ammo": 5, "reload": 5.5,
+                "charge_time": 1.0,
+                "pvp_no_atten": True,
+                "hold_charge": True
+            },
+            WeaponType.MINIGUN: {
+                "name": "加特林", "damage": 12, "fire_rate": 0.018,
+                "range": 500, "speed": 22, "spread": 0.12, "pierce": 4,
+                "color": BLOOD_RED, "projectile_size": 5, "shake": 8,
+                "desc": "极致射速，弹幕压制，移动时精度下降",
+                "ammo": 400, "reload": 3.0,
+                "suppression": True, "tracer": True
+            },
+            WeaponType.DOUBLE_BARREL: {
+                "name": "双管霰弹", "damage": 25, "fire_rate": 1.0,
+                "range": 180, "speed": 12, "spread": 0.2, "pierce": 1,
+                "pellets": 8, "color": RUST, "projectile_size": 4, "shake": 8,
+                "desc": "双发齐射，近距离毁灭性伤害",
+                "ammo": 2, "reload": 2.0
+            },
+            # ========== 近战武器 ==========
+            WeaponType.KNIFE: {
+                "name": "匕首", "damage": 28, "fire_rate": 0.25,
+                "range": 60, "speed": 0, "spread": 0, "pierce": 1,
+                "color": (192, 192, 192), "projectile_size": 0, "shake": 2,
+                "desc": "快速近战，高暴击率",
+                "ammo": "∞", "reload": 0, "is_melee": True, "crit_chance": 0.3
+            },
+            WeaponType.BAT: {
+                "name": "棒球棍", "damage": 40, "fire_rate": 0.6,
+                "range": 70, "speed": 0, "spread": 0, "pierce": 1,
+                "color": BROWN, "projectile_size": 0, "shake": 4,
+                "desc": "中速近战，有击退效果",
+                "ammo": "∞", "reload": 0, "is_melee": True, "knockback": 15
+            },
+            WeaponType.CHAINSAW: {
+                "name": "电锯", "damage": 22, "fire_rate": 0.08,
+                "range": 55, "speed": 0, "spread": 0, "pierce": 1,
+                "color": ORANGE, "projectile_size": 0, "shake": 3,
+                "desc": "持续高DPS，移动减速",
+                "ammo": "∞", "reload": 0, "is_melee": True, "move_slow": 0.5
+            },
+            WeaponType.SCYTHE: {
+                "name": "死神镰刀", "damage": 42, "fire_rate": 0.34,
+                "range": 480, "speed": 11, "spread": 0, "pierce": 4,
+                "color": (180, 60, 220), "projectile_size": 16, "shake": 4,
+                "desc": "死神之镰：连续挥砍8道大剑气；挥尽后换弹期间释放圆形横扫",
+                "ammo": 8, "reload": 1.15, "is_melee": False, "is_scythe": True,
+                "sweep_radius": 210, "sweep_damage": 85
+            },
+            # ========== 手枪扩展 ==========
+            WeaponType.REVOLVER: {
+                "name": "左轮手枪", "damage": 45, "fire_rate": 0.7,
+                "range": 450, "speed": 14, "spread": 0.02, "pierce": 2,
+                "color": GOLD, "projectile_size": 5, "shake": 5,
+                "desc": "高伤害低射速，穿透力强",
+                "ammo": 6, "reload": 2.0
+            },
+            WeaponType.DESERT_EAGLE: {
+                "name": "沙漠之鹰", "damage": 60, "fire_rate": 0.8,
+                "range": 500, "speed": 16, "spread": 0.03, "pierce": 3,
+                "color": (200, 200, 200), "projectile_size": 6, "shake": 7,
+                "desc": "超高伤害手枪，后坐力大",
+                "ammo": 7, "reload": 2.5
+            },
+            # ========== 冲锋枪扩展 ==========
+            WeaponType.SMG: {
+                "name": "冲锋枪", "damage": 14, "fire_rate": 0.08,
+                "range": 350, "speed": 13, "spread": 0.07, "pierce": 1,
+                "color": DARK_GRAY, "projectile_size": 3, "shake": 2,
+                "desc": "高射速基础冲锋枪",
+                "ammo": 30, "reload": 1.8
+            },
+            WeaponType.UMP45: {
+                "name": "UMP45", "damage": 18, "fire_rate": 0.12,
+                "range": 400, "speed": 13, "spread": 0.05, "pierce": 1,
+                "color": BLACK, "projectile_size": 4, "shake": 3,
+                "desc": "高伤害冲锋枪，精度较好",
+                "ammo": 25, "reload": 2.0
+            },
+            WeaponType.P90: {
+                "name": "P90", "damage": 13, "fire_rate": 0.06,
+                "range": 380, "speed": 14, "spread": 0.06, "pierce": 1,
+                "color": (180, 160, 120), "projectile_size": 3, "shake": 2,
+                "desc": "极高射速，大容量弹匣",
+                "ammo": 50, "reload": 2.2
+            },
+            # ========== 步枪扩展 ==========
+            WeaponType.AK47: {
+                "name": "AK47", "damage": 32, "fire_rate": 0.12,
+                "range": 500, "speed": 15, "spread": 0.06, "pierce": 2,
+                "color": (139, 90, 43), "projectile_size": 5, "shake": 4,
+                "desc": "高伤害步枪，后坐力较大",
+                "ammo": 30, "reload": 2.2
+            },
+            WeaponType.M4A1: {
+                "name": "M4A1", "damage": 26, "fire_rate": 0.1,
+                "range": 520, "speed": 16, "spread": 0.03, "pierce": 2,
+                "color": BLACK, "projectile_size": 4, "shake": 3,
+                "desc": "均衡可靠的突击步枪",
+                "ammo": 30, "reload": 2.0
+            },
+            WeaponType.SCAR: {
+                "name": "SCAR", "damage": 28, "fire_rate": 0.11,
+                "range": 550, "speed": 15, "spread": 0.02, "pierce": 2,
+                "color": (180, 160, 120), "projectile_size": 5, "shake": 3,
+                "desc": "高精度突击步枪",
+                "ammo": 30, "reload": 2.1
+            },
+            # ========== 狙击枪扩展 ==========
+            WeaponType.AWP: {
+                # v2.8.8：AWM 基础伤害 420 → 对僵尸 200 / 对玩家 100
+                # （原值过高且对玩家与僵尸同伤，PvP 里一枪秒人）
+                "name": "轨道炮", "damage": 1, "fire_rate": 1.6,
+                # v2.9.14：持续时间 8.5s → 3s，吃满 500 → 240。
+                # 帧伤改为按 dt 累计（beam_dps=80/s），与帧率无关：
+                # 60fps 下约 1.33/帧，低帧率设备也不会少打伤害。
+                # 僵尸 / Boss / 玩家仍走同一条帧伤链路。
+                "damage_per_frame": True,
+                "damage_vs_player": 1,
+                "beam_dps": 80, "beam_total": 240,
+                "range": 1800, "speed": 0, "spread": 0.14, "pierce": 99,
+                "charge_spread_max": 0.38, "charge_spread_min": 0.015,
+                "charge_full_time": 1.4,
+                "is_laser": True, "laser_width": 25, "laser_duration": 3.0,
+                "color": PURPLE, "projectile_size": 15, "shake": 25,
+                "desc": "充能武器：射速大增/弹夹5发/换弹稍长，粗激光穿透一切（v2.5.5 加强）；"
+                        "v2.5.6 起与 AWM 一样按住显示预瞄线、松开开火",
+                "ammo": 5, "reload": 5.5,
+                "charge_time": 1.0,
+                "pvp_no_atten": True,
+                "hold_charge": True
+            },
+            WeaponType.MINIGUN: {
+                "name": "加特林", "damage": 12, "fire_rate": 0.018,
+                "range": 500, "speed": 22, "spread": 0.12, "pierce": 4,
+                "color": BLOOD_RED, "projectile_size": 5, "shake": 8,
+                "desc": "极致射速，弹幕压制，移动时精度下降",
+                "ammo": 400, "reload": 3.0,
+                "suppression": True, "tracer": True
+            },
+            WeaponType.DOUBLE_BARREL: {
+                "name": "双管霰弹", "damage": 25, "fire_rate": 1.0,
+                "range": 180, "speed": 12, "spread": 0.2, "pierce": 1,
+                "pellets": 8, "color": RUST, "projectile_size": 4, "shake": 8,
+                "desc": "双发齐射，近距离毁灭性伤害",
+                "ammo": 2, "reload": 2.0
+            },
+            # ========== 近战武器 ==========
+            WeaponType.KNIFE: {
+                "name": "匕首", "damage": 28, "fire_rate": 0.25,
+                "range": 60, "speed": 0, "spread": 0, "pierce": 1,
+                "color": (192, 192, 192), "projectile_size": 0, "shake": 2,
+                "desc": "快速近战，高暴击率",
+                "ammo": "∞", "reload": 0, "is_melee": True, "crit_chance": 0.3
+            },
+            WeaponType.BAT: {
+                "name": "棒球棍", "damage": 40, "fire_rate": 0.6,
+                "range": 70, "speed": 0, "spread": 0, "pierce": 1,
+                "color": BROWN, "projectile_size": 0, "shake": 4,
+                "desc": "中速近战，有击退效果",
+                "ammo": "∞", "reload": 0, "is_melee": True, "knockback": 15
+            },
+            WeaponType.CHAINSAW: {
+                "name": "电锯", "damage": 22, "fire_rate": 0.08,
+                "range": 55, "speed": 0, "spread": 0, "pierce": 1,
+                "color": ORANGE, "projectile_size": 0, "shake": 3,
+                "desc": "持续高DPS，移动减速",
+                "ammo": "∞", "reload": 0, "is_melee": True, "move_slow": 0.5
+            },
+            WeaponType.SCYTHE: {
+                "name": "死神镰刀", "damage": 42, "fire_rate": 0.34,
+                "range": 480, "speed": 11, "spread": 0, "pierce": 4,
+                "color": (180, 60, 220), "projectile_size": 16, "shake": 4,
+                "desc": "死神之镰：连续挥砍8道大剑气；挥尽后换弹期间释放圆形横扫",
+                "ammo": 8, "reload": 1.15, "is_melee": False, "is_scythe": True,
+                "sweep_radius": 210, "sweep_damage": 85
+            },
+            # ========== 手枪扩展 ==========
+            WeaponType.REVOLVER: {
+                "name": "左轮手枪", "damage": 45, "fire_rate": 0.7,
+                "range": 450, "speed": 14, "spread": 0.02, "pierce": 2,
+                "color": GOLD, "projectile_size": 5, "shake": 5,
+                "desc": "高伤害低射速，穿透力强",
+                "ammo": 6, "reload": 2.0
+            },
+            WeaponType.DESERT_EAGLE: {
+                "name": "沙漠之鹰", "damage": 60, "fire_rate": 0.8,
+                "range": 500, "speed": 16, "spread": 0.03, "pierce": 3,
+                "color": (200, 200, 200), "projectile_size": 6, "shake": 7,
+                "desc": "超高伤害手枪，后坐力大",
+                "ammo": 7, "reload": 2.5
+            },
+            # ========== 冲锋枪扩展 ==========
+            WeaponType.SMG: {
+                "name": "冲锋枪", "damage": 14, "fire_rate": 0.08,
+                "range": 350, "speed": 13, "spread": 0.07, "pierce": 1,
+                "color": DARK_GRAY, "projectile_size": 3, "shake": 2,
+                "desc": "高射速基础冲锋枪",
+                "ammo": 30, "reload": 1.8
+            },
+            WeaponType.UMP45: {
+                "name": "UMP45", "damage": 18, "fire_rate": 0.12,
+                "range": 400, "speed": 13, "spread": 0.05, "pierce": 1,
+                "color": BLACK, "projectile_size": 4, "shake": 3,
+                "desc": "高伤害冲锋枪，精度较好",
+                "ammo": 25, "reload": 2.0
+            },
+            WeaponType.P90: {
+                "name": "P90", "damage": 13, "fire_rate": 0.06,
+                "range": 380, "speed": 14, "spread": 0.06, "pierce": 1,
+                "color": (180, 160, 120), "projectile_size": 3, "shake": 2,
+                "desc": "极高射速，大容量弹匣",
+                "ammo": 50, "reload": 2.2
+            },
+            # ========== 步枪扩展 ==========
+            WeaponType.AK47: {
+                "name": "AK47", "damage": 32, "fire_rate": 0.12,
+                "range": 500, "speed": 15, "spread": 0.06, "pierce": 2,
+                "color": (139, 90, 43), "projectile_size": 5, "shake": 4,
+                "desc": "高伤害步枪，后坐力较大",
+                "ammo": 30, "reload": 2.2
+            },
+            WeaponType.M4A1: {
+                "name": "M4A1", "damage": 26, "fire_rate": 0.1,
+                "range": 520, "speed": 16, "spread": 0.03, "pierce": 2,
+                "color": BLACK, "projectile_size": 4, "shake": 3,
+                "desc": "均衡可靠的突击步枪",
+                "ammo": 30, "reload": 2.0
+            },
+            WeaponType.SCAR: {
+                "name": "SCAR", "damage": 28, "fire_rate": 0.11,
+                "range": 550, "speed": 15, "spread": 0.02, "pierce": 2,
+                "color": (180, 160, 120), "projectile_size": 5, "shake": 3,
+                "desc": "高精度突击步枪",
+                "ammo": 30, "reload": 2.1
+            },
+            # ========== 狙击枪扩展 ==========
+            WeaponType.AWP: {
+                # v2.8.8：AWM 基础伤害 420 → 对僵尸 200 / 对玩家 100
+                # （原值过高且对玩家与僵尸同伤，PvP 里一枪秒人）
+                "name": "轨道炮", "damage": 1, "fire_rate": 1.6,
+                # v2.9.14：持续时间 8.5s → 3s，吃满 500 → 240。
+                # 帧伤改为按 dt 累计（beam_dps=80/s），与帧率无关：
+                # 60fps 下约 1.33/帧，低帧率设备也不会少打伤害。
+                # 僵尸 / Boss / 玩家仍走同一条帧伤链路。
+                "damage_per_frame": True,
+                "damage_vs_player": 1,
+                "beam_dps": 80, "beam_total": 240,
+                "range": 1800, "speed": 0, "spread": 0.14, "pierce": 99,
+                "charge_spread_max": 0.38, "charge_spread_min": 0.015,
+                "charge_full_time": 1.4,
+                "is_laser": True, "laser_width": 25, "laser_duration": 3.0,
+                "color": PURPLE, "projectile_size": 15, "shake": 25,
+                "desc": "充能武器：射速大增/弹夹5发/换弹稍长，粗激光穿透一切（v2.5.5 加强）；"
+                        "v2.5.6 起与 AWM 一样按住显示预瞄线、松开开火",
+                "ammo": 5, "reload": 5.5,
+                "charge_time": 1.0,
+                "pvp_no_atten": True,
+                "hold_charge": True
+            },
+            WeaponType.MINIGUN: {
+                "name": "加特林", "damage": 12, "fire_rate": 0.018,
+                "range": 500, "speed": 22, "spread": 0.12, "pierce": 4,
+                "color": BLOOD_RED, "projectile_size": 5, "shake": 8,
+                "desc": "极致射速，弹幕压制，移动时精度下降",
+                "ammo": 400, "reload": 3.0,
+                "suppression": True, "tracer": True
+            },
+            WeaponType.DOUBLE_BARREL: {
+                "name": "双管霰弹", "damage": 25, "fire_rate": 1.0,
+                "range": 180, "speed": 12, "spread": 0.2, "pierce": 1,
+                "pellets": 8, "color": RUST, "projectile_size": 4, "shake": 8,
+                "desc": "双发齐射，近距离毁灭性伤害",
+                "ammo": 2, "reload": 2.0
+            },
+            # ========== 近战武器 ==========
+            WeaponType.KNIFE: {
+                "name": "匕首", "damage": 28, "fire_rate": 0.25,
+                "range": 60, "speed": 0, "spread": 0, "pierce": 1,
+                "color": (192, 192, 192), "projectile_size": 0, "shake": 2,
+                "desc": "快速近战，高暴击率",
+                "ammo": "∞", "reload": 0, "is_melee": True, "crit_chance": 0.3
+            },
+            WeaponType.BAT: {
+                "name": "棒球棍", "damage": 40, "fire_rate": 0.6,
+                "range": 70, "speed": 0, "spread": 0, "pierce": 1,
+                "color": BROWN, "projectile_size": 0, "shake": 4,
+                "desc": "中速近战，有击退效果",
+                "ammo": "∞", "reload": 0, "is_melee": True, "knockback": 15
+            },
+            WeaponType.CHAINSAW: {
+                "name": "电锯", "damage": 22, "fire_rate": 0.08,
+                "range": 55, "speed": 0, "spread": 0, "pierce": 1,
+                "color": ORANGE, "projectile_size": 0, "shake": 3,
+                "desc": "持续高DPS，移动减速",
+                "ammo": "∞", "reload": 0, "is_melee": True, "move_slow": 0.5
+            },
+            WeaponType.SCYTHE: {
+                "name": "死神镰刀", "damage": 42, "fire_rate": 0.34,
+                "range": 480, "speed": 11, "spread": 0, "pierce": 4,
+                "color": (180, 60, 220), "projectile_size": 16, "shake": 4,
+                "desc": "死神之镰：连续挥砍8道大剑气；挥尽后换弹期间释放圆形横扫",
+                "ammo": 8, "reload": 1.15, "is_melee": False, "is_scythe": True,
+                "sweep_radius": 210, "sweep_damage": 85
+            },
+            # ========== 手枪扩展 ==========
+            WeaponType.REVOLVER: {
+                "name": "左轮手枪", "damage": 45, "fire_rate": 0.7,
+                "range": 450, "speed": 14, "spread": 0.02, "pierce": 2,
+                "color": GOLD, "projectile_size": 5, "shake": 5,
+                "desc": "高伤害低射速，穿透力强",
+                "ammo": 6, "reload": 2.0
+            },
+            WeaponType.DESERT_EAGLE: {
+                "name": "沙漠之鹰", "damage": 60, "fire_rate": 0.8,
+                "range": 500, "speed": 16, "spread": 0.03, "pierce": 3,
+                "color": (200, 200, 200), "projectile_size": 6, "shake": 7,
+                "desc": "超高伤害手枪，后坐力大",
+                "ammo": 7, "reload": 2.5
+            },
+            # ========== 冲锋枪扩展 ==========
+            WeaponType.SMG: {
+                "name": "冲锋枪", "damage": 14, "fire_rate": 0.08,
+                "range": 350, "speed": 13, "spread": 0.07, "pierce": 1,
+                "color": DARK_GRAY, "projectile_size": 3, "shake": 2,
+                "desc": "高射速基础冲锋枪",
+                "ammo": 30, "reload": 1.8
+            },
+            WeaponType.UMP45: {
+                "name": "UMP45", "damage": 18, "fire_rate": 0.12,
+                "range": 400, "speed": 13, "spread": 0.05, "pierce": 1,
+                "color": BLACK, "projectile_size": 4, "shake": 3,
+                "desc": "高伤害冲锋枪，精度较好",
+                "ammo": 25, "reload": 2.0
+            },
+            WeaponType.P90: {
+                "name": "P90", "damage": 13, "fire_rate": 0.06,
+                "range": 380, "speed": 14, "spread": 0.06, "pierce": 1,
+                "color": (180, 160, 120), "projectile_size": 3, "shake": 2,
+                "desc": "极高射速，大容量弹匣",
+                "ammo": 50, "reload": 2.2
+            },
+            # ========== 步枪扩展 ==========
+            WeaponType.AK47: {
+                "name": "AK47", "damage": 32, "fire_rate": 0.12,
+                "range": 500, "speed": 15, "spread": 0.06, "pierce": 2,
+                "color": (139, 90, 43), "projectile_size": 5, "shake": 4,
+                "desc": "高伤害步枪，后坐力较大",
+                "ammo": 30, "reload": 2.2
+            },
+            WeaponType.M4A1: {
+                "name": "M4A1", "damage": 26, "fire_rate": 0.1,
+                "range": 520, "speed": 16, "spread": 0.03, "pierce": 2,
+                "color": BLACK, "projectile_size": 4, "shake": 3,
+                "desc": "均衡可靠的突击步枪",
+                "ammo": 30, "reload": 2.0
+            },
+            WeaponType.SCAR: {
+                "name": "SCAR", "damage": 28, "fire_rate": 0.11,
+                "range": 550, "speed": 15, "spread": 0.02, "pierce": 2,
+                "color": (180, 160, 120), "projectile_size": 5, "shake": 3,
+                "desc": "高精度突击步枪",
+                "ammo": 30, "reload": 2.1
+            },
+            # ========== 狙击枪扩展 ==========
+            WeaponType.AWP: {
+                # v2.8.8：AWM 基础伤害 420 → 对僵尸 200 / 对玩家 100
+                # （原值过高且对玩家与僵尸同伤，PvP 里一枪秒人）
+                "name": "轨道炮", "damage": 1, "fire_rate": 1.6,
+                # v2.9.14：持续时间 8.5s → 3s，吃满 500 → 240。
+                # 帧伤改为按 dt 累计（beam_dps=80/s），与帧率无关：
+                # 60fps 下约 1.33/帧，低帧率设备也不会少打伤害。
+                # 僵尸 / Boss / 玩家仍走同一条帧伤链路。
+                "damage_per_frame": True,
+                "damage_vs_player": 1,
+                "beam_dps": 80, "beam_total": 240,
+                "range": 1800, "speed": 0, "spread": 0.14, "pierce": 99,
+                "charge_spread_max": 0.38, "charge_spread_min": 0.015,
+                "charge_full_time": 1.4,
+                "is_laser": True, "laser_width": 25, "laser_duration": 3.0,
                 "color": PURPLE, "projectile_size": 15, "shake": 25,
                 "desc": "充能武器：射速大增/弹夹5发/换弹稍长，粗激光穿透一切（v2.5.5 加强）；"
                         "v2.5.6 起与 AWM 一样按住显示预瞄线、松开开火",
@@ -493,7 +879,12 @@ class Weapon:
                 # （原值过高且对玩家与僵尸同伤，PvP 里一枪秒人）
                 "name": "AWM", "damage": 200, "fire_rate": 1.1,
                 "damage_vs_player": 80,   # v2.9.13：PvP 由 100 削到 80
-                "range": 2600, "speed": 34, "spread": 0, "pierce": 30,
+                # v2.9.14：散布是真的（之前 spread=0、蓄力上限仅 0.06≈±3°，
+                # 肉眼看不出任何偏移）。平射 ±0.20rad(≈11°)，长按起始
+                # ±0.45rad(≈26°) 的大扇形，蓄满收敛到 ±0.02rad。
+                "charge_spread_max": 0.45,
+                "charge_spread_min": 0.02, "charge_full_time": 1.4,
+                "range": 2600, "speed": 34, "spread": 0.20, "pierce": 30,
                 "color": GREEN, "projectile_size": 8, "shake": 12,
                 "desc": "传奇狙击枪：射速更快/弹夹10发/射程与穿透大幅提升/按住拖动显示弹道预瞄线，松开开火（v2.5.6 修复蓄力开火）",
                 "ammo": 10, "reload": 1.8,
@@ -549,6 +940,13 @@ class Weapon:
             pass
         for k, v in config.items():
             setattr(self, k, v)
+        # v2.9.14 蓄力武器散布兜底：数据库是权威，但老库/源码里
+        # AWM 的 spread 列仍是 0（历史上"扇形在收窄、子弹笔直"的根因）。
+        # 有 charge_spread_max 却没基础散布时，取其 45% 作为平射散布。
+        if getattr(self, "hold_charge", False):
+            _cmax = float(getattr(self, "charge_spread_max", 0.0) or 0.0)
+            if _cmax > 0 and float(getattr(self, "spread", 0.0) or 0.0) < 0.15:
+                self.spread = max(0.15, _cmax * 0.45)
         self.shake_intensity = config.get("shake", 2)
         self.damage *= (1 + (self.level - 1) * 0.2)
         self.fire_rate *= (0.9 ** (self.level - 1))
@@ -641,7 +1039,10 @@ class Weapon:
             # player._charge_spread。此前这个值只被扇形预览消费，
             # 真正开火时仍用 self.spread（AWM 为 0），所以"扇形在收窄
             # 但子弹依然笔直"——散布根本没生效。
-            _eff_spread = float(getattr(self, "spread", 0.0) or 0.0)
+            # v2.9.14：基础散布 = 武器 spread 与「蓄力上限」取大者，
+            # 保证不蓄力直接平射也能看到明显散布（此前 AWM spread=0）。
+            _eff_spread = max(float(getattr(self, "spread", 0.0) or 0.0),
+                              float(getattr(self, "charge_spread_max", 0.0) or 0.0) * 0.45)
             # v2.9.3：优先用开火瞬间固化的 _fire_spread（松开时保留的收敛值），
             # 其次才是仍在蓄力中的 _charge_spread
             _cs = getattr(player, "_fire_spread", None)
@@ -684,6 +1085,7 @@ class Weapon:
             proj.owner = player  # v2.2.7 PvPvE 归属
             proj.damage_vs_player = getattr(self, "damage_vs_player", None)
             proj.beam_total = int(getattr(self, "beam_total", 0) or 0)
+            proj.beam_dps = float(getattr(self, "beam_dps", 0) or 0)
             # v2.5.5 单发特高伤武器（AWM/轨道炮）标志：PvP 互伤不作衰减反而加强
             proj.pvp_no_atten = bool(getattr(self, "pvp_no_atten", False))
             projectiles.append(proj)
@@ -694,15 +1096,31 @@ class Weapon:
             self.is_reloading = True
             self.reload_timer = self.reload_time
 
-    def reset_reload(self):
-        """v2.2.7：强制清除换弹状态（退出重载/倒地救起/状态切换时调用，
-        防止 reload_timer 残留导致永远无法开火）"""
+    def reset_reload(self, refill=False):
+        """清除换弹状态（倒地救起 / 状态切换时调用）。
+
+        v2.9.14 修复"倒地时正在换弹，被救起后无法开火"：
+        旧版只清 is_reloading / reload_timer，**不补弹药**。倒地时
+        Player.update() 直接 return，换弹计时冻结；救起后
+        current_ammo 仍是 0、is_reloading 却是 False →
+        can_fire() 为 False → fire() 不执行 → start_reload()
+        永远没人调用 → 死锁。现在救援时把弹药补满。
+        """
         self.is_reloading = False
         self.reload_timer = 0
+        if refill and self.current_ammo != "∞":
+            self.current_ammo = self.max_ammo
 
     def update(self, dt):
         if self.cooldown_timer > 0:
             self.cooldown_timer -= dt
+
+        # v2.9.14 自愈兜底：任何路径导致「弹药 0 且不在换弹」都自动
+        # 重新进入换弹，绝不再出现"有枪却永远打不出子弹"。
+        if (not self.is_reloading and self.current_ammo != "∞"
+                and isinstance(self.current_ammo, (int, float))
+                and self.current_ammo <= 0 and self.reload_time > 0):
+            self.start_reload()
 
         if self.is_reloading:
             self.reload_timer -= dt * self.reload_speed_mult

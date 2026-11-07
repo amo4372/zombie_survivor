@@ -1322,9 +1322,18 @@ class EffectsMixin:
         # 吸血光环
         vampire_skill = self.player.skill_tree.get_skill(SkillType.VAMPIRE_AURA)
         if vampire_skill and vampire_skill.current_level > 0:
-            heal_amount = self.player.max_hp * 0.05 * vampire_skill.current_level
-            self.player.heal(heal_amount)
-            self.lifesteal_flash = min(1.0, self.lifesteal_flash + 0.4)
+            # v2.9.14 削弱：原 5%×等级（满级 15% 每次击杀）在尸潮里
+            # 等于无限续航。改为 1.2%×等级且单次封顶 3% 最大血，
+            # 并加 1.5s 内置冷却，避免一帧多杀叠满。
+            import time as _vt
+            _now = _vt.time()
+            if _now - float(getattr(self, "_vamp_aura_last", 0.0)) >= 1.5:
+                self._vamp_aura_last = _now
+                heal_amount = min(self.player.max_hp * 0.03,
+                                  self.player.max_hp * 0.012 * vampire_skill.current_level)
+                self.player.heal(heal_amount)
+                self.spawn_heal_fx(self.player.x, self.player.y, heal_amount)
+                self.lifesteal_flash = min(1.0, self.lifesteal_flash + 0.25)
         # 嗜血：击杀后获得加速buff
         bloodlust_skill = self.player.skill_tree.get_skill(SkillType.BLOODLUST)
         if bloodlust_skill and bloodlust_skill.current_level > 0:

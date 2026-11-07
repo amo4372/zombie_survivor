@@ -363,10 +363,10 @@ class PlayingMixin:
         try:
             for _w in (getattr(player, 'weapons', None) or []):
                 if hasattr(_w, 'reset_reload'):
-                    _w.reset_reload()
+                    _w.reset_reload(refill=True)
             _cw = player.get_current_weapon() if hasattr(player, 'get_current_weapon') else None
             if _cw is not None and hasattr(_cw, 'reset_reload'):
-                _cw.reset_reload()
+                _cw.reset_reload(refill=True)
         except Exception:
             pass
 
@@ -431,8 +431,19 @@ class PlayingMixin:
             if (not getattr(enemy, 'melee_hit_consumed', False)
                     and getattr(enemy, 'melee_target_pid', None) == id(player)):
                 enemy.melee_hit_consumed = True
-                # 前摇期间玩家跑出范围 = 挥空（主动闪避/格挡的窗口）
-                if dist <= attack_range:
+                # v2.9.14：判定用**前摇发起时锁定的方向**（melee_warn_angle），
+                # 不是实时朝向。玩家横向走位绕出预警扇形同样能躲开，
+                # 这才是"抓前摇 Timing"；僵尸在前摇/后摇定在原地不追踪。
+                _warn_a = getattr(enemy, 'melee_warn_angle', None)
+                _in_arc = True
+                if _warn_a is not None:
+                    try:
+                        # dx/dy 是 player→enemy，预警角是 enemy→player，取反
+                        _to_p = math.degrees(math.atan2(-dy, -dx))
+                        _in_arc = abs((_to_p - float(_warn_a) + 180) % 360 - 180) <= 62.0
+                    except Exception:
+                        _in_arc = True
+                if dist <= attack_range and _in_arc:
                     self._resolve_melee_impact(enemy, player, camera, dx, dy)
                 enemy.melee_state = 'recover'
                 enemy.melee_state_timer = max(0.05, float(
@@ -530,6 +541,23 @@ class PlayingMixin:
             camera.shake(6, 0.4)
 
     def _update_playing(self, dt):
+        # v2.9.14：消费所有玩家的回复事件 → 世界坐标浮字/粒子（分屏可见）
+        try:
+            for _hp in self._all_players():
+                _ev = getattr(_hp, "_heal_fx_events", None)
+                if _ev:
+                    for _amt in _ev:
+                        self.spawn_heal_fx(_hp.x, _hp.y, _amt, who=_hp)
+                    _ev.clear()
+                # 角色/技能的自然回血（regen_rate）也给出轻量反馈
+                _rr = float(getattr(_hp, "regen_rate", 0) or 0)
+                if _rr > 0 and getattr(_hp, "hp", 0) < getattr(_hp, "max_hp", 1):
+                    _hp._regen_fx_t = float(getattr(_hp, "_regen_fx_t", 0.0)) + dt
+                    if _hp._regen_fx_t >= 1.0:
+                        _hp._regen_fx_t = 0.0
+                        self.spawn_heal_fx(_hp.x, _hp.y, _rr, who=_hp)
+        except Exception:
+            pass
         # v2.9.12：主动格挡状态机每帧推进（P1/P2 各自独立）
         try:
             self.update_block(dt)
@@ -832,6 +860,11 @@ class PlayingMixin:
                 # v2.2.11 触控：锚点跟随瞄准方向/距离实时移动（skill_caster.angle 弧度→度）
                 _aim_ang = math.degrees(self.skill_caster.angle)
                 _aim_dist = self._get_skill_max_distance(self.selected_skill) * self.skill_caster.distance_ratio
+                # v2.9.14：让动态视野真正消费技能瞄准距离（此前只是局部变量）
+                try:
+                    self.player._skill_aim_dist = float(_aim_dist)
+                except Exception:
+                    pass
                 _rg_aim.update_grapple_lock(self.player.x, self.player.y, self.enemies,
                                             items=getattr(self.world, 'items', None),
                                             aim_angle=_aim_ang, aim_dist=_aim_dist,
@@ -1477,20 +1510,29 @@ class PlayingMixin:
             drops_vaccine = False
             if isinstance(spawn_type, tuple):
                 spawn_type, drops_vaccine = spawn_type
-            # 故事/争分夺秒模式：使用地图配置的怪物权重（Boss除外）——v2.2.3 两模式僵尸池同步合并
+            # v2.9.14 全模式统一丧尸池：
+            # 旧版故事/争分夺秒在这里用 map_config["enemy_weights"] 二次覆盖
+            # world.should_spawn() 的结果，而无尽模式直接用 world 的解锁池。
+            # 于是"无尽里能遇到冰冻僵尸等新类别、故事里刷不出来"——两套池
+            # 长期分叉。现在一律以 world 的统一池为准（内含 32 种全部类型），
+            # 地图权重只作为**额外加权候选**，不再替换类型。
             boss_types = (EnemyType.BOSS_LONG, EnemyType.BOSS_XIANG, EnemyType.BOSS_MUTANT,
                          EnemyType.BOSS_QUEEN, EnemyType.BOSS_TITAN, EnemyType.BOSS_WANG)
-            if self.config.game_mode in (GameMode.STORY, GameMode.TIMED) and spawn_type not in boss_types:
-                enemy_weights = self.map_config.get("enemy_weights", {})
-                if enemy_weights:
-                    total_weight = sum(enemy_weights.values())
-                    r = random.uniform(0, total_weight)
-                    cumulative = 0
-                    for etype, w in enemy_weights.items():
-                        cumulative += w
-                        if r <= cumulative:
-                            spawn_type = etype
-                            break
+            if spawn_type not in boss_types:
+                _weights = self.map_config.get("enemy_weights", {})
+                if _weights and random.random() < 0.35:
+                    try:
+                        _tot = sum(_weights.values())
+                        _r = random.uniform(0, _tot)
+                        _cum = 0
+                        for _et, _w in _weights.items():
+                            _cum += _w
+                            if _r <= _cum:
+                                # 只在候选本身属于统一池时才加权（不引入池外类型）
+                                spawn_type = _et
+                                break
+                    except Exception:
+                        pass
             angle = random.uniform(0, math.pi * 2)
             dist = random.randint(400, 700)
             # v2.5.3 多人刷怪：随机一个活跃玩家为中心（每个玩家周围都会刷新，不再只围最近者）
@@ -2244,6 +2286,16 @@ class PlayingMixin:
             else:
                 self.skill_caster.set_cooldown(0)
 
+        # v2.9.14：限制同屏持续光束数量（连发时旧光束不回收会越积越多，
+        # 每束都要遍历敌人 + 画三条全屏线，是"激光多了就卡"的主因）
+        if len(self.projectiles) > 6:
+            _beams = [_p for _p in self.projectiles
+                      if getattr(_p, "is_laser", False) and _p.alive
+                      and int(getattr(_p, "beam_total", 0) or 0) > 0]
+            if len(_beams) > 6:
+                for _old in _beams[:len(_beams) - 6]:
+                    _old.alive = False
+
         # 更新投射物
         for proj in self.projectiles[:]:
             result = proj.update(dt)
@@ -2302,61 +2354,106 @@ class PlayingMixin:
                         self.damage_numbers.append(DamageNumber(_pp.x, _pp.y, _pvp_d, color=RED))
                         self._on_player_hit_by_projectile(_pp, proj)
 
-            # v2.9.13 持续光束帧伤（轨道炮）：僵尸 / Boss / 玩家走**完全相同**的
-            # 「1 帧 1 伤、单目标累计上限 beam_total(500)」链路。
-            # 旧实现：敌人被 proj.hits 去重只吃一次，玩家却每帧都扣血 ——
-            # 表现为"轨道炮对玩家帧伤、对僵尸不是帧伤"。
+            # v2.9.14 持续光束帧伤（轨道炮）：僵尸 / Boss / 玩家走**完全相同**的
+            # 「按 dt 累计（beam_dps=80/s）、单目标上限 beam_total=240」链路。
+            # 性能三件套：线段 AABB 粗筛、同屏光束数上限、伤害数字 0.1s 节流。
             if proj.is_laser and int(getattr(proj, "beam_total", 0) or 0) > 0:
                 _cap = int(proj.beam_total)
                 if getattr(proj, "beam_targets", None) is None:
                     proj.beam_targets = {}
+                if getattr(proj, "beam_pending", None) is None:
+                    proj.beam_pending = {}
+                    proj.beam_fx_timer = 0.0
                 _bt = proj.beam_targets
+                _pend = proj.beam_pending
                 _dx = proj.laser_end_x - proj.x
                 _dy = proj.laser_end_y - proj.y
                 _ll = _dx * _dx + _dy * _dy
-                _tick = float(proj.damage or 1.0)
+                _dps = float(getattr(proj, "beam_dps", 0) or 0)
+                _tick = (_dps * float(dt) if _dps > 0
+                         else float(proj.damage or 1.0))
+                if _tick <= 0:
+                    _tick = 1.0
+                _rw = float(getattr(proj, "laser_width", 25) or 25)
                 if _ll > 0:
+                    # 包围盒粗筛：绝大多数僵尸一次比较就被排除，不再每帧
+                    # 对全部敌人做投影 + hypot
+                    _m = _rw + 40.0
+                    _minx = min(proj.x, proj.laser_end_x) - _m
+                    _maxx = max(proj.x, proj.laser_end_x) + _m
+                    _miny = min(proj.y, proj.laser_end_y) - _m
+                    _maxy = max(proj.y, proj.laser_end_y) + _m
+
+                    def _beam_hit(_tx, _ty, _sz):
+                        if _tx < _minx or _tx > _maxx or _ty < _miny or _ty > _maxy:
+                            return False
+                        _t = max(0.0, min(1.0,
+                            ((_tx - proj.x) * _dx + (_ty - proj.y) * _dy) / _ll))
+                        _cx = proj.x + _t * _dx
+                        _cy = proj.y + _t * _dy
+                        _rr = float(_sz) + _rw
+                        return (_tx - _cx) ** 2 + (_ty - _cy) ** 2 < _rr * _rr
+
+                    def _accum(_k, _amt, _tx, _ty, _is_player=False):
+                        _rec = _pend.get(_k)
+                        if _rec is None:
+                            _pend[_k] = [_amt, _tx, _ty, _is_player]
+                        else:
+                            _rec[0] += _amt
+                            _rec[1], _rec[2] = _tx, _ty
+
                     for _e in self.enemies:
                         if not getattr(_e, "alive", True):
                             continue
                         _k = id(_e)
                         if _bt.get(_k, 0) >= _cap:
                             continue
-                        _t = max(0.0, min(1.0,
-                            ((_e.x - proj.x) * _dx + (_e.y - proj.y) * _dy) / _ll))
-                        _cx, _cy = proj.x + _t * _dx, proj.y + _t * _dy
-                        if math.hypot(_e.x - _cx, _e.y - _cy) < getattr(_e, "size", 16) + proj.laser_width:
-                            _d = min(_tick, _cap - _bt.get(_k, 0))
-                            _e._last_hit_team = getattr(proj.owner, "team_id", 0)
-                            _e._last_hit_player = proj.owner
-                            _e.take_damage(_d)
-                            _bt[_k] = _bt.get(_k, 0) + _d
-                            self.spawn_damage(_e.x, _e.y, _d,
-                                              merge_key=("beam", _k),
-                                              damage_type="ranged")
-                            if not _e.alive:
-                                self._on_enemy_death(_e)
+                        if not _beam_hit(_e.x, _e.y, getattr(_e, "size", 16)):
+                            continue
+                        _d = min(_tick, _cap - _bt.get(_k, 0))
+                        _e._last_hit_team = getattr(proj.owner, "team_id", 0)
+                        _e._last_hit_player = proj.owner
+                        _e.take_damage(_d)
+                        _bt[_k] = _bt.get(_k, 0) + _d
+                        _accum(_k, _d, _e.x, _e.y)
+                        if not _e.alive:
+                            self._on_enemy_death(_e)
+
                     if getattr(self.config, "pvp_enabled", False) and proj.owner is not None:
                         for _pp in self._all_players():
-                            if _pp is proj.owner or not getattr(_pp, "alive", True) or getattr(_pp, "downed", False):
+                            if _pp is proj.owner or not getattr(_pp, "alive", True) \
+                                    or getattr(_pp, "downed", False):
                                 continue
                             if getattr(_pp, "team_id", 1) == getattr(proj.owner, "team_id", 0):
                                 continue
                             _k = id(_pp)
                             if _bt.get(_k, 0) >= _cap:
                                 continue
-                            _t = max(0.0, min(1.0,
-                                ((_pp.x - proj.x) * _dx + (_pp.y - proj.y) * _dy) / _ll))
-                            _cx, _cy = proj.x + _t * _dx, proj.y + _t * _dy
-                            if math.hypot(_pp.x - _cx, _pp.y - _cy) < getattr(_pp, "size", 20) + proj.laser_width:
-                                _pd = self._pvp_dmg_to_player(_tick, proj)
-                                _pp.take_damage(_pd, damage_type="ranged",
-                                                attack_x=proj.x, attack_y=proj.y,
-                                                bypass_dodge=True, source="player")
-                                _bt[_k] = _bt.get(_k, 0) + _pd
-                                self.spawn_damage(_pp.x, _pp.y, _pd,
+                            if not _beam_hit(_pp.x, _pp.y, getattr(_pp, "size", 20)):
+                                continue
+                            # damage_vs_player=1 → 与僵尸完全对等，不吃通用衰减
+                            _pd = min(_tick * float(getattr(proj, "damage_vs_player", 1) or 1),
+                                      _cap - _bt.get(_k, 0))
+                            _pp.take_damage(_pd, damage_type="ranged",
+                                            attack_x=proj.x, attack_y=proj.y,
+                                            bypass_dodge=True, source="player",
+                                            incoming_angle=self.incoming_angle_of(proj))
+                            _bt[_k] = _bt.get(_k, 0) + _pd
+                            _accum(_k, _pd, _pp.x, _pp.y, True)
+
+                    # 伤害数字合并节流：原来每帧都 spawn（60 次/秒），
+                    # 现在攒 0.1s 一次 add，调用次数降到 1/6
+                    proj.beam_fx_timer = getattr(proj, "beam_fx_timer", 0.0) + float(dt)
+                    if proj.beam_fx_timer >= 0.1:
+                        proj.beam_fx_timer = 0.0
+                        for _k, _rec in list(_pend.items()):
+                            _amt, _tx, _ty, _is_p = _rec
+                            if _amt > 0:
+                                self.spawn_damage(_tx, _ty, _amt,
                                                   merge_key=("beam", _k),
-                                                  color=RED, damage_type="ranged")
+                                                  color=RED if _is_p else None,
+                                                  damage_type="ranged")
+                            _pend.pop(_k, None)
                 continue
 
             # 激光束碰撞检测（一次性激光技能，保持原有逻辑）
@@ -2383,7 +2480,7 @@ class PlayingMixin:
                         enemy._last_hit_player = getattr(proj, 'owner', None)  # v2.5.2 击杀归属玩家
                         enemy.take_damage(actual_damage)
                         self._apply_rune_elemental_on_hit(enemy, actual_damage)
-                        self._vampire_heal(actual_damage, sx=enemy.x, sy=enemy.y)
+                        self._vampire_heal(self._capped_hit(enemy, actual_damage), sx=enemy.x, sy=enemy.y)
                         self.damage_numbers.append(DamageNumber(enemy.x, enemy.y, actual_damage, is_crit=is_crit, damage_type="ranged"))
                         self.particles.spawn(enemy.x, enemy.y, PURPLE, 5, (2, 5), (-3, 3), (0.2, 0.5))
                         if not enemy.alive:
@@ -2485,7 +2582,7 @@ class PlayingMixin:
                                     is_crit = random.random() < self.player.crit_chance
                                     actual_damage = damage * (self.player.crit_damage if is_crit else 1)
                                     e.take_damage(actual_damage)
-                                    self._vampire_heal(actual_damage, sx=e.x, sy=e.y)
+                                    self._vampire_heal(self._capped_hit(e, actual_damage), sx=e.x, sy=e.y)
                                     # 火箭筒爆炸施加燃烧
                                     if getattr(proj, 'explosive', False) and random.random() < 0.6:
                                         e.apply_buff(BuffType.BURN, duration=3.0)
@@ -2541,7 +2638,7 @@ class PlayingMixin:
                             ))
 
                     enemy.take_damage(actual_damage)
-                    self._vampire_heal(actual_damage, sx=enemy.x, sy=enemy.y)
+                    self._vampire_heal(self._capped_hit(enemy, actual_damage), sx=enemy.x, sy=enemy.y)
                     # v2.5.2 死神镰刀吃近战吸血（MELEE_LIFESTEAL）
                     if getattr(proj, "is_scythe_slash", False) and getattr(self.player, 'skill_tree', None):
                         _ls_skill = self.player.skill_tree.get_skill(SkillType.MELEE_LIFESTEAL)

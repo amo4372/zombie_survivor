@@ -2964,6 +2964,25 @@ class UiMixin:
         mouse_pressed = pygame.mouse.get_pressed()
         touches = self.game.touch_events or []
 
+        # v2.9.14：滑动条持久化在 game 上（每帧重建会丢触控拖动状态）。
+        # 回调只记录"当前值"，每帧再应用到当前选中控件，避免闭包捕获
+        # 过期控件字典导致改到别的对象上。
+        _ss = getattr(self.game, "hud_sliders", None)
+        if _ss is None:
+            from ui_pkg import Slider
+            _ss = {
+                "size": Slider(240, 570, 340, 30, 0.5, 2.0, 1.0,
+                               "按钮尺寸", None, step=0.05, fmt="%.2f×"),
+                "alpha": Slider(700, 570, 340, 30, 40, 255, 255,
+                                "按钮透明度", None, step=1, fmt="%d"),
+            }
+            self.game.hud_sliders = _ss
+        # 逻辑坐标按当前屏幕下沿对齐（BASE_HEIGHT=720；y=880 会跑到屏幕外）
+        _ly = int(sh / max(0.1, scale)) - 150
+        for _sl in _ss.values():
+            _sl.base_y = _ly
+        _sl_rects = [_v.get_scaled_rect(scale) for _v in _ss.values()]
+
         # 拖拽状态：game.hud_edit_drag = {"key":..., "touch_id":...}
         drag = getattr(self.game, "hud_edit_drag", None)
 
@@ -2982,6 +3001,9 @@ class UiMixin:
         # 1) 触控事件处理（down 选中 / move 跟随 / up 放下）
         for e in touches:
             if e["type"] == "down":
+                # 落在滑动条上的手指不参与控件拖拽，避免两者抢同一触点
+                if any(_r.collidepoint(e["pos"]) for _r in _sl_rects):
+                    continue
                 for key, label, ctrl, radius, side in items:
                     if ctrl is None:
                         continue
@@ -3014,7 +3036,8 @@ class UiMixin:
                     self.game.hud_edit_dirty = True
             else:
                 self.game.hud_edit_drag = None
-        elif not drag and mouse_pressed[0]:
+        elif not drag and mouse_pressed[0] and not any(
+                _r.collidepoint(mouse_pos) for _r in _sl_rects):
             for key, label, ctrl, radius, side in items:
                 if ctrl is None:
                     continue
@@ -3043,63 +3066,31 @@ class UiMixin:
                 lbl_y = by + r + 22
             self.screen.blit(lbl, lbl.get_rect(center=(bx, lbl_y)))
 
-        # ---- v2.9.13 样式调整：按钮尺寸 / 透明度 / 血条体力条 ----
+        # ---- v2.9.14 样式调整：用滑动条改「按钮尺寸」与「按钮透明度」 ----
+        # 血条/体力条编辑入口按需求移除，只保留按钮两项。
         _sel = getattr(self.game, "hud_edit_selected", None)
-        _btarget = getattr(self.game, "hud_edit_bar_target", "button")
         _item_map = {it[0]: it[2] for it in items if len(it) >= 3}
-        _adj_y = int(sh - 132 * scale)
-        _adj_w = int(96 * scale)
-        _adj_h = int(36 * scale)
-        _adj_x0 = int(sw // 2 - 2.5 * _adj_w - 8 * scale)
-        _adj_defs = [
-            ("尺寸 -", "size_dn"), ("尺寸 +", "size_up"),
-            ("透明 -", "alpha_dn"), ("透明 +", "alpha_up"),
-            ("切目标", "switch"),
-        ]
-        for _i, (_lab, _act) in enumerate(_adj_defs):
-            _r = pygame.Rect(int(_adj_x0 + _i * (_adj_w + 8 * scale)), _adj_y,
-                             _adj_w, _adj_h)
-            pygame.draw.rect(self.screen, (45, 70, 105), _r, border_radius=6)
-            pygame.draw.rect(self.screen, (170, 205, 245), _r, 1, border_radius=6)
-            _t = self.game.font_small.render(_lab, True, (225, 240, 255))
-            self.screen.blit(_t, _t.get_rect(center=_r.center))
-            if self._clicked(_r, mouse_pos, mouse_pressed, touches, "hud_" + _act):
+        _ctrl = _item_map.get(_sel)
+
+        _ss = self.game.hud_sliders
+        # 选中项变化 → 滑动条同步到该控件当前值（不触发回调）
+        if getattr(self.game, "_hud_slider_sel", None) != _sel and _ctrl is not None:
+            _ss["size"].set_value(float(getattr(_ctrl, "size_scale", 1.0) or 1.0))
+            _ss["alpha"].set_value(int(getattr(_ctrl, "alpha", 255) or 255))
+            self.game._hud_slider_sel = _sel
+        for _sl in _ss.values():
+            _sl.enabled = _ctrl is not None
+            if _sl.update(mouse_pos, mouse_pressed, touches, scale):
                 self.game.hud_edit_dirty = True
-                if _act == "switch":
-                    _order = ["button", "hp", "stamina"]
-                    self.game.hud_edit_bar_target = _order[
-                        (_order.index(_btarget) + 1) % len(_order)]
-                    _btarget = self.game.hud_edit_bar_target
-                elif _btarget in ("hp", "stamina"):
-                    _d = self.game.hud_bars.setdefault(
-                        _btarget, {"scale": 1.0, "alpha": 255})
-                    if _act == "size_dn":
-                        _d["scale"] = max(0.6, round(_d["scale"] - 0.1, 2))
-                    elif _act == "size_up":
-                        _d["scale"] = min(1.8, round(_d["scale"] + 0.1, 2))
-                    elif _act == "alpha_dn":
-                        _d["alpha"] = max(60, _d["alpha"] - 25)
-                    else:
-                        _d["alpha"] = min(255, _d["alpha"] + 25)
-                else:
-                    _c = _item_map.get(_sel)
-                    if _c is not None:
-                        if _act == "size_dn":
-                            _c.size_scale = max(0.5, round(
-                                float(getattr(_c, "size_scale", 1.0)) - 0.1, 2))
-                        elif _act == "size_up":
-                            _c.size_scale = min(2.0, round(
-                                float(getattr(_c, "size_scale", 1.0)) + 0.1, 2))
-                        elif _act == "alpha_dn":
-                            _c.alpha = max(40, int(getattr(_c, "alpha", 255)) - 25)
-                        else:
-                            _c.alpha = min(255, int(getattr(_c, "alpha", 255)) + 25)
+            _sl.draw(self.screen, self.game.font_small, scale)
+        # 把滑动条当前值应用到选中控件（无闭包、无过期引用）
+        if _ctrl is not None:
+            _ctrl.size_scale = round(float(_ss["size"].value), 2)
+            _ctrl.alpha = int(_ss["alpha"].value)
         _tip2 = self.game.font_small.render(
-            "当前调整: %s%s" % (
-                {"button": "按钮", "hp": "血条", "stamina": "体力条"}.get(_btarget, "按钮"),
-                ("（选中 %s）" % _sel) if _btarget == "button" and _sel else ""),
+            ("拖动滑动条调整「%s」" % _sel) if _ctrl else "先点选一个控件，再用滑动条调整",
             True, (180, 210, 240))
-        self.screen.blit(_tip2, _tip2.get_rect(center=(sw // 2, _adj_y - int(14 * scale))))
+        self.screen.blit(_tip2, _tip2.get_rect(center=(sw // 2, int(sh - 172 * scale))))
 
         # 4) 底部操作按钮：保存 / 重置 / 返回
         by0 = int(sh - int(70 * scale))

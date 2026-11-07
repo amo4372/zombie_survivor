@@ -285,17 +285,17 @@ class PlayerRegistryMixin:
             except Exception:
                 _w = None
             _ratio = float(getattr(player, "_charge_ratio", 0.0) or 0.0)
+            try:
+                _wr = float(getattr(_w, "range", 0) or 0)
+            except Exception:
+                _wr = 0.0
+            # 基础：武器半射程 / 瞄准距离
+            _want = max(float(getattr(player, "_aim_dist", 0.0) or 0.0), _wr * 0.5)
+            # 蓄力武器：拉远到极限射程（全模式统一，不再另起一套）
             if _w is not None and getattr(_w, "hold_charge", False) \
                     and getattr(player, "_awm_saved", None) is not None:
-                _want = float(getattr(_w, "range", 0) or 0) * (0.35 + 0.65 * _ratio)
-            else:
-                try:
-                    _wr = float(getattr(_w, "range", 0) or 0)
-                except Exception:
-                    _wr = 0.0
-                _want = max(float(getattr(player, "_aim_dist", 0.0) or 0.0),
-                            _wr * 0.5)
-            # 技能预瞄距离也算
+                _want = max(_want, _wr * (0.35 + 0.65 * _ratio))
+            # 技能预瞄距离（由技能释放处写入 player._skill_aim_dist）
             try:
                 _want = max(_want, float(getattr(player, "_skill_aim_dist", 0.0) or 0.0))
             except Exception:
@@ -325,11 +325,10 @@ class PlayerRegistryMixin:
             _p = getattr(self, "player", None)
             if _cam is None or _p is None or not hasattr(_cam, "zoom"):
                 return
-            # v2.9.3：蓄力拉远正在进行时，通用逻辑**不要插手**。
-            # 此前两套逻辑同帧都写 cam.zoom，后执行的覆盖前者，
-            # 结果"长按瞄准时视野纹丝不动"。
-            if getattr(_p, "_charge_zoom_active", False):
-                return
+            # v2.9.14：不再因蓄力而整体跳过。旧版这里 early return，
+            # 导致「技能瞄准距离超出视野」在蓄力武器持有者身上完全失效；
+            # 而 mix_playing 里另有一套蓄力 zoom 又与通用 zoom 抢写。
+            # 现在统一由 update_dynamic_zoom_for 计算最大 want_dist。
             # v2.9.2：多人模式 —— 每个玩家的视口独立计算（此前只有 P1 生效）
             try:
                 _regs = list((self.registered_players() if hasattr(self, "registered_players") else []) or [])

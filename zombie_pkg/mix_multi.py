@@ -474,11 +474,30 @@ class MultiplayerMixin:
             if shoot:
                 p2._awm_saved = math.radians(angle)   # 蓄力中：记录（实时更新）预瞄角
                 _p2_charge_blocked = True
+                # v2.9.14：P2 也走与 P1 相同的「散布收敛」，否则 P2
+                # 屏幕上没有扇形、子弹也永远用基础散布。
+                import time as _t2
+                if getattr(p2, "_charge_start_t", None) is None:
+                    p2._charge_start_t = _t2.time()
+                _ct = max(0.0, _t2.time() - p2._charge_start_t)
+                _full = float(getattr(_p2_w_charge, "charge_full_time", 1.2) or 1.2)
+                _ratio = max(0.0, min(1.0, _ct / _full))
+                _mx = float(getattr(_p2_w_charge, "charge_spread_max", 0.30) or 0.30)
+                _mn = float(getattr(_p2_w_charge, "charge_spread_min", 0.0) or 0.0)
+                p2._charge_spread = _mx + (_mn - _mx) * _ratio
+                p2._charge_ratio = _ratio
             elif _p2_saved is not None:
                 _p2_fire_angle = _p2_saved             # 松开：按蓄力角开火一次
+                _cs2 = getattr(p2, "_charge_spread", None)
+                p2._fire_spread = (float(_cs2) if _cs2 is not None else None)
                 p2._awm_saved = None
+                p2._charge_start_t = None
         elif _p2_saved is not None:
             p2._awm_saved = None                       # 已切换到非蓄力武器 → 清理残留预瞄
+            p2._charge_start_t = None
+        if getattr(p2, "_awm_saved", None) is None:
+            p2._charge_spread = None
+            p2._charge_ratio = 0.0
         _p2_shoot_now = bool(shoot) and not _p2_charge_blocked
         # v2.9.13：P2 装备防爆套装后，射击键改为盾牌肘击，且**不能射击**。
         # 旧版 P2 完全没走这条分支，举着盾还能突突突。
@@ -922,11 +941,15 @@ class MultiplayerMixin:
                     import math as _m
                     _a_ang = _m.degrees(caster.angle)
                     _a_dist = getattr(caster, 'max_skill_distance', 500) * getattr(caster, 'distance_ratio', 1.0)
+                    try:
+                        p2._skill_aim_dist = float(_a_dist)
+                    except Exception:
+                        pass
                 except Exception:
                     pass
             rg.update_grapple_lock(p2.x, p2.y, self.enemies,
                                    items=getattr(self.world, 'items', None),
-                                   aim_angle=_a_ang, aim_dist=_a_dist,
+                                                                      aim_angle=_a_ang, aim_dist=_a_dist,
                                    players_down=self._downed_teammates_of(p2),
                                    players_enemy=self._enemy_players_of(p2),
                                    players_teammate=self._alive_teammates_of(p2))
