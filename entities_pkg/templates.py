@@ -281,11 +281,24 @@ def special_behavior(key):
     return SPECIAL_AI.get(str(key), {})
 
 
-MELEE_DEFAULTS = dict(melee_attack_cooldown=1.2, melee_attack_reach=10.0,
+# v2.9.15：近战攻击间隔按原型分化（旧版一律 1.2s，随便无伤）。
+# 策划可在数据库 enemies.extra 用 melee_attack_cooldown 覆盖。
+ARCHETYPE_ATTACK_CD = {
+    "CHASER": 0.95, "BRUTE": 1.90, "RANGED": 1.60, "SUPPORT": 1.75,
+    "SWARM": 0.75,  "TANK": 2.10,  "BOSS": 1.55,   "BURSTER": 1.25,
+    "PHANTOM": 1.05, "LEAPER": 1.45,
+}
+
+
+def cooldown_for(archetype):
+    return ARCHETYPE_ATTACK_CD.get(str(archetype), 1.2)
+
+
+MELEE_DEFAULTS = dict(melee_attack_cooldown=1.15, melee_attack_reach=10.0,
                       melee_windup=0.35, melee_recover=0.25)
-BOSS_MELEE_DEFAULTS = dict(melee_attack_cooldown=1.6, melee_attack_reach=18.0,
+BOSS_MELEE_DEFAULTS = dict(melee_attack_cooldown=1.85, melee_attack_reach=18.0,
                            melee_windup=0.55, melee_recover=0.40)
-ELITE_MELEE_DEFAULTS = dict(melee_attack_cooldown=1.0, melee_attack_reach=14.0,
+ELITE_MELEE_DEFAULTS = dict(melee_attack_cooldown=0.85, melee_attack_reach=14.0,
                             melee_windup=0.30, melee_recover=0.22)
 
 
@@ -407,4 +420,5 @@ def summary():
 
 __all__ = ["BUILTIN_TEMPLATES", "BEHAVIOR_PRESETS", "BehaviorProfile",
            "EnemyTemplate", "template_for", "resolve_config", "all_templates",
-           "archetype_of", "summary", "SPECIAL_AI", "special_behavior"]
+           "archetype_of", "summary", "SPECIAL_AI", "special_behavior",
+           "ARCHETYPE_ATTACK_CD", "cooldown_for"]

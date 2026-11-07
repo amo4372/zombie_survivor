@@ -242,24 +242,41 @@ def enemy_melee_defaults(etype_name, config):
     四个键都会写进 enemies 表的 extra，策划在数据库软件里直接改即可生效
     （数据库权威）；代码里 setdefault 不会覆盖策划设定值。
     """
+    _n = str(etype_name)
     _boss = bool(config.get("is_boss") or config.get("is_titan")
                  or config.get("is_elite"))
-    _fast = str(etype_name) in ("ZOMBIE_FAST", "ZOMBIE_CRAWLER", "ZOMBIE_LEAPER",
-                                "ZOMBIE_GHOUL", "ZOMBIE_BERSERKER")
-    _ranged = bool(config.get("is_ranged") or config.get("can_throw"))
-    if _boss:
-        cd, windup, recover = 1.6, 0.55, 0.45
-    elif _fast:
-        cd, windup, recover = 0.9, 0.22, 0.18
-    elif _ranged:
-        cd, windup, recover = 1.4, 0.42, 0.30
+    # v2.9.15：旧版只有 4 档（0.9 / 1.2 / 1.4 / 1.6），20 多种僵尸挤在
+    # 同一档里，攻击过于稀疏 → 玩家随便走位就能全程无伤。
+    # 现在逐类型给独立间隔；近战普攻整体提速，但前摇仍留足格挡窗口。
+    _TYPE_CD = {
+        "ZOMBIE_NORMAL": 0.95, "ZOMBIE_FAST": 0.62, "ZOMBIE_CRAWLER": 0.68,
+        "ZOMBIE_TANK": 1.40, "ZOMBIE_GHOUL": 0.72, "ZOMBIE_BERSERKER": 0.70,
+        "ZOMBIE_FROST": 1.05, "ZOMBIE_VENOM": 0.88, "ZOMBIE_SPITTER": 1.15,
+        "ZOMBIE_LEAPER": 0.90, "ZOMBIE_HUNTER": 1.25, "ZOMBIE_RANGED": 1.20,
+        "ZOMBIE_EXPLODER": 0.80, "ZOMBIE_BOMBER": 1.10, "ZOMBIE_SPLITTER": 1.00,
+        "ZOMBIE_SHIELD": 1.30, "ZOMBIE_HEALER": 1.70, "ZOMBIE_SHAMAN": 1.70,
+        "ZOMBIE_PHANTOM": 0.78, "ZOMBIE_WRAITH": 0.82, "ZOMBIE_JUGGERNAUT": 1.55,
+        "ZOMBIE_CORPSE_EATER": 1.00,
+    }
+    if _n in _TYPE_CD:
+        cd = _TYPE_CD[_n]
+    elif _boss:
+        cd = 1.30
+    elif config.get("is_ranged") or config.get("can_throw"):
+        cd = 1.15
     else:
-        cd, windup, recover = 1.2, 0.35, 0.25
+        cd = 1.00
+    # 前摇/后摇随间隔缩放，但保证"前摇 + 后摇 < 间隔"，否则会永久连击
+    windup = max(0.18, min(0.55, cd * 0.34))
+    recover = max(0.12, min(0.42, cd * 0.26))
+    if _boss:
+        windup, recover = min(0.60, cd * 0.42), min(0.50, cd * 0.34)
+    reach = 16.0 if _boss else (12.0 if cd < 0.8 else 10.0)
     return {
-        "melee_attack_cooldown": cd,   # 两次攻击起手之间的间隔
-        "melee_attack_reach": 10.0,    # 攻击范围余量（加在双方 size 上）
-        "melee_windup": windup,        # 前摇：显示预警范围，可被主动格挡
-        "melee_recover": recover,      # 后摇：硬直，不能再起手
+        "melee_attack_cooldown": cd,
+        "melee_attack_reach": reach,
+        "melee_windup": windup,
+        "melee_recover": recover,
     }
 
 

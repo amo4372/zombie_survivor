@@ -384,3 +384,73 @@ class WeaponSwitchButton(TouchButton):
 
     def wheel_just_opened(self):
         return self.wheel_just_activated
+
+# ---------------------------------------------------------------------------
+# v2.9.15 HUD 样式包装
+# ---------------------------------------------------------------------------
+# 旧版：HUD 编辑页写入 ctrl.size_scale / ctrl.alpha，但 TouchButton /
+# VirtualJoystick / AimButton 的 draw() 完全不读这两个字段 —— 玩家调了
+# 半天既看不到变化，进游戏也毫无效果（Button 基类早就支持，触控控件没有）。
+# 做法：把控件**临时平移**到一张只覆盖自身包围盒的小 Surface 上绘制，
+# 再按 size_scale 缩放、按 alpha 设透明后 blit 回屏幕。不用全屏 Surface。
+def _install_touch_style(cls):
+    if getattr(cls, "_zs_styled", False):
+        return
+    cls._zs_styled = True
+    _raw = cls.draw
+
+    def _draw(self, screen, *args, **kwargs):
+        try:
+            if not getattr(self, "visible", True):
+                return None
+            ss = float(getattr(self, "size_scale", 1.0) or 1.0)
+            al = int(getattr(self, "alpha", 255) or 255)
+            if abs(ss - 1.0) < 0.02 and al >= 250:
+                return _raw(self, screen, *args, **kwargs)
+            scale = float(kwargs.get("scale", 0) or 0)
+            if scale <= 0:
+                for _a in args:
+                    if isinstance(_a, (int, float)) and not isinstance(_a, bool):
+                        scale = float(_a)
+                        break
+            if scale <= 0:
+                scale = 1.0
+            bx = float(getattr(self, "base_x", 0) or 0)
+            by = float(getattr(self, "base_y", 0) or 0)
+            br = float(getattr(self, "base_radius", 60) or 60)
+            cx, cy = bx * scale, by * scale
+            pad = int((br * 1.9 + 46) * scale * max(1.0, ss))
+            w = h = max(8, min(1800, pad * 2))
+            tmp = pygame.Surface((w, h), pygame.SRCALPHA)
+            sx = (pad / scale) - bx
+            sy = (pad / scale) - by
+            _saved = {}
+            for _at in ("base_x", "base_y", "knob_x", "knob_y",
+                        "target_x", "target_y", "self_pull_end"):
+                if hasattr(self, _at):
+                    _v = getattr(self, _at)
+                    _saved[_at] = _v
+                    if isinstance(_v, (int, float)):
+                        setattr(self, _at, _v + (sx if _at.endswith("_x") else sy))
+            try:
+                _r = _raw(self, tmp, *args, **kwargs)
+            finally:
+                for _k, _v in _saved.items():
+                    setattr(self, _k, _v)
+            if abs(ss - 1.0) >= 0.02:
+                nw, nh = max(8, int(w * ss)), max(8, int(h * ss))
+                tmp = pygame.transform.smoothscale(tmp, (nw, nh))
+                w, h = nw, nh
+            if al < 250:
+                tmp.set_alpha(max(0, al))
+            screen.blit(tmp, (int(cx - w / 2), int(cy - h / 2)))
+            return _r
+        except Exception:
+            return _raw(self, screen, *args, **kwargs)
+
+    cls.draw = _draw
+
+
+for _cls in (VirtualJoystick, TouchButton, AimButton, WeaponSwitchButton):
+    _install_touch_style(_cls)
+

@@ -531,6 +531,9 @@ class MultiplayerMixin:
                         p2.damage_mult * p2.buff_manager.get_damage_mult() * p2.damage_multiplier,
                         p2.speed_mult, player=p2)
                     self.projectiles.extend(projs)
+                    # v2.9.15：本次射击已消费收敛散布，立刻清空避免影响下一发
+                    if _p2_fire_angle is not None:
+                        p2._fire_spread = None
                     self.assets.play_sound_random(["shoot_pistol", "melee_swing"])
         # ===== 技能 =====
         # v2.5.7 修复：同屏键控模式下 P2 技能统一由"松开 U 键"触发

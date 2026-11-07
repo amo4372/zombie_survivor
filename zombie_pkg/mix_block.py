@@ -28,11 +28,14 @@ class BlockMixin:
         if player is not None and getattr(self, "multiplayer_mode", "") == "same_screen" \
                 and p2 is not None:
             sw = float(getattr(self, "scaled_width", 1280 * s) or 1280 * s)
+            _half = sw * 0.5
+            # v2.9.15：以半屏右下角为基准，P1/P2 各自视口内位置完全对称。
+            # 旧式 `sw*0.5 - (1280-X)*s` 在屏幕宽高比不是 16:9 时会把 P1
+            # 摇杆推到屏幕中间，出现"底盘和摇杆不在一处"。
+            _inset = (1280 - BLOCK_STICK_X) * s
             if player is p2:
-                return (sw - (1280 - BLOCK_STICK_X) * s, BLOCK_STICK_Y * s,
-                        BLOCK_STICK_R * s)
-            return (sw * 0.5 - (1280 - BLOCK_STICK_X) * s, BLOCK_STICK_Y * s,
-                    BLOCK_STICK_R * s)
+                return (sw - _inset, BLOCK_STICK_Y * s, BLOCK_STICK_R * s)
+            return (_half - _inset, BLOCK_STICK_Y * s, BLOCK_STICK_R * s)
         return (BLOCK_STICK_X * s + viewport_x, BLOCK_STICK_Y * s, BLOCK_STICK_R * s)
 
     # ---------- 常驻格挡 CD（键控也能看见） ----------
@@ -106,6 +109,12 @@ class BlockMixin:
         elif kind == "move":
             pl = ids.get(fid)
             if pl is not None and getattr(pl, "block", None) is not None:
+                # v2.9.15：cx/cy 是 down 分支的局部变量，move 里直接引用会
+                # UnboundLocalError 打断整帧输入。按已绑定的玩家重新求摇杆中心。
+                try:
+                    cx, cy, _r = self._block_stick_geom(pl)
+                except Exception:
+                    cx, cy = pos[0], pos[1]
                 ang = math.degrees(math.atan2(pos[1] - cy, pos[0] - cx))
                 pl.block.drag(ang, dt)
         elif kind == "up":

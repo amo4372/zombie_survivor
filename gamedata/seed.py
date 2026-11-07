@@ -166,7 +166,7 @@ def seed_skills(conn):
 # 这样既"游戏一律读数据库"，又保证"发布的新数值能推到玩家端"。
 # v2.9.13：武器/敌人数值有实质调整（AWM PvP 80、轨道炮 1/帧×500、
 # 模板层近战参数），提升数据版本让未锁定行随更新同步生效。
-DATA_VERSION = 4
+DATA_VERSION = 5
 
 
 def ensure_dataver_columns(conn):

@@ -476,6 +476,24 @@ class PlayMixin:
         cam_x = camera.x - shake_x
         cam_y = camera.y - shake_y
 
+        # v2.9.15 关键修复：此前**整个主渲染层从未读取 camera.zoom**
+        # （只有回放页用了），所以 update_dynamic_zoom 算得再对，画面也
+        # 纹丝不动 —— 这就是"拉远视野一直没有全模式生效"的根因。
+        # 做法：按 zoom 缩放 world→screen 的 scale，并围绕**玩家当前屏幕
+        # 位置**重算 cam，保证玩家锚定不动、视野向四周扩展（zoom<1 = 拉远）。
+        # 所有下游绘制共用这里的 cam_x/cam_y/scale，自动一致；HUD 单独绘制不受影响。
+        try:
+            _zoom = float(getattr(camera, "zoom", 1.0) or 1.0)
+            if abs(_zoom - 1.0) > 0.002 and 0.30 < _zoom < 2.0:
+                _eff = scale * _zoom
+                if _eff > 0.05:
+                    _k = scale / _eff
+                    cam_x = player.x - (player.x - cam_x) * _k
+                    cam_y = player.y - (player.y - cam_y) * _k
+                    scale = _eff
+        except Exception:
+            pass
+
         # 绘制世界
         # v2.5.0 地图边界警示：玩家接近有限地图边缘时屏幕红框+提示（摄像机已 clamp）
         try:
@@ -1011,10 +1029,11 @@ class PlayMixin:
 
         # v2.8.8 蓄力武器的散布扇形（按住开火键时显示，随蓄力收敛）
         try:
-            # v2.9.14：只看 _charge_spread，不再要求 _awm_saved 非空。
-            # 分屏时每个视口传入的 player 就是视口主人，所以 P2 的扇形
-            # 只会出现在 P2 屏幕（此前 P2 根本没有这个状态）。
-            if getattr(player, '_charge_spread', None) is not None:
+            # v2.9.15：必须"正在按住蓄力"才画。旧版只看 _charge_spread，
+            # 松开/开火后该字段残留就会永久显示，甚至下一次射击后仍卡住。
+            if (getattr(player, '_awm_saved', None) is not None
+                    and getattr(player, '_charge_spread', None) is not None
+                    and getattr(player, 'downed', False) is False):
                 draw_charge_spread_fan(self, player, cam_x, cam_y, scale)
         except Exception:
             pass
@@ -2545,16 +2564,23 @@ def draw_charge_spread_fan(self, player, cam_x, cam_y, scale):
         _a1 = math.radians(_ang) + _half
         _stable = _ratio >= 0.999
         _col = (120, 255, 170) if _stable else (255, 190, 90)
-        # v2.9.14：不再每帧新建全屏 SRCALPHA Surface（多人分屏时翻倍），
-        # 直接往主屏幕画多边形/折线，零 Surface 分配。
-        _pts = [(_px, _py)]
-        _steps = 20
-        for _i in range(_steps + 1):
-            _a = _a0 + (_a1 - _a0) * (_i / _steps)
-            _pts.append((int(_px + math.cos(_a) * _R), int(_py + math.sin(_a) * _R)))
-        pygame.draw.polygon(self.screen, (max(0, _col[0] // 3), max(0, _col[1] // 3),
-                                         max(0, _col[2] // 3)), _pts)
-        pygame.draw.lines(self.screen, _col, True, _pts[1:], max(1, int(2 * scale)))
+        # v2.9.15：**不填充实心多边形**。旧版用不透明色直接 polygon 到主屏，
+        # 整块橙色盖住游戏画面（用户反馈"扇形不透明"）；用全屏 SRCALPHA
+        # 又会吃性能。现在只画边界 + 少量放射细线，零 Surface、完全不遮挡。
+        _R = min(_R, int(360 * scale))
+        _edge = []
+        for _i in range(21):
+            _a = _a0 + (_a1 - _a0) * (_i / 20)
+            _edge.append((int(_px + math.cos(_a) * _R), int(_py + math.sin(_a) * _R)))
+        pygame.draw.lines(self.screen, _col, False, _edge, max(1, int(2 * scale)))
+        pygame.draw.line(self.screen, _col, (_px, _py), _edge[0], max(1, int(2 * scale)))
+        pygame.draw.line(self.screen, _col, (_px, _py), _edge[-1], max(1, int(2 * scale)))
+        # 三条淡放射线表示"散布范围"（颜色压暗，不遮画面）
+        _dim = (_col[0] // 2, _col[1] // 2, _col[2] // 2)
+        for _f in (0.25, 0.5, 0.75):
+            _a = _a0 + (_a1 - _a0) * _f
+            pygame.draw.line(self.screen, _dim, (_px, _py),
+                             (int(_px + math.cos(_a) * _R), int(_py + math.sin(_a) * _R)), 1)
         pygame.draw.line(self.screen, _col, (_px, _py),
                          (int(_px + math.cos(math.radians(_ang)) * _R),
                           int(_py + math.sin(math.radians(_ang)) * _R)),

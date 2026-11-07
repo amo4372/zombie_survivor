@@ -1096,7 +1096,9 @@ class SkillsMixin:
             math.cos(angle) * 3, math.sin(angle) * 3,
             dmg, 1200, (140, 200, 245), 15, pierce=99,
             explosive=True, explosion_radius=90 + 30 * (lv >= 3),
-            is_laser=True, laser_width=width, laser_duration=0.85)
+            is_laser=True, laser_width=width, laser_duration=0.85,
+            laser_angle=angle)   # v2.9.15：不传则 Projectile 默认 0°，射线永远朝右
+        proj.owner = getattr(self, "player", None)
         self.projectiles.append(proj)
         self.camera.shake(20, 0.7)
         self.particles.spawn(self.player.x, self.player.y, (160, 210, 255), 30, (2, 8), (-8, 8), (0.3, 1.0))

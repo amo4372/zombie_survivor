@@ -16,6 +16,49 @@ from buff import BuffType
 from codex import codex_unlock_manager
 from weapons import Weapon
 
+# v2.9.15：房主把「IP:端口」一键复制给别人（pygame.scrap 不可用时降级提示）
+import socket as _zs_socket
+
+
+def _zs_lan_ip():
+    try:
+        _sk = _zs_socket.socket(_zs_socket.AF_INET, _zs_socket.SOCK_DGRAM)
+        try:
+            _sk.connect(("8.8.8.8", 80))
+            return _sk.getsockname()[0]
+        finally:
+            _sk.close()
+    except Exception:
+        try:
+            return _zs_socket.gethostbyname(_zs_socket.gethostname())
+        except Exception:
+            return "127.0.0.1"
+
+
+def _zs_copy_text(text):
+    try:
+        import pygame as _pg
+        if not _pg.scrap.get_init():
+            _pg.scrap.init()
+        _pg.scrap.put(_pg.SCRAP_TEXT, str(text).encode("utf-8"))
+        return True
+    except Exception:
+        try:
+            import pygame as _pg
+            _pg.scrap.put_text(str(text))
+            return True
+        except Exception:
+            return False
+
+
+def _zs_host_addr(g):
+    try:
+        _port = str(getattr(g, 'net_port_input', '') or '26000').strip() or '26000'
+    except Exception:
+        _port = '26000'
+    return "%s:%s" % (_zs_lan_ip(), _port)
+
+
 class UiMixin:
     def _draw_menu(self):
         # 播放菜单音乐
@@ -2971,23 +3014,30 @@ class UiMixin:
         if _ss is None:
             from ui_pkg import Slider
             _ss = {
-                "size": Slider(240, 570, 340, 30, 0.5, 2.0, 1.0,
+                # v2.9.15：放到**屏幕上方中央**（原在底部会被其它 HUD 按钮挡住）
+                "size": Slider(180, 132, 340, 30, 0.5, 2.0, 1.0,
                                "按钮尺寸", None, step=0.05, fmt="%.2f×"),
-                "alpha": Slider(700, 570, 340, 30, 40, 255, 255,
+                "alpha": Slider(760, 132, 340, 30, 40, 255, 255,
                                 "按钮透明度", None, step=1, fmt="%d"),
             }
             self.game.hud_sliders = _ss
-        # 逻辑坐标按当前屏幕下沿对齐（BASE_HEIGHT=720；y=880 会跑到屏幕外）
-        _ly = int(sh / max(0.1, scale)) - 150
+        # v2.9.15：固定上方中央，不再按屏幕下沿动态对齐
         for _sl in _ss.values():
-            _sl.base_y = _ly
+            _sl.base_y = 132
         _sl_rects = [_v.get_scaled_rect(scale) for _v in _ss.values()]
+        # 拖动独占：滑动条正在拖动的那根手指，所有事件都不再交给控件拖拽
+        _sl_active_ids = set()
+        for _sl in _ss.values():
+            if getattr(_sl, "dragging", False) and getattr(_sl, "_touch_id", None) is not None:
+                _sl_active_ids.add(_sl._touch_id)
 
         # 拖拽状态：game.hud_edit_drag = {"key":..., "touch_id":...}
         drag = getattr(self.game, "hud_edit_drag", None)
 
         def _rect_for(ctrl, radius):
-            r = int(radius * scale)
+            # v2.9.15：预览框随 size_scale 变化，拖动时立刻看得到
+            _sc = float(getattr(ctrl, "size_scale", 1.0) or 1.0)
+            r = int(radius * scale * _sc)
             bx = int(ctrl.base_x * scale)
             by = int(ctrl.base_y * scale)
             return pygame.Rect(bx - r - 12, by - r - 12, (r + 12) * 2, (r + 12) * 2), (bx, by), r
@@ -3000,6 +3050,8 @@ class UiMixin:
 
         # 1) 触控事件处理（down 选中 / move 跟随 / up 放下）
         for e in touches:
+            if e.get("id") in _sl_active_ids:
+                continue
             if e["type"] == "down":
                 # 落在滑动条上的手指不参与控件拖拽，避免两者抢同一触点
                 if any(_r.collidepoint(e["pos"]) for _r in _sl_rects):
@@ -3057,6 +3109,10 @@ class UiMixin:
             cell = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
             pygame.draw.circle(cell, (*col, 90), (rect.w // 2, rect.h // 2), r + 6, 3)
             pygame.draw.circle(cell, (255, 255, 255, 120), (rect.w // 2, rect.h // 2), r - 6, 1)
+            # v2.9.15：透明度调整实时可见（预览格按 alpha 淡出）
+            _pa = int(getattr(ctrl, "alpha", 255) or 255)
+            if _pa < 250:
+                cell.set_alpha(max(0, _pa))
             self.screen.blit(cell, (rect.x, rect.y))
             pygame.draw.line(self.screen, (255, 255, 255), (bx - 6, by), (bx + 6, by), 1)
             pygame.draw.line(self.screen, (255, 255, 255), (bx, by - 6), (bx, by + 6), 1)
@@ -3235,6 +3291,13 @@ class UiMixin:
         g = self.game
         _ups = [te for te in getattr(g, 'touch_events', [])
                 if te.get("type") == "up" and te.get("pos") is not None]
+        _all_ups = list(_ups)
+        # v2.9.15：下拉展开时，点选项的同一个 up 会**同时**命中它后面的
+        # 页面按钮（误触）。展开态一律把页面按钮的点击列表清空；
+        # 下拉选项自己在末尾用 _dd_ups 处理，点空白关闭下拉。
+        _dd_ups = _all_ups
+        if getattr(g, 'room_dropdown', None):
+            _ups = []
         _mv = [te for te in getattr(g, 'touch_events', [])
                if te.get("type") == "move" and te.get("pos") is not None]
         _dn = [te for te in getattr(g, 'touch_events', [])
@@ -3624,7 +3687,7 @@ class UiMixin:
                     _or = pygame.Rect(_drect.x, _drect.bottom + _oi * (_ih + _gap_i), _list_w - _bar_w - int(4 * scale), _ih)
                     _dd_item(_or, _opt, _gidx == _dcur)
                     if (not getattr(g, 'dd_drag_moved', False)
-                            and any(_or.collidepoint(te["pos"]) for te in _ups)):
+                            and any(_or.collidepoint(te["pos"]) for te in _dd_ups)):
                         _dset(_val)
                         g.room_dropdown = None
                         g.dd_drag = None
@@ -3636,6 +3699,17 @@ class UiMixin:
                     pygame.draw.rect(self.screen, (70, 78, 96), (_bar_x, _drect.bottom, _bar_w, _list_h), border_radius=4)
                     pygame.draw.rect(self.screen, (150, 170, 200), (_bar_x, _bar_y, _bar_w, _bar_h), border_radius=4)
                 _sc[_dkey] = int(_sval)
+        # v2.9.15：展开态下点击下拉行/选项以外的地方 → 只关闭下拉，
+        # 不触发后面任何按钮（页面按钮的 _ups 已在函数开头清空）
+        if getattr(g, 'room_dropdown', None) and _dd_ups:
+            _row = None
+            for _k, _br, _o, _st in _dd_pending:
+                if _k == g.room_dropdown:
+                    _row = _br
+                    break
+            if _row is None or not any(_row.collidepoint(te["pos"]) for te in _dd_ups):
+                g.room_dropdown = None
+                g.dd_drag = None
 
     def _set_room_mode(self, g, idx):
         try:
@@ -3876,6 +3950,23 @@ class UiMixin:
         ht = self.game.font.render("创建房间（主机）", True, WHITE)
         self.screen.blit(ht, ht.get_rect(center=host_r.center))
         y += ch + cgap
+        # ---- v2.9.15 房主连接信息：别人该怎么连我 ----
+        _addr = _zs_host_addr(g)
+        addr_r = pygame.Rect(cx, y, cw - int(120 * scale), ch)
+        copy_r = pygame.Rect(int(addr_r.right + int(8 * scale)), y,
+                             int(112 * scale), ch)
+        pygame.draw.rect(self.screen, (22, 34, 30), addr_r, border_radius=8)
+        pygame.draw.rect(self.screen, (90, 170, 120), addr_r, 2, border_radius=8)
+        _at = self.game.font_small.render("本机地址  " + _addr, True, (170, 240, 190))
+        self.screen.blit(_at, _at.get_rect(midleft=(addr_r.x + int(10 * scale), addr_r.centery)))
+        pygame.draw.rect(self.screen, (40, 90, 65), copy_r, border_radius=8)
+        _ct = self.game.font_small.render("一键复制", True, WHITE)
+        self.screen.blit(_ct, _ct.get_rect(center=copy_r.center))
+        if getattr(g, 'net_copy_hint', 0) > 0:
+            g.net_copy_hint = max(0, float(g.net_copy_hint) - 1 / 60.0)
+            _hint = self.game.font_small.render("已复制地址，发给队友即可加入", True, GOLD)
+            self.screen.blit(_hint, (cx, int(y - 22 * scale)))
+        y += ch + cgap
         # 端口输入框
         port_r = pygame.Rect(cx, y, cw, ch)
         _pc = (120, 220, 120) if g.net_port_focused else (70, 78, 96)
@@ -3938,7 +4029,9 @@ class UiMixin:
         _bc = (120, 220, 120) if g.net_ip_focused else (70, 78, 96)
         pygame.draw.rect(self.screen, (25, 25, 35), ip_r, border_radius=8)
         pygame.draw.rect(self.screen, _bc, ip_r, 2, border_radius=8)
-        ip_txt = self.game.font.render("主机IP：" + g.net_ip_input + ("▏" if g.net_ip_focused else ""), True, WHITE)
+        _ipv = g.net_ip_input or ("点此输入房主地址" if not g.net_ip_focused else "")
+        _ipc = (150, 165, 185) if not g.net_ip_input else WHITE
+        ip_txt = self.game.font.render("主机IP：" + _ipv + ("▏" if g.net_ip_focused else ""), True, _ipc)
         self.screen.blit(ip_txt, (ip_r.x + 10, ip_r.y + 8))
         y += ch + cgap
         # 加入按钮
@@ -4018,9 +4111,19 @@ class UiMixin:
                 g.net_dd_drag = False
                 g.net_dd_drag_moved = False
 
+        # v2.9.15：网络页下拉展开时屏蔽页面其它按钮，防误触
+        if getattr(g, 'net_dd_key', None):
+            _clk = None
         # 交互（输入框/按钮；下拉行已处理）
         if _clk:
-            if host_r.collidepoint(_clk):
+            if copy_r.collidepoint(_clk):
+                if _zs_copy_text(_addr):
+                    g.net_copy_hint = 2.5
+                    g.net_last_error = ""
+                else:
+                    # 剪贴板不可用 → 至少把地址完整显示出来供手抄
+                    g.net_last_error = "剪贴板不可用，请手抄地址：" + _addr
+            elif host_r.collidepoint(_clk):
                 g._net_start_host()
             elif port_r.collidepoint(_clk):
                 g.net_ip_focused = False
@@ -4054,6 +4157,27 @@ class UiMixin:
         mouse_pos = pygame.mouse.get_pos()
         mouse_pressed = pygame.mouse.get_pressed()
         if g.net_role == "host":
+            # v2.9.15：建房后最需要"我该怎么告诉队友"
+            try:
+                _wa = _zs_host_addr(g)
+                _wr = pygame.Rect(int(sw // 2 - 210 * scale), int(96 * scale),
+                                  int(320 * scale), int(40 * scale))
+                _wc = pygame.Rect(int(_wr.right + 8 * scale), _wr.y,
+                                  int(100 * scale), _wr.h)
+                pygame.draw.rect(self.screen, (22, 34, 30), _wr, border_radius=8)
+                pygame.draw.rect(self.screen, (90, 170, 120), _wr, 2, border_radius=8)
+                _wt = self.game.font_small.render("房间地址  " + _wa, True, (170, 240, 190))
+                self.screen.blit(_wt, _wt.get_rect(midleft=(_wr.x + int(8 * scale), _wr.centery)))
+                pygame.draw.rect(self.screen, (40, 90, 65), _wc, border_radius=8)
+                _wct = self.game.font_small.render("复制", True, WHITE)
+                self.screen.blit(_wct, _wct.get_rect(center=_wc.center))
+                if mouse_pressed[0] and _wc.collidepoint(mouse_pos):
+                    g.net_copy_hint = 2.5 if _zs_copy_text(_wa) else 0
+                if getattr(g, 'net_copy_hint', 0) > 0:
+                    _wh = self.game.font_small.render("已复制，发给队友即可", True, GOLD)
+                    self.screen.blit(_wh, (int(sw // 2 - 210 * scale), int(140 * scale)))
+            except Exception:
+                pass
             title = self.game.font_title.render("等待玩家加入...", True, WHITE)
             self.screen.blit(title, title.get_rect(center=(sw // 2, int(120 * scale))))
             host_ip = g._get_local_ip()

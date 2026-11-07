@@ -251,5 +251,21 @@ def render_split_viewports(renderer, game, viewports):
         # 且双人触控控件 base_x 本身含半屏偏移）
         renderer.screen = orig_screen
         renderer._draw_hud_split(vp.player, vp.label, vp.rect)
+        # v2.9.15：分屏走 _draw_hud_split，**从不调用单人版 _draw_hud**，
+        # 所以格挡摇杆 / 格挡 CD 在多人模式里根本没被画出来。
+        # 这里按视口主人补上（screen 已切回全屏，_block_stick_geom 用绝对坐标）。
+        try:
+            from config import ControlMode
+            _touch = (getattr(game.config, "control_mode", None) == ControlMode.TOUCH
+                      or getattr(game, "is_android", False))
+            if _touch:
+                game.draw_block_stick(renderer.screen, game.font_small,
+                                     game.scale, vp.player)
+                _cx, _cy, _r = game._block_stick_geom(vp.player)
+                game.draw_block_cd(renderer.screen, vp.player,
+                                   int(_cx), int(_cy - _r - 26 * game.scale),
+                                   game.scale, game.font_small)
+        except Exception:
+            pass
     renderer.screen = orig_screen
     draw_separators(renderer, game, viewports)

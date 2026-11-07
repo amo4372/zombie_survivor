@@ -599,12 +599,13 @@ class PlayerRegistryMixin:
         """
         _r = self.GRAPPLE_SEARCH_RADIUS if search_radius is None else search_radius
         _c = self.grapple_candidates_for(player)
-        best = None
-        best_proj = dist
 
-        def _consider(objs, pad):
-            nonlocal best, best_proj
-            for _o in objs:
+        def _layer(objs, pad):
+            """只在**这一层**里挑最近的一个；层间严格优先，不被更近的低层覆盖。
+            旧版共用一个 best_proj，导致倒地队友先被选中后又被更近的敌人
+            抢走 —— 这正是"勾不了倒地队友"的根因。"""
+            local, local_proj = None, dist
+            for _o in objs or []:
                 if _o is None:
                     continue
                 if not getattr(_o, "alive", True) and not getattr(_o, "downed", False):
@@ -616,19 +617,35 @@ class PlayerRegistryMixin:
                     continue
                 _px = _ex - _pr * dir_x
                 _py = _ey - _pr * dir_y
-                if math.hypot(_px, _py) < _r + pad and _pr < best_proj:
-                    best_proj = _pr
-                    best = _o
+                if math.hypot(_px, _py) < _r + pad and _pr < local_proj:
+                    local_proj = _pr
+                    local = _o
+            return local
 
-        # 1) 倒地队友（救援，优先级最高）
-        _consider(_c["downed_teammates"], 26)
-        # 2) 异阵营玩家（PvP）
-        _consider(_c["enemy_players"], 26)
-        # 3) 同阵营存活玩家（救援/自拉）
-        _consider([t for t in _c["teammates"] if not getattr(t, "downed", False)], 26)
-        # 4) 僵尸（含 Boss，Boss 由飞行碰撞判定免控）
-        _consider([e for e in _c["enemies"] if getattr(e, "alive", False)], 0)
-        return best
+        # v2.9.15 用户指定优先级：敌人玩家 > 倒地队友 > 道具 > 丧尸
+        # 1) 异阵营玩家（PvP，可勾取 + QTE 打断）
+        _t = _layer(_c.get("enemy_players"), 32)
+        if _t is not None:
+            return _t
+        # 2) 倒地队友（救援，pad 放宽到 40 便于勾中）
+        _t = _layer(_c.get("downed_teammates"), 40)
+        if _t is not None:
+            return _t
+        # 3) 世界道具（宝箱/武器箱/加时道具）
+        _items = _c.get("items")
+        if _items is None:
+            _items = getattr(getattr(self, "world", None), "items", None)
+        _t = _layer(_items, 26)
+        if _t is not None:
+            return _t
+        # 4) 同阵营存活玩家（自拉/救援）
+        _t = _layer([t for t in (_c.get("teammates") or [])
+                     if not getattr(t, "downed", False)], 26)
+        if _t is not None:
+            return _t
+        # 5) 僵尸（含 Boss，Boss 由飞行碰撞判定免控）
+        return _layer([e for e in (_c.get("enemies") or [])
+                       if getattr(e, "alive", False)], 0)
 
     def update_grapple_collisions(self):
         """为每一位玩家跑钩爪飞行碰撞（旧版只跑 P1 → P2 勾不到任何东西）"""

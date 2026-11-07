@@ -437,14 +437,38 @@ class Enemy:
             # 防御：玩家对象重建后旧 id 会残留，条目过多时整体重置
             if len(_mt) > 12:
                 _mt.clear()
-        # v2.9.14 前摇定身：攻击一旦发起，僵尸（含 Boss）**固定在原地**，
-        # 玩家可抓前摇 Timing 走位躲开已经挥出的这一击。预警扇形用的
-        # 是 begin_melee_windup 时锁定的角度/半径，不会跟着玩家转。
-        if getattr(self, "melee_state", "idle") in ("windup", "impact", "recover") \
-                or float(getattr(self, "special_windup_timer", 0.0) or 0.0) > 0:
+        # v2.9.15：前摇定身**不能直接 return**。旧版把 return 放在
+        # special_windup_timer 递减逻辑之前，导致计时器永远不推进 →
+        # 技能预备姿势与红圈永久卡住（玩家跑远后再靠近才又动）。
+        # 现在：先独立推进技能前摇并给出结算信号，之后仍照常 return
+        # （不动），但计时器一定会归零。
+        if not hasattr(self, "melee_attack_cooldown"):
+            try:
+                from entities_pkg.templates import archetype_of, cooldown_for
+                self.melee_attack_cooldown = float(cooldown_for(
+                    archetype_of(getattr(getattr(self, "enemy_type", None), "name", ""))))
+            except Exception:
+                self.melee_attack_cooldown = 1.2
+        _mst = getattr(self, "melee_state", "idle")
+        _swt = float(getattr(self, "special_windup_timer", 0.0) or 0.0)
+        if _mst in ("windup", "impact", "recover") or _swt > 0:
             self._attack_rooted = True
-            return
+            if _swt > 0:
+                self.special_windup_timer = max(0.0, _swt - float(dt))
+                self._special_windup_elapsed = float(
+                    getattr(self, "_special_windup_elapsed", 0.0)) + float(dt)
+                # 硬兜底：任何异常路径都不允许预备姿势超过 2.5s
+                if self.special_windup_timer <= 0 or self._special_windup_elapsed > 2.5:
+                    _wtype = self.special_windup_type
+                    self.special_windup_timer = 0.0
+                    self.special_windup_type = None
+                    self.special_windup_radius = 0
+                    self._special_windup_elapsed = 0.0
+                    self._attack_rooted = False
+                    return _wtype
+            return None
         self._attack_rooted = False
+        self._special_windup_elapsed = 0.0
         # 更新Buff系统（持续伤害/治疗等）
         _, self.buff_damage_events = self.buff_manager.update(dt, self)
         # DOT致死安全检查：确保持续伤害能杀死怪物
@@ -541,6 +565,7 @@ class Enemy:
                         windup_config = self._get_windup_config(special_result)
                         if windup_config:
                             self.special_windup_timer = windup_config["duration"]
+                            self._special_windup_elapsed = 0.0
                             self.special_windup_type = special_result
                             self.special_windup_radius = windup_config.get("radius", 0)
                             self.special_windup_target_x = player_x

@@ -1277,9 +1277,16 @@ class PlayingMixin:
                     self.player._fire_spread = None
                 self.player._awm_saved = None
                 self.player._charge_start_t = None
+                # v2.9.15：松开这一帧就把扇形状态清掉，只保留 _fire_spread
+                # 给本次开火用。旧版 _charge_spread 残留 → 扇形永久显示。
+                self.player._charge_spread = None
+                self.player._charge_ratio = 0.0
         elif getattr(self.player, "_awm_saved", None) is not None:
             self.player._awm_saved = None
             self.player._charge_start_t = None
+            self.player._charge_spread = None
+            self.player._charge_ratio = 0.0
+            self.player._fire_spread = None
 
         # ==================================================================
         # v2.8.8 蓄力武器的"散布收敛"与"视野拉远"
@@ -1428,6 +1435,10 @@ class PlayingMixin:
                 if _melee_bonus_speed != 1.0:
                     weapon.cooldown_timer = max(0.0, weapon.cooldown_timer / _melee_bonus_speed)
                 self.projectiles.extend(proj_list)
+                # v2.9.15：本次射击消费完收敛散布，立刻清空，避免影响下一发
+                if _fire_angle is not None:
+                    self.player._fire_spread = None
+                    self.player._charge_zoom_active = False
                 # 过热倾泻灼烧：子弹附带火焰
                 if getattr(self.player, 'overdrive_burn', False):
                     for _p in proj_list:

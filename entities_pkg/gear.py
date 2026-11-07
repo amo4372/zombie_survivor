@@ -59,9 +59,10 @@ class RiotGear:
         self.grapple_scythe_max_cooldown = self.grapple_max_cooldown
         self.grapple_aiming = False           # 长按瞄准中（显示预瞄线+锁定圈）
         self.grapple_locked_target = None     # 瞄准圈锁定的僵尸（松开后直飞目标）
-        # v2.9.14：初始/最大锁定圈 200 → 72（用户反馈全模式太大）。
-        # 锁定判定与绘制共用同一个值，不会"看着小却锁很远"。
-        self.grapple_lock_radius = 72
+        # v2.9.15：最终阈值保持 200（用户明确"最终阈值不变"）。
+        # 上一版误把 200→72 当成"缩小初始圈"，其实要改的是**起始值**：
+        # 圈由 _grapple_aim_charge 从 0 涨到 1，起始半径=0，阈值仍 200。
+        self.grapple_lock_radius = 200
         self.self_pull_active = False         # 自我拉拽中（未命中目标 → 把自己拉向目标点）
         self.self_pull_speed = 560            # v2.2.7 自我拉拽速度（提速；期间禁用玩家额外位移）
         self.self_pull_immune = False         # 自我拉拽期间免伤标记
@@ -489,8 +490,18 @@ class RiotGear:
         self.grapple_aim_anchor = (_ax, _ay)
         best = None
         best_d = cur_radius
-        # v2.5.2 1) 最高优先级：倒地队友（可勾取救援，拉回身边）
-        if players_down:
+        # v2.9.15 用户指定优先级：敌人玩家 > 倒地队友 > 道具 > 丧尸。
+        # 旧版"先倒地队友、后敌人玩家"且共用 best_d，敌人玩家离锚点更近时
+        # 反而会被倒地队友挡住；现在敌人玩家先搜，命中即不再看后面层。
+        if players_enemy:
+            for _pe in players_enemy:
+                if not getattr(_pe, 'alive', True) or getattr(_pe, 'downed', False):
+                    continue
+                d = math.hypot(_pe.x - _ax, _pe.y - _ay)
+                if d < best_d:
+                    best_d = d
+                    best = _pe
+        if best is None and players_down:
             for _pd in players_down:
                 if not getattr(_pd, 'alive', True):
                     continue
@@ -500,17 +511,6 @@ class RiotGear:
                 if d < best_d:
                     best_d = d
                     best = _pd
-        # v2.5.2 2) 异阵营玩家（可勾取+QTE）
-        if best is None and players_enemy:
-            for _pe in players_enemy:
-                if not getattr(_pe, 'alive', True):
-                    continue
-                if getattr(_pe, 'downed', False):
-                    continue
-                d = math.hypot(_pe.x - _ax, _pe.y - _ay)
-                if d < best_d:
-                    best_d = d
-                    best = _pe
         # v2.5.8 3) 同阵营存活玩家（可勾取救援/自拉）
         if best is None and players_teammate:
             for _pt in players_teammate:
@@ -843,20 +843,8 @@ class RiotGear:
                 pygame.draw.circle(screen, (*((120, 230, 140))[:3], 60), (ex, ey), max(5, int(10 * scale)))
 
         # v2.2.7/11 瞄准锁定圈：中心=锚点（预瞄终点，随瞄准实时移动），半径随蓄力由小到大
-        # v2.8.7：只在本人视口绘制
-        # v2.9.14：把预瞄线也一起收进这个条件。此前 `aim_line` 的绘制
-        # 挂在函数更早的位置且**没有 own_view 判断**，所以 P2 在瞄准
-        # 时 P1 屏幕上仍能看到那条绿线（锁定圈藏了、线没藏）。
+        # v2.8.7：只在本人视口绘制（P2 的瞄准信息不泄漏到 P1 屏幕）
         if own_view and self.grapple_aiming and not self.grapple_active:
-            try:
-                _pa = math.radians(getattr(self, "aim_line_angle", 0.0) or 0.0)
-                _plen = float(getattr(self, "grapple_max_range", 600) or 600)
-                pygame.draw.line(screen, (110, 200, 130), (px, py),
-                                 (int(px + math.cos(_pa) * _plen * scale),
-                                  int(py + math.sin(_pa) * _plen * scale)),
-                                 max(1, int(2 * scale)))
-            except Exception:
-                pass
             _anch = getattr(self, 'grapple_aim_anchor', None)
             if _anch is not None:
                 _ax, _ay = _anch
@@ -956,7 +944,9 @@ class RiotGear:
                 pygame.draw.rect(screen, RED, shield_rect, max(2, int(3 * scale)), border_radius=max(1, int(5 * scale)))
 
         # 绘制预瞄线
-        if self.aim_line_active:
+        # v2.9.15：这是"怪异绿色直线"的真正来源 —— 它挂在 draw 末尾且
+        # **没有 own_view 判断**，所以别人的视口也画。同时只在本人瞄准时画。
+        if own_view and self.aim_line_active:
             aim_dist = self.grapple_max_range * scale
             aim_end_x = px + math.cos(self.aim_line_angle) * aim_dist
             aim_end_y = py + math.sin(self.aim_line_angle) * aim_dist
