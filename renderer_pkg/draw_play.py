@@ -20,9 +20,17 @@ class PlayMixin:
             return
         if self.game.is_multiplayer_active():
             self._draw_playing_split()
-            # v2.1.3：同屏双人 per-player 升级选卡弹窗（半屏 region，不阻塞另一玩家画面）
-            if getattr(self.game, '_upgrade_pause_player', None) and self.game.skill_card_selector.visible:
-                self.game.skill_card_selector.draw(self.screen, self.game.font, self.game.font_large, self.game.scale)
+            # v2.9.11：两个玩家各自的选卡面板都画。
+            # 旧版只画 selector(P1)，P2 即使 upgrade_paused=True 也永远
+            # 看不到卡片 —— 表现就是"一方卡住、只能干等、不渲染升级界面"。
+            try:
+                for _tag in self.game.active_upgrade_tags():
+                    _sel = self.game.selector_for(_tag)
+                    if _sel.visible:
+                        _sel.draw(self.screen, self.game.font,
+                                  self.game.font_large, self.game.scale)
+            except Exception:
+                pass
             return
         self._draw_playing_core(self.game.player, self.game.camera)
         self._draw_hud()
@@ -478,6 +486,68 @@ class PlayMixin:
         for orb in self.game.exp_orbs:
             orb.draw(self.screen, cam_x, cam_y, scale)
 
+        # v2.9.12：实体状态图标（流血/燃烧/冰冻/中毒…）渲染在头顶
+        try:
+            for _e in self.game.enemies:
+                _st = getattr(_e, 'status', None)
+                if _st is None or not _st.active_states():
+                    continue
+                _sx = int((_e.x - cam_x) * scale) + viewport_x
+                _sy = int((_e.y - cam_y) * scale) - int(getattr(_e, 'size', 16) * scale) - 14
+                self.game.draw_status_icons(self.screen, _sx, _sy, _e,
+                                            self.game.font_small, scale)
+        except Exception:
+            pass
+
+        # v2.9.11：近战普攻**前摇预警范围** —— 给主动格挡留反应窗口。
+        # 扇形朝向锁定目标，颜色随前摇由黄渐变到红，外圈描边 + 顶部进度弧。
+        # 全程直接往主屏幕画，不创建 Surface（避免多僵尸时逐帧分配拖慢帧率）。
+        try:
+            for _e in self.game.enemies:
+                _ms = getattr(_e, 'melee_state', 'idle')
+                if _ms not in ('windup', 'impact'):
+                    continue
+                # v2.9.12：分屏时加上 viewport_x，否则 P2 视口的预警
+                # 扇形会画到左半屏（看起来像"方向/位置全反了"）。
+                _ex = int((_e.x - cam_x) * scale) + viewport_x
+                _ey = int((_e.y - cam_y) * scale)
+                _r = int((getattr(_e, 'melee_warn_radius', 0) or 0) * scale)
+                if _r <= 0:
+                    continue
+                if (_ex < -_r or _ey < -_r
+                        or _ex > self.screen.get_width() + _r
+                        or _ey > self.screen.get_height() + _r):
+                    continue
+                _prog = 1.0 if _ms == 'impact' else float(
+                    getattr(_e, 'melee_warn_progress', 0.0) or 0.0)
+                _col = (255, max(0, int(210 - 165 * _prog)),
+                        max(0, int(60 - 45 * _prog)))
+                _mid = math.radians(float(getattr(_e, 'melee_warn_angle', 0)))
+                _a0, _a1 = _mid - math.radians(65), _mid + math.radians(65)
+                _pts = [(_ex, _ey)]
+                for _i in range(15):
+                    _a = _a0 + (_a1 - _a0) * _i / 14
+                    _pts.append((_ex + math.cos(_a) * _r,
+                                 _ey + math.sin(_a) * _r))
+                # 暗色填充 + 亮色描边（不使用 alpha，免去 Surface）
+                pygame.draw.polygon(
+                    self.screen,
+                    (int(40 + 60 * _prog), int(34 - 20 * _prog), 18), _pts)
+                pygame.draw.polygon(self.screen, _col, _pts,
+                                    max(1, int(2 * scale)))
+                pygame.draw.arc(
+                    self.screen, (255, 255, 150),
+                    pygame.Rect(_ex - _r, _ey - _r, _r * 2, _r * 2),
+                    -math.pi / 2, -math.pi / 2 + math.pi * 2 * _prog,
+                    max(1, int(3 * scale)))
+                if _ms == 'impact':
+                    pygame.draw.circle(
+                        self.screen, (255, 240, 240), (_ex, _ey),
+                        max(2, int(getattr(_e, 'size', 12) * scale)),
+                        max(1, int(3 * scale)))
+        except Exception:
+            pass
+
         # 绘制敌人特殊攻击前摇预警（在敌人下方）
         for enemy in self.game.enemies:
             if getattr(enemy, "special_windup_timer", 0) > 0 and getattr(enemy, "special_windup_radius", 0) > 0:
@@ -665,13 +735,16 @@ class PlayMixin:
                     # 不画瞄准中的预瞄线/锁定圈（否则等于泄露自己的瞄准意图）
                     try:
                         p.riot_gear.draw(self.screen, p.x, p.y, cam_x, cam_y, scale,
-                                         own_view=False)
+                                         own_view=(p is player))
                     except Exception:
                         pass
                 else:
                     # v2.8.7：别人视口 → 不画本玩家的钩爪预瞄/锁定圈
+                    # v2.9.11 修复：此前对**所有**玩家一律 own_view=False，
+                    # 连本视口主人自己也被当成"别人的视口"，于是 P1/P2
+                    # 的钩爪预瞄线与锁定圈在多人模式里全都不画。
                     p.draw(self.screen, cam_x, cam_y, self.game.font, scale,
-                           own_view=False)
+                           own_view=(p is player))
                 # v2.5.4 头顶状态：血条 + 名字/阵营色（PvP 敌方红、队友绿）
                 try:
                     _px = int((p.x - cam_x) * scale)
@@ -716,6 +789,12 @@ class PlayMixin:
                     pass
             else:
                 player.draw(self.screen, cam_x, cam_y, self.game.font, scale)
+                # v2.9.12：主动格挡弧 / 完美格挡闪光
+                try:
+                    self.game.draw_block_fx(self.screen, player, cam_x, cam_y,
+                                            scale, viewport_x, self.game.font_small)
+                except Exception:
+                    pass
 
         # v2.5.0/v2.5.4 玩家冰冻冰块渲染：冻结时覆盖淡蓝冰块（多人 N 人全覆盖）
         _ice_players = [player] if self.game.player2 is None else [p for p in (self.game.player, self.game.player2, getattr(self.game, 'player3', None), getattr(self.game, 'player4', None)) if p is not None]
@@ -758,9 +837,13 @@ class PlayMixin:
         except Exception:
             pass
 
-        # 近战挥砍动画
-        if hasattr(self.game, 'melee_attack_active') and self.game.melee_attack_active:
-            self._draw_melee_attack(cam_x, cam_y, scale)
+        # v2.9.12：近战「多段连斩 + 剑气」统一渲染（自带生命周期，
+        # 不再依赖 melee_attack_active 单帧标记，收势也能完整播完）
+        try:
+            self.game.melee_fx.draw(self.screen, cam_x, cam_y, scale,
+                                    viewport_x, self.game.font_small)
+        except Exception:
+            pass
 
         # 绘制投射物
         for proj in self.game.projectiles:
@@ -916,8 +999,12 @@ class PlayMixin:
                 pass
 
         # 绘制刀光弧斩特效（死神镰刀/枪械曳光）
+        # v2.9.12：传 viewport_x，分屏 P2 视口不再画到左半屏
         for sa in getattr(self.game, 'slash_arcs', []):
-            sa.draw(self.screen, cam_x, cam_y, scale)
+            try:
+                sa.draw(self.screen, cam_x, cam_y, scale, viewport_x)
+            except TypeError:
+                sa.draw(self.screen, cam_x, cam_y, scale)
 
         # 绘制圆形横扫扩散环（死神镰刀换弹横扫）
         for sr in getattr(self.game, 'sweep_rings', []):
@@ -1270,6 +1357,11 @@ class PlayMixin:
 
     def _draw_hud(self):
         scale = self.game.scale
+        # v2.9.12：独立格挡摇杆（仅触控模式绘制）
+        try:
+            self.game.draw_block_stick(self.screen, self.game.font_small, scale)
+        except Exception:
+            pass
         # v2.5.6：世界按窗口铺满（可视区域 = 窗口/scale），
         # 因此 HUD 依旧按窗口尺寸定位；窗口比例变化时由 _sync_camera_viewports
         # 调整摄像机视口，保证玩家始终在可视区域中心。
@@ -1994,58 +2086,103 @@ class PlayMixin:
                 star_text = self.game.font.render("*", True, (255, 255, 100))
                 self.game.screen.blit(star_text, (sx, sy))
 
-    def _draw_melee_attack(self, cam_x, cam_y, scale):
-        """绘制近战挥砍动画"""
+    def _draw_melee_attack(self, cam_x, cam_y, scale, viewport_x=0):
+        """v2.9.12 近战：有节奏的**多段连斩**（武侠感）
+
+        三段：一斩横扫 → 二斩反撩 → 三斩力劈。每段含起手蓄力、
+        斩击刀光、收势残影；段与段之间有短暂停顿，形成节奏。
+        全部直接往主屏幕画（arc/line/polygon），**零 Surface 分配**，
+        避免旧版每段建 3 张全屏 Surface 拖慢帧率。
+        """
         import math as _math
         g = self.game
-        px = int((g.player.x - cam_x) * scale)
+        px = int((g.player.x - cam_x) * scale) + viewport_x
         py = int((g.player.y - cam_y) * scale)
-        attack_range = int(g.melee_attack_range * scale)
-        progress = 1 - (g.melee_attack_timer / max(0.01, g.melee_attack_duration))
-        
-        # 挥砍扇形角度范围
-        arc_width = _math.pi * 0.8
-        start_angle = g.melee_attack_angle - arc_width / 2
-        # 挥砍进度对应的当前角度
-        current_angle = start_angle + arc_width * progress
-        
-        # 武器颜色
-        weapon_color = (200, 200, 200)
-        if g.melee_attack_weapon:
-            weapon_color = getattr(g.melee_attack_weapon, 'color', (200, 200, 200))
-        
-        # 绘制挥砍轨迹（半透明扇形）
-        if attack_range > 0:
-            # 挥砍残影
-            for i in range(3):
-                trail_angle = current_angle - i * 0.15
-                if trail_angle < start_angle:
-                    continue
-                alpha = int(120 * (1 - i * 0.3) * (1 - progress * 0.5))
-                trail_surf = pygame.Surface((attack_range * 2, attack_range * 2), pygame.SRCALPHA)
-                # 绘制扇形
-                rect = pygame.Rect(0, 0, attack_range * 2, attack_range * 2)
-                pygame.draw.arc(trail_surf, (*weapon_color, alpha), rect, 
-                               start_angle, trail_angle, max(2, int(8 * scale)))
-                self.screen.blit(trail_surf, (px - attack_range, py - attack_range))
-            
-            # 当前挥砍位置的武器线条
-            end_x = px + _math.cos(current_angle) * attack_range
-            end_y = py + _math.sin(current_angle) * attack_range
-            pygame.draw.line(self.screen, weapon_color, (px, py), (end_x, end_y), 
-                           max(2, int(4 * scale)))
-            # 武器端点高光
-            pygame.draw.circle(self.screen, (255, 255, 255), 
-                             (int(end_x), int(end_y)), max(2, int(4 * scale)))
-            
-            # 电锯特殊效果：持续旋转锯齿
-            if g.melee_attack_weapon and g.melee_attack_weapon.weapon_type.name == 'CHAINSAW':
+        rng = int(getattr(g, 'melee_attack_range', 70) * scale)
+        if rng <= 0:
+            return
+        dur = max(0.01, float(getattr(g, 'melee_attack_duration', 0.3) or 0.3))
+        prog = max(0.0, min(1.0,
+                  1.0 - float(getattr(g, 'melee_attack_timer', 0.0) or 0.0) / dur))
+        base = float(getattr(g, 'melee_attack_angle', 0.0) or 0.0)
+        wc = (220, 225, 235)
+        try:
+            _w = getattr(g, 'melee_attack_weapon', None)
+            if _w is not None:
+                wc = tuple(getattr(_w, 'color', wc))
+        except Exception:
+            pass
+        hi = tuple(min(255, int(c * 0.55 + 130)) for c in wc[:3])
+
+        # 三段参数：(起始偏移, 扫过角度, 颜色, 段标签)
+        segs = [(-0.95, 1.55, hi, "一"), (0.80, -1.45, wc, "二"),
+                (-0.35, 1.15, (255, 230, 150), "三")]
+        n = len(segs)
+        seg_f = prog * n
+        cur = min(n - 1, int(seg_f))
+        local = seg_f - cur                      # 0..1 段内进度
+        for si, (off, sweep, col, _) in enumerate(segs):
+            if si > cur:
+                break
+            if si < cur:
+                sp = 1.0                         # 已完成的段：留淡残影
+            else:
+                sp = local
+            a0 = _math.radians(base) + off
+            a1 = a0 + sweep * min(1.0, sp * 1.25)
+            # 已完成段只留一道细弧，当前段画完整刀光
+            width = max(1, int(2 * scale)) if si < cur else max(2, int(7 * scale))
+            rect = pygame.Rect(px - rng, py - rng, rng * 2, rng * 2)
+            lo, hio = (a0, a1) if a1 >= a0 else (a1, a0)
+            try:
+                pygame.draw.arc(self.screen, col, rect, lo, hio, width)
+            except Exception:
+                pass
+            if si == cur:
+                # 刀光扇形（半透明感用亮边 + 内部淡线模拟，不建 Surface）
+                pts = [(px, py)]
+                steps = 12
+                for k in range(steps + 1):
+                    aa = a0 + (a1 - a0) * k / steps
+                    pts.append((px + _math.cos(aa) * rng,
+                                py + _math.sin(aa) * rng))
+                try:
+                    pygame.draw.polygon(self.screen, col, pts, max(1, int(2 * scale)))
+                except Exception:
+                    pass
+                # 刀锋线 + 端点高光
+                ex = px + _math.cos(a1) * rng
+                ey = py + _math.sin(a1) * rng
+                pygame.draw.line(self.screen, (255, 255, 255), (px, py),
+                                 (int(ex), int(ey)), max(2, int(3 * scale)))
+                pygame.draw.circle(self.screen, (255, 255, 255),
+                                   (int(ex), int(ey)), max(2, int(4 * scale)))
+                # 起手蓄力：段内 0~0.22 画收缩的预备弧
+                if local < 0.22:
+                    k = local / 0.22
+                    rr = int(rng * (1.0 - 0.35 * k))
+                    pygame.draw.arc(self.screen, (255, 210, 110),
+                                    pygame.Rect(px - rr, py - rr, rr * 2, rr * 2),
+                                    a0 - 0.4, a0 + 0.4, max(1, int(3 * scale)))
+        # 段数指示（三颗小点，当前段高亮）
+        for i in range(n):
+            c = (255, 225, 120) if i == cur else (90, 100, 115)
+            pygame.draw.circle(self.screen, c,
+                               (px - 14 + i * 14, py + int(20 * scale)),
+                               max(2, int(3 * scale)))
+        # 电锯：额外旋转锯齿（保留原特性）
+        try:
+            _w = getattr(g, 'melee_attack_weapon', None)
+            if _w is not None and getattr(_w, 'weapon_type', None) is not None \
+                    and getattr(_w.weapon_type, 'name', '') == 'CHAINSAW':
                 for i in range(8):
-                    saw_angle = current_angle + i * _math.pi / 4 + pygame.time.get_ticks() / 50
-                    saw_x = px + _math.cos(saw_angle) * attack_range * 0.7
-                    saw_y = py + _math.sin(saw_angle) * attack_range * 0.7
-                    pygame.draw.circle(self.screen, (255, 100, 100), 
-                                     (int(saw_x), int(saw_y)), max(1, int(3 * scale)))
+                    aa = pygame.time.get_ticks() / 50 + i * _math.pi / 4
+                    pygame.draw.circle(self.screen, (255, 100, 100),
+                                       (int(px + _math.cos(aa) * rng * 0.7),
+                                        int(py + _math.sin(aa) * rng * 0.7)),
+                                       max(1, int(3 * scale)))
+        except Exception:
+            pass
 
     def _draw_fire_zones(self, cam_x, cam_y, scale):
         """绘制燃烧区域"""
@@ -2082,8 +2219,13 @@ class PlayMixin:
             self.screen.blit(smoke, (sx - r, sy - r))
 
     def _draw_airstrike_planes(self, cam_x, cam_y, scale):
-        """绘制空袭飞机"""
-        import pygame
+        """绘制空袭飞机
+
+        v2.9.12：删掉函数内的 `import pygame` / `import math`。
+        模块顶部已导入二者；函数内 import 会让名字被编译成**局部变量**，
+        而 `angle = math.atan2(...)` 位于 import 之前 → UnboundLocalError
+        打断整帧（与 v2.9.10 的 GameState 崩溃同一根因）。
+        """
         if not hasattr(self.game, 'airstrikes') or not self.game.airstrikes:
             return
         for strike in self.game.airstrikes:
@@ -2097,7 +2239,6 @@ class PlayMixin:
             plane_size = int(30 * scale)
             angle = math.atan2(strike["plane_vy"], strike["plane_vx"])
             # 绘制飞机三角形
-            import math
             p1 = (px + math.cos(angle) * plane_size, py + math.sin(angle) * plane_size)
             p2 = (px + math.cos(angle + 2.5) * plane_size * 0.7, py + math.sin(angle + 2.5) * plane_size * 0.7)
             p3 = (px + math.cos(angle - 2.5) * plane_size * 0.7, py + math.sin(angle - 2.5) * plane_size * 0.7)

@@ -308,6 +308,52 @@ def overwrite_from_code(conn):
     return _n
 
 
+def seed_resistances(conn):
+    """v2.9.12：抗性档案（数据来自 combat_pkg.damage.DEFAULT_PROFILES，单一来源）"""
+    _c = conn.cursor()
+    _n = 0
+    try:
+        from combat_pkg.damage import DEFAULT_PROFILES, CHANNELS
+    except Exception:
+        return 0
+    for _k, _v in DEFAULT_PROFILES.items():
+        _cols = ["key", "name"] + list(CHANNELS) + ["extra"]
+        _vals = [_k, _k] + [float(_v.get(c, 0.0)) for c in CHANNELS] + ["{}"]
+        try:
+            _c.execute("INSERT OR IGNORE INTO resistances (%s) VALUES (%s)" %
+                       (",".join(_cols), ",".join(["?"] * len(_cols))), _vals)
+            _n += 1
+        except Exception:
+            pass
+    conn.commit()
+    return _n
+
+
+def seed_status_defs(conn):
+    """v2.9.12：状态定义（数据来自 combat_pkg.status.STATUS_DEFS）"""
+    _c = conn.cursor()
+    _n = 0
+    try:
+        from combat_pkg.status import STATUS_DEFS
+    except Exception:
+        return 0
+    for _k, _v in STATUS_DEFS.items():
+        try:
+            _c.execute(
+                "INSERT OR IGNORE INTO status_defs("
+                "key,name,color,icon,dps,duration,max_stacks,vulnerability,fx) "
+                "VALUES(?,?,?,?,?,?,?,?,?)",
+                (_k, _v.get("name", _k), _color(_v.get("color", (200, 200, 200))),
+                 _v.get("icon", "?"), float(_v.get("dps", 0.0)),
+                 float(_v.get("duration", 3.0)), int(_v.get("max_stacks", 3)),
+                 _j(_v.get("vulnerability", {})), _v.get("fx", "none")))
+            _n += 1
+        except Exception:
+            pass
+    conn.commit()
+    return _n
+
+
 def seed_all(conn):
     """补种所有表（已有行不覆盖）"""
     _r = {
@@ -316,6 +362,8 @@ def seed_all(conn):
         "runes": seed_runes(conn),
         "buffs": seed_buffs(conn),
         "skills": seed_skills(conn),
+        "resistances": seed_resistances(conn),
+        "status_defs": seed_status_defs(conn),
     }
     return _r
 
@@ -323,7 +371,8 @@ def seed_all(conn):
 def rebuild(conn):
     """强制重建：清空后用默认值重灌（策划改的数据会丢失，仅用于修复损坏）"""
     _c = conn.cursor()
-    for _t in ("weapons", "enemies", "runes", "buffs", "skills", "difficulty", "tuning"):
+    for _t in ("weapons", "enemies", "runes", "buffs", "skills", "difficulty",
+               "tuning", "resistances", "status_defs"):
         try:
             _c.execute(f"DELETE FROM {_t}")
         except Exception:

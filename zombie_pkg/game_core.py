@@ -334,6 +334,9 @@ class GameCore:
         self.damage_numbers = []
         self.floating_texts = []
         self.slash_arcs = []  # 刀光弧斩特效（死神镰刀横扫/处决/枪械曳光）
+        # v2.9.12：近战多段连斩 + 剑气统一渲染系统
+        from combat_pkg import MeleeFxSystem
+        self.melee_fx = MeleeFxSystem(self)
         self.sweep_rings = []  # 圆形横扫扩散环特效（死神镰刀换弹横扫）
         self.enemy_projectiles = []
 
@@ -359,9 +362,12 @@ class GameCore:
         # v2.9.8：P2 独立选卡器 —— 此前 P1/P2 共用一个 selector，
         # 两人同时升级时第二个人根本弹不出卡（也正因如此才被设计成"串行"）。
         self.skill_card_selector2 = SkillCardSelector()
-        self.pending_upgrade_for = None  # 同屏双人：当前升级的玩家 "P1"/"P2"
-        # v2.1.3：同屏双人 per-player 升级暂停（P1 升级选卡时 P2 继续游戏、怪物脱锁升级玩家）。
-        # 值为 "P1"/"P2"/None；单机模式不用（仍走全局 SKILL_SELECT 状态）
+        self.pending_upgrade_for = None  # 单机：当前升级的玩家
+        # v2.9.11：_upgrade_pause_player 降级为**兼容字段**（"最近一个"），
+        # 不再作为排他依据。真正的权威状态放在每个 player 自己身上：
+        # upgrade_paused / upgrade_grace_timer / upgrade_auto_timer / skill_cards。
+        # 旧代码用单个字符串表示"谁在选卡"，两人同时连升多级时必有一方
+        # 被跳过、输入与渲染也只认一个 selector —— 就是"卡住干等"的根因。
         self._upgrade_pause_player = None
         self.hud_layout_feedback = None  # HUD布局保存/重置的屏幕反馈提示
         self.skill_tree_renderer = SkillTreeRenderer()
@@ -465,6 +471,15 @@ class GameCore:
         self.selected_char_p2 = None
         self.selected_weapon_p2_level = 1
         self.net_role = None              # None / "host" / "client"
+        # v2.9.11 局域网联机
+        self.net_room_name = "幸存者房间"
+        self.net_nickname = "玩家"
+        self.net_show_rooms = False
+        self.net_room_focused = False
+        self.net_nick_focused = False
+        self.net_discovery = None
+        self.net_beacon = None
+        self.net_last_error = None
         self.net_host = None
         self.net_client = None
         self.net_port = 26000
@@ -886,6 +901,63 @@ class GameCore:
         """是否处于双人/联机游玩中"""
         return bool(self.player2 is not None)
 
+    # ---------- v2.9.11 升级会话：P1/P2 完全独立 ----------
+    def selector_for(self, tag):
+        """每个玩家一个技能卡选择器（P2 用 selector2，不再和 P1 抢同一个）"""
+        if tag == "P2":
+            _s2 = getattr(self, 'skill_card_selector2', None)
+            if _s2 is not None:
+                return _s2
+        return self.skill_card_selector
+
+    def player_for_tag(self, tag):
+        return self.player2 if tag == "P2" else self.player
+
+    def tag_for_player(self, player):
+        if player is None:
+            return "P1"
+        for _t, _a in (("P2", "player2"), ("P3", "player3"), ("P4", "player4")):
+            if player is getattr(self, _a, None):
+                return _t
+        return "P1"
+
+    def active_upgrade_tags(self):
+        """当前正在选卡的玩家列表（权威依据 = 每个玩家自己的 upgrade_paused）"""
+        _out = []
+        for _t in ("P1", "P2"):
+            _p = self.player_for_tag(_t)
+            if (_p is not None and getattr(_p, 'upgrade_paused', False)
+                    and (getattr(_p, 'pending_level_up', False)
+                         or getattr(_p, 'skill_cards', None))):
+                _out.append(_t)
+        return _out
+
+    def upgrade_region_for(self, tag):
+        """该玩家选卡面板的半屏区域（触控事件按此过滤，互不串台）"""
+        import pygame
+        _half = max(320, getattr(self, 'scaled_width', 1280) // 2)
+        _sw = getattr(self, 'scaled_width', 1280)
+        _sh = getattr(self, 'scaled_height', 720)
+        return pygame.Rect(0 if tag == "P1" else _sw - _half, 0, _half, _sh)
+
+    def _finish_upgrade_session(self, player, tag):
+        """结束某一玩家的升级会话（只清它自己，绝不碰另一个玩家）"""
+        if player is not None:
+            player.upgrade_paused = False
+            player.upgrade_grace_timer = 0.0
+            player.upgrade_auto_timer = 0.0
+            player.pending_level_up = False
+            player.pending_levels = 0
+            player.skill_cards = []
+        try:
+            self.selector_for(tag).hide()
+        except Exception:
+            pass
+        if getattr(self, 'pending_upgrade_for', None) == tag:
+            self.pending_upgrade_for = None
+        if getattr(self, '_upgrade_pause_player', None) == tag:
+            self._upgrade_pause_player = None
+
     # ==================== v2.5.6 升级选卡保护（防卡界面无限无敌）====================
     UPGRADE_GRACE_TIME = 2.0      # 选卡开始后的免伤+脱锁保护时长（秒）
     UPGRADE_AUTO_PICK_TIME = 10.0  # 选卡超时自动选卡（秒），防止无限等待
@@ -1300,6 +1372,10 @@ class GameCore:
             self.damage_numbers = []
             self.floating_texts = []
             self.slash_arcs = []
+            try:
+                self.melee_fx.clear()
+            except Exception:
+                pass
             self.sweep_rings = []
             self.enemy_projectiles = []
             self.smoke_zones = []

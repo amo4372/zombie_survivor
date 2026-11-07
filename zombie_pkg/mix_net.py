@@ -237,6 +237,13 @@ class NetMixin:
         except Exception:
             pass
         snap = self.net_client.get_snapshot()
+        try:
+            _rf = snap.get("rtt_for") or {}
+            _rv = _rf.get(str(self.net_client.player_index))
+            if _rv is not None:
+                self.net_client.rtt_ms = _rv
+        except Exception:
+            pass
         keys = pygame.key.get_pressed()
         mx = (1 if keys[pygame.K_d] else 0) - (1 if keys[pygame.K_a] else 0)
         my = (1 if keys[pygame.K_s] else 0) - (1 if keys[pygame.K_w] else 0)
@@ -277,9 +284,16 @@ class NetMixin:
                 "throw": False, "sprint": False,
                 "aim": _aim,
             })
-        # 主机断开 → 返回联机界面
+        # 主机断开 / 版本不一致 → 带着原因返回联机界面
         if not self.net_client.connected:
-            self.floating_texts.append(FloatingText(0, 0, "与主机断开连接", color=CRIMSON, lifetime=2.0))
+            self.net_last_error = (getattr(self.net_client, 'error', None)
+                                   or getattr(self.net_client, 'disconnect_reason', None)
+                                   or "与主机断开连接")
+            try:
+                self.floating_texts.append(FloatingText(
+                    0, 0, self.net_last_error, color=CRIMSON, lifetime=2.5))
+            except Exception:
+                pass
             self._net_stop()
             self.state = GameState.NET_MULTIPLAYER
 
@@ -292,6 +306,12 @@ class NetMixin:
             return
         try:
             for _idx in list(self.net_host.clients.keys()):
+                # v2.9.11 房主权威：客户端升级选卡由**主机**结算，
+                # 客户端只上传下标，绝不本地改技能树（天然防作弊）。
+                _pick = self.net_host.pop_upgrade_pick(_idx)
+                _ent_pick = getattr(self, f"player{_idx + 1}", None)
+                if _pick is not None and _ent_pick is not None:
+                    self._net_apply_upgrade_pick(_ent_pick, int(_pick))
                 _inp = self.net_host.get_input(_idx)
                 _ent = getattr(self, f"player{_idx + 1}", None)
                 if _ent is None or not getattr(_ent, 'alive', True) or getattr(_ent, 'downed', False):
@@ -342,6 +362,30 @@ class NetMixin:
                     self._net_drive_skill(_ent, _idx)
         except Exception as _e:
             logger.warning(f"主机驱动客户端玩家失败: {_e}")
+
+    def _net_apply_upgrade_pick(self, ent, index):
+        """主机结算某网络玩家的升级选择（不触碰本地 UI / selector）"""
+        try:
+            _cards = getattr(ent, 'skill_cards', None) or []
+            if not getattr(ent, 'pending_level_up', False) or not (0 <= index < len(_cards)):
+                return
+            # 本地玩家由 level_up() 增加 skill_points；网络玩家的升级也由
+            # 房主驱动，这里兜底确保有可用点数，避免"选了卡但技能没升"。
+            _st = ent.skill_tree
+            if getattr(_st, 'skill_points', 0) <= 0:
+                _st.skill_points = 1
+            _st.upgrade_skill(_cards[index].skill_type)
+            _left = int(getattr(ent, 'pending_levels', 0)) - 1
+            ent.pending_levels = max(0, _left)
+            if _left > 0:
+                ent.skill_cards = ent.skill_tree.get_random_skill_cards(
+                    getattr(ent, 'skill_slot_count', 3))
+                ent.pending_level_up = True
+            else:
+                ent.skill_cards = []
+                ent.pending_level_up = False
+        except Exception as _e:
+            logger.warning(f"网络玩家升级结算失败: {_e}")
 
     def _net_drive_skill(self, ent, idx):
         """主机端驱动客户端玩家实体施放技能（仅常见技能最小实现）"""
@@ -410,8 +454,30 @@ class NetMixin:
                              "phase": int(_z.get("phase", 0))}
             except Exception:
                 _zone = None
+            # v2.9.11：把「升级卡」下发给客户端 —— 房主权威下客户端
+            # 不模拟世界，也没有 skill_tree，只能由主机把可选项发过去。
+            _cards_for, _pending_for = {}, {}
+            for _i, _pa in enumerate(("player", "player2", "player3", "player4")):
+                _p = getattr(self, _pa, None)
+                if _p is None:
+                    continue
+                _cs = getattr(_p, 'skill_cards', None) or []
+                if getattr(_p, 'pending_level_up', False) and _cs:
+                    _cards_for[str(_i)] = [
+                        {"name": getattr(_c, 'name', '强化'),
+                         "desc": str(getattr(_c, 'description', ''))[:60]}
+                        for _c in _cs[:3]]
+                    _pending_for[str(_i)] = int(getattr(_p, 'pending_levels', 0) or 0)
+            try:
+                _rtt = {str(k): v.get("rtt_ms") for k, v in
+                        self.net_host.peer_info().items()}
+            except Exception:
+                _rtt = {}
             snap = {
                 "started": True,
+                "version": 2,
+                "room": getattr(self.net_host, 'room_name', ''),
+                "host": getattr(self.net_host, 'host_name', ''),
                 "time_left": getattr(self, 'time_left', 0),
                 "wave": getattr(self, 'wave_count', 0) if hasattr(self, 'wave_count') else 0,
                 "players": self._snapshot_players(),
@@ -419,8 +485,20 @@ class NetMixin:
                 "projectiles": projs,
                 "effects": effects,
                 "zone": _zone,
+                "cards_for": _cards_for,
+                "pending_for": _pending_for,
+                "rtt_for": _rtt,
+                "ts": round(time.time(), 3),
             }
             self.net_host.send_snapshot({"type": "snapshot", "data": snap})
+            # 周期性 RTT 探测（2s 一次，独立于快照节流）
+            self._net_ping_timer = getattr(self, '_net_ping_timer', 0) - 0.05
+            if self._net_ping_timer <= 0:
+                self._net_ping_timer = 2.0
+                try:
+                    self.net_host.send_ping()
+                except Exception:
+                    pass
         except Exception as e:
             logger.warning(f"快照发送失败: {e}")
 
@@ -444,6 +522,42 @@ class NetMixin:
                 "team": int(getattr(_p, 'team_id', 0) or 0),
             })
         return out
+
+    # ---------- v2.9.11 局域网房间发现 ----------
+    def _net_start_discovery(self):
+        """进入联机页时开始扫描同一局域网的房间（UDP 广播）"""
+        if getattr(self, 'net_discovery', None):
+            return
+        try:
+            from net_discovery import RoomDiscovery
+            _d = RoomDiscovery()
+            if _d.start():
+                self.net_discovery = _d
+            else:
+                self.net_last_error = f"房间扫描不可用：{_d.error}"
+        except Exception as _e:
+            self.net_last_error = f"房间扫描失败：{_e}"
+
+    def _net_room_list(self):
+        _d = getattr(self, 'net_discovery', None)
+        return _d.list_rooms() if _d else []
+
+    def _net_join_room(self, room):
+        """点房间列表直接加入（自动填 IP / 端口）"""
+        if not room:
+            return
+        self.net_ip_input = str(room.get('ip', '127.0.0.1'))
+        self.net_port_input = str(room.get('port', 26000))
+        self.net_last_error = None
+        self._net_join()
+
+    def _net_stop_discovery(self):
+        try:
+            if getattr(self, 'net_discovery', None):
+                self.net_discovery.stop()
+        except Exception:
+            pass
+        self.net_discovery = None
 
     def _get_local_ip(self):
         """获取本机局域网IP"""
@@ -477,11 +591,29 @@ class NetMixin:
             self.net_port = max(1024, min(65535, int(getattr(self, 'net_port_input', '26000') or '26000')))
         except Exception:
             self.net_port = 26000
-        self.net_host = NetHost(self.net_port, room_cfg=_rc)
+        self.net_host = NetHost(
+            self.net_port, room_cfg=_rc,
+            room_name=str(getattr(self, 'net_room_name', '') or '幸存者房间'),
+            host_name=str(getattr(self, 'net_nickname', '') or '房主'))
         if self.net_host.start():
+            try:
+                from net_discovery import RoomBeacon
+                self.net_beacon = RoomBeacon(
+                    self.net_port,
+                    room_name=self.net_host.room_name,
+                    host_name=self.net_host.host_name,
+                    max_players=int(getattr(self, 'coop_player_count', 2) or 2),
+                    mode=getattr(self.config.game_mode, 'name', 'TIMED'),
+                    get_player_count=lambda: 1 + self.net_host.client_count,
+                    get_started=lambda: bool(getattr(self, 'net_started', False)))
+                self.net_beacon.start()
+            except Exception:
+                self.net_beacon = None
             self.state = GameState.NET_WAIT
             self.floating_texts = []
+            self.net_last_error = None
         else:
+            self.net_last_error = getattr(self.net_host, 'error', None) if self.net_host else "端口被占用或无法监听"
             self.net_role = None
             self.net_host = None
 
@@ -495,7 +627,13 @@ class NetMixin:
             self.net_port = max(1024, min(65535, int(getattr(self, 'net_port_input', '26000') or '26000')))
         except Exception:
             self.net_port = 26000
-        self.net_client = NetClient(ip, self.net_port)
+        try:
+            self._net_stop_discovery()   # 已选定房间，省掉后台广播扫描
+        except Exception:
+            pass
+        self.net_client = NetClient(
+            ip, self.net_port,
+            nickname=str(getattr(self, 'net_nickname', '') or '玩家'))
         ok = self.net_client.start()
         if not ok:
             self.net_role = None
@@ -506,6 +644,12 @@ class NetMixin:
 
     def _net_stop(self):
         """停止网络会话（返回联机界面）"""
+        try:
+            if getattr(self, 'net_beacon', None):
+                self.net_beacon.stop()
+        except Exception:
+            pass
+        self.net_beacon = None
         if self.net_host:
             self.net_host.stop()
             self.net_host = None

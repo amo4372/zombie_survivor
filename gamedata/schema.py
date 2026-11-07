@@ -89,6 +89,37 @@ SCHEMA = {
         " effect_key TEXT, effect_per_level REAL, icon_color TEXT, extra TEXT)"
     ),
 
+    # v2.9.12 抗性档案：key 为 profile 名（PLAYER / ZOMBIE / BOSS / SHIELD ...）
+    # 每列是一个伤害通道的抗性，0=无抗性 0.5=减半 1=免疫，负数=易伤
+    "resistances": """
+        CREATE TABLE IF NOT EXISTS resistances (
+            key         TEXT PRIMARY KEY,
+            name        TEXT,
+            physical    REAL DEFAULT 0,
+            fire        REAL DEFAULT 0,
+            ice         REAL DEFAULT 0,
+            poison      REAL DEFAULT 0,
+            lightning   REAL DEFAULT 0,
+            explosion   REAL DEFAULT 0,
+            magic       REAL DEFAULT 0,
+            true        REAL DEFAULT 0,
+            extra       TEXT
+        )""",
+
+    # v2.9.12 状态定义：流血/燃烧/冰冻/中毒/眩晕/感电 的 dps、时长、易伤、颜色
+    "status_defs": """
+        CREATE TABLE IF NOT EXISTS status_defs (
+            key            TEXT PRIMARY KEY,
+            name           TEXT,
+            color          TEXT,
+            icon           TEXT,
+            dps            REAL DEFAULT 0,
+            duration       REAL DEFAULT 3,
+            max_stacks     INTEGER DEFAULT 3,
+            vulnerability  TEXT,
+            fx             TEXT
+        )""",
+
     # 全局调参：key-value（尸潮间隔、掉落率、玩家基础属性等标量）
     "tuning": """
         CREATE TABLE IF NOT EXISTS tuning (

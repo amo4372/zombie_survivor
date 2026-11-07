@@ -402,15 +402,10 @@ class PlayingMixin:
     def _enemy_collide_damage(self, enemy, player, camera):
         """近战伤害（P1/P2… 共用）
 
-        v2.9.10 重做：加入**攻击间隔**与**攻击范围**。
-
-        旧实现每帧只要 `colliderect` 就 `take_damage`，靠玩家 0.3s 无敌帧
-        限频；无敌帧按要求删除后，贴身僵尸每帧扣一次血 → 玩家瞬间暴毙。
-        现在：
-          · 物理推挤与伤害解耦（重叠才推开，不再等于挨打）
-          · 用**中心距离**判定攻击范围：`size_enemy + size_player + reach`，
-            擦身而过 / 矩形角擦边不再白扣血
-          · 每个 (敌人, 玩家) 独立 CD，CD 内不再结算，也不再刷 debuff/震屏
+        v2.9.11：加入**前摇 / 后摇**与**预警范围**，为主动格挡做准备。
+          idle → windup（画预警扇形，锁定目标）→ impact（结算一次）
+                → recover（后摇硬直）→ idle
+        物理推挤与伤害解耦；攻击范围用中心距离；CD 按 (敌人,玩家) 独立。
         """
         if enemy.grappled or not getattr(player, 'alive', True):
             return
@@ -418,7 +413,7 @@ class PlayingMixin:
         dy = enemy.y - player.y
         dist = math.hypot(dx, dy)
 
-        # ---- 1) 物理推挤：只有真正重叠才分离，与伤害判定解耦 ----
+        # ---- 1) 物理推挤（重叠才分离，与伤害判定解耦） ----
         min_dist = enemy.size + player.size + 2
         if dist > 0 and dist < min_dist:
             push = (min_dist - dist) * 0.5
@@ -427,13 +422,26 @@ class PlayingMixin:
             player.x -= (dx / dist) * push
             player.y -= (dy / dist) * push
 
-        # ---- 2) 攻击范围（中心距离，而非矩形碰撞） ----
         reach = float(getattr(enemy, 'melee_attack_reach', 10.0) or 10.0)
         attack_range = enemy.size + player.size + reach
-        if dist > attack_range:
-            return
+        _mst = getattr(enemy, 'melee_state', 'idle')
 
-        # ---- 3) 每个 (敌人, 玩家) 独立的攻击 CD ----
+        # ---- 2) impact：只对前摇锁定的那名玩家结算一次 ----
+        if _mst == 'impact':
+            if (not getattr(enemy, 'melee_hit_consumed', False)
+                    and getattr(enemy, 'melee_target_pid', None) == id(player)):
+                enemy.melee_hit_consumed = True
+                # 前摇期间玩家跑出范围 = 挥空（主动闪避/格挡的窗口）
+                if dist <= attack_range:
+                    self._resolve_melee_impact(enemy, player, camera, dx, dy)
+                enemy.melee_state = 'recover'
+                enemy.melee_state_timer = max(0.05, float(
+                    getattr(enemy, 'melee_recover', 0.25) or 0.25))
+            return
+        if _mst != 'idle':
+            return     # 前摇/后摇期间不再起手
+
+        # ---- 3) 起手：进入前摇（预警范围由渲染层读取） ----
         timers = getattr(enemy, 'melee_attack_timers', None)
         if not isinstance(timers, dict):
             timers = {}
@@ -443,10 +451,56 @@ class PlayingMixin:
             return
         if enemy.knockdown_timer > 0:
             return
+        if dist > attack_range:
+            return
         cd = max(0.15, float(getattr(enemy, 'melee_attack_cooldown', 1.2) or 1.2))
         timers[_key] = cd
+        # v2.9.12 修复「扇形画反」：dx/dy 是 **玩家 → 敌人** 的方向
+        # （物理推挤 `enemy.x += dx/dist*push` 依赖这个符号），
+        # 但预警扇形要画的是 **敌人 → 玩家** 的攻击方向，必须取反。
+        enemy.begin_melee_windup(_key,
+                                 math.degrees(math.atan2(-dy, -dx)),
+                                 attack_range)
 
-        # ---- 4) 真正结算一次伤害（以下每帧只会进一次 / CD） ----
+    def _is_melee_blocked(self, enemy, player):
+        """主动格挡判定（v2.9.11 预留接口，之后做主动格挡技能时接这里）
+
+        支持三种写法：parry_active 标记 / is_blocking() / riot_gear 举盾窗口。
+        """
+        try:
+            if bool(getattr(player, 'parry_active', False)):
+                return True
+            _ib = getattr(player, 'is_blocking', None)
+            if callable(_ib) and _ib():
+                return True
+            _rg = getattr(player, 'riot_gear', None)
+            if _rg is not None and bool(getattr(_rg, 'parry_window', False)):
+                return True
+        except Exception:
+            pass
+        return False
+
+    def _on_melee_parried(self, enemy, player):
+        """格挡成功：免伤 + 敌人硬直 + 反馈（为后续主动格挡技能预留）"""
+        try:
+            enemy.knockdown_timer = max(getattr(enemy, 'knockdown_timer', 0.0), 0.6)
+            enemy.melee_state = 'recover'
+            enemy.melee_state_timer = max(0.05, float(
+                getattr(enemy, 'melee_recover', 0.25) or 0.25) * 2)
+            _a = math.atan2(enemy.y - player.y, enemy.x - player.x)
+            enemy.x += math.cos(_a) * 24
+            enemy.y += math.sin(_a) * 24
+            self.floating_texts.append(FloatingText(
+                player.x, player.y - 40, "格挡!", color=(120, 230, 255), lifetime=1.0))
+            self.assets.play_sound("shield_block")
+        except Exception:
+            pass
+
+    def _resolve_melee_impact(self, enemy, player, camera, dx, dy):
+        """前摇结束的一帧：结算一次伤害（含主动格挡接口）"""
+        if self._is_melee_blocked(enemy, player):
+            self._on_melee_parried(enemy, player)
+            return
         angle_to_enemy = math.atan2(dy, dx)
         facing_rad = math.radians(player.facing_angle)
         angle_diff = abs(math.atan2(math.sin(angle_to_enemy - facing_rad),
@@ -463,7 +517,7 @@ class PlayingMixin:
                 player.take_damage(enemy.damage, "melee", from_front, enemy.x, enemy.y)
         else:
             player.take_damage(enemy.damage, "melee", from_front, enemy.x, enemy.y)
-        # debuff 也只在真实命中时按概率触发（旧版每帧 10% ≈ 必中）
+        # debuff 也只在真实命中那一次按概率触发
         etype = enemy.enemy_type
         if etype == EnemyType.ZOMBIE_FAST and random.random() < 0.25:
             player.buff_manager.add_buff(BuffType.BLEED, duration=4.0)
@@ -476,6 +530,11 @@ class PlayingMixin:
             camera.shake(6, 0.4)
 
     def _update_playing(self, dt):
+        # v2.9.12：主动格挡状态机每帧推进（P1/P2 各自独立）
+        try:
+            self.update_block(dt)
+        except Exception:
+            pass
         # v2.2.3 争分夺秒加时反馈计时（HUD "+N 秒"淡出）
         if getattr(self, 'race_gain_timer', 0) > 0:
             self.race_gain_timer = max(0.0, self.race_gain_timer - dt)
@@ -923,7 +982,7 @@ class PlayingMixin:
             except Exception:
                 pass
         # v2.1.3：同屏双人 P1 升级选卡时暂停 P1 移动/受击（怪物脱锁由目标选择处处理）
-        _p1_paused = self.is_multiplayer_active() and getattr(self, '_upgrade_pause_player', None) == "P1"
+        _p1_paused = bool(getattr(self.player, 'upgrade_paused', False))
         if not _p1_paused:
             # v2.2.0 载具期间：载具移动/撞击/开火逻辑接管玩家移动
             _veh = getattr(self.player, 'vehicle', None)
@@ -1062,10 +1121,13 @@ class PlayingMixin:
         # v2.1.3：双人模式改为 per-player 暂停升级 —— 不再切全局 SKILL_SELECT，
         # 升级玩家进入选卡弹窗（半屏）且怪物脱锁/免伤，另一玩家游戏完全不受影响
         _mp = self.is_multiplayer_active() and self.multiplayer_mode == "same_screen"
-        # v2.9.8：原条件 `not (_mp and self._upgrade_pause_player)` 是**整块**
-        # 判定 —— 只要任一玩家正在选卡，另一个人即使 pending_level_up 也进不来，
-        # 必须等对方选完。表现为"两人同时连升多级时要排队"。
-        # 改为循环内按玩家独立判断，配合 P2 独立 selector，两人可同时选卡。
+        # v2.9.11 重构：升级会话按玩家完全独立。
+        # 旧代码末尾有一个无条件 break —— 每帧只处理第一个待升级的玩家，
+        # 且 _upgrade_pause_player / pending_upgrade_for / _upgrade_pause_timer
+        # 全是**单值**，输入层和渲染层也只认 selector(P1)。
+        # 结果：两人同时连升多级时，没被选中的一方既不弹卡也不渲染，
+        # 只能干等对方把所有级选完（甚至永远等不到）。
+        _mp = self.is_multiplayer_active() and self.multiplayer_mode == "same_screen"
         if self.state != GameState.SKILL_SELECT:
             for _pl, _tag in ((self.player, "P1"), (self.player2, "P2")):
                 if not _pl or not _pl.pending_level_up:
@@ -1073,44 +1135,38 @@ class PlayingMixin:
                 if _mp and getattr(_pl, 'upgrade_paused', False):
                     continue
                 if _pl.skill_cards:
+                    _region = self.upgrade_region_for(_tag) if _mp else None
+                    _title = f"{_tag} 升级！选择你的强化"
+                    _sub = f"{_tag} 等级 {_pl.level} → 选择技能卡"
                     if _mp:
-                        # 双人：per-player 暂停，不切全局状态
+                        # 双人：per-player 暂停，不切全局状态，两人可同时选
+                        self._upgrade_pause_player = _tag   # 兼容旧代码
                         self.pending_upgrade_for = _tag
-                        self._upgrade_pause_player = _tag
                         _pl.upgrade_paused = True
-                        # v2.5.6：限时免伤保护 + 超时自动选卡
-                        # （防"故意停在升级界面"吃永久无敌：保护只持续数秒，超时自动选卡）
                         _pl.upgrade_grace_timer = self.UPGRADE_GRACE_TIME
-                        self._upgrade_pause_timer = self.UPGRADE_AUTO_PICK_TIME
-                        # v2.2.6：暂停瞬间重置该玩家触控控件（per-player 不切状态，
-                        # 状态切换重置不会触发，防止升级玩家射击/摇杆残留卡死）
+                        _pl.upgrade_auto_timer = self.UPGRADE_AUTO_PICK_TIME
                         try:
                             self._reset_touch_state_for(_tag)
                         except Exception:
                             pass
-                        _half = max(320, self.scaled_width // 2)
-                        _region = pygame.Rect(0 if _tag == "P1" else self.scaled_width - _half, 0, _half, self.scaled_height)
-                        _sel_ui = (self.skill_card_selector if _tag == "P1"
-                                   else getattr(self, 'skill_card_selector2', None)
-                                   or self.skill_card_selector)
-                        _sel_ui.show(_pl.skill_cards, region=_region,
-                                     title=f"{_tag} 升级！选择你的强化",
-                                     subtitle=f"{_tag} 等级 {_pl.level} → 选择技能卡")
+                        self.selector_for(_tag).show(
+                            _pl.skill_cards, region=_region,
+                            title=_title, subtitle=_sub)
                     else:
+                        # 单机：仍走全局 SKILL_SELECT
                         self.state = GameState.SKILL_SELECT
                         self.pending_upgrade_for = _tag
-                        self.skill_card_selector.show(_pl.skill_cards, region=None,
-                                                      title=f"{_tag} 升级！选择你的强化",
-                                                      subtitle=f"{_tag} 等级 {_pl.level} → 选择技能卡")
-                    # 记录升级
+                        self.skill_card_selector.show(
+                            _pl.skill_cards, region=None,
+                            title=_title, subtitle=_sub)
                     if self.session:
                         self.session.add_level_up()
-                    # 播放升级音效
                     self.assets.play_sound("level_up")
+                    if not _mp:
+                        break          # 单机一帧只处理一个
                 else:
                     _pl.pending_level_up = False
-                    _pl.pending_levels = 0  # v2.5.2 无可用卡时清空待结算次数
-                break
+                    _pl.pending_levels = 0
 
         # v2.5.6：升级选卡保护倒计时 + 超时自动选卡（防卡界面无限无敌）
         self._update_upgrade_pause(dt)
@@ -1132,7 +1188,7 @@ class PlayingMixin:
         # 自动射击 / 盾肘击【修改】
         auto_shoot = False
         # v2.1.3：P1 升级选卡暂停射击/肘击（触控模式下 P1 输入也已暂停）
-        if not (self.is_multiplayer_active() and getattr(self, '_upgrade_pause_player', None) == "P1"):
+        if not bool(getattr(self.player, 'upgrade_paused', False)):
             if self.config.control_mode == ControlMode.KEYBOARD:
                 mouse_left = pygame.mouse.get_pressed()[0]
                 # 装备防爆套装，鼠标左键执行肘击，不再开火
@@ -2631,6 +2687,11 @@ class PlayingMixin:
             del self.damage_numbers[:len(self.damage_numbers) - 120]
         if len(self.floating_texts) > 60:
             del self.floating_texts[:len(self.floating_texts) - 60]
+        # v2.9.12：近战连斩 / 剑气特效推进
+        try:
+            self.melee_fx.update(dt)
+        except Exception:
+            pass
         for sa in self.slash_arcs[:]:
             sa.update(dt)
             if not sa.is_alive():
@@ -2649,7 +2710,7 @@ class PlayingMixin:
             if self.camera2:
                 self.camera2.follow(self.player2.x, self.player2.y, dt, bounds=_wbo)
             # v2.1.3：P2 升级选卡时暂停 P2 游戏进程（怪物已脱锁，选卡完成后恢复）
-            if not (self.is_multiplayer_active() and getattr(self, '_upgrade_pause_player', None) == "P2"):
+            if not (self.player2 is not None and getattr(self.player2, 'upgrade_paused', False)):
                 self._update_player2(dt)
         # v2.2.7：3/4 号玩家（网络联机补位/AI 队友）更新
         for _i in (3, 4):
@@ -2693,40 +2754,36 @@ class PlayingMixin:
 
     # ==================== v2.4.0 阵营胜负判定 ====================
     def _update_upgrade_pause(self, dt):
-        """v2.5.6 升级选卡保护：
-        1) 免伤/脱锁保护倒计时（仅开始的一小段时间）；
-        2) 选卡超时自动选卡——杜绝"故意停在升级界面"无限吃无敌。
+        """v2.9.11：每个玩家独立的保护倒计时 + 超时自动选卡
+
+        旧版只处理 `_upgrade_pause_player` 指向的那一个人，另一个人的
+        upgrade_paused 永远为 True 且没有计时器 → 卡死不渲染。
         """
         try:
-            _tag = getattr(self, '_upgrade_pause_player', None)
-            if not _tag:
-                return
-            _pl = self.player if _tag == "P1" else (self.player2 if _tag == "P2" else None)
-            if _pl is None:
-                self._upgrade_pause_player = None
-                return
-            # 1) 保护倒计时
-            _g = getattr(_pl, "upgrade_grace_timer", 0.0)
-            if _g > 0:
-                _pl.upgrade_grace_timer = max(0.0, _g - dt)
-            # 2) 超时自动选卡
-            _t = getattr(self, '_upgrade_pause_timer', 0.0) - dt
-            self._upgrade_pause_timer = max(0.0, _t)
-            if _t > 0:
-                return
-            _cards = getattr(_pl, "skill_cards", None) or []
-            if not _cards or not getattr(_pl, "pending_level_up", False):
-                # 没有可选项：直接解除暂停（避免卡死）
-                self._upgrade_pause_player = None
-                _pl.upgrade_paused = False
-                _pl.upgrade_grace_timer = 0.0
-                return
-            try:
-                self.floating_texts.append(FloatingText(
-                    _pl.x, _pl.y - 50, "升级超时，自动选择", color=(200, 200, 120), lifetime=1.6))
-            except Exception:
-                pass
-            self._apply_skill_card(_cards[0])
+            for _tag in self.active_upgrade_tags():
+                _pl = self.player_for_tag(_tag)
+                if _pl is None:
+                    continue
+                _g = getattr(_pl, "upgrade_grace_timer", 0.0)
+                if _g > 0:
+                    _pl.upgrade_grace_timer = max(0.0, _g - dt)
+                _t = float(getattr(_pl, "upgrade_auto_timer",
+                                   self.UPGRADE_AUTO_PICK_TIME)) - dt
+                _pl.upgrade_auto_timer = max(0.0, _t)
+                self._upgrade_pause_timer = _t      # 兼容旧字段
+                if _t > 0:
+                    continue
+                _cards = getattr(_pl, "skill_cards", None) or []
+                if not _cards or not getattr(_pl, "pending_level_up", False):
+                    self._finish_upgrade_session(_pl, _tag)
+                    continue
+                try:
+                    self.floating_texts.append(FloatingText(
+                        _pl.x, _pl.y - 50, f"{_tag} 升级超时，自动选择",
+                        color=(200, 200, 120), lifetime=1.6))
+                except Exception:
+                    pass
+                self._apply_skill_card(_cards[0], player=_pl, tag=_tag)
         except Exception:
             pass
 

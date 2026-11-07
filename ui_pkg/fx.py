@@ -184,12 +184,13 @@ class SlashArc:
     def update(self, dt):
         self.lifetime -= dt
 
-    def draw(self, screen, camera_x=0, camera_y=0, scale=1.0):
+    def draw(self, screen, camera_x=0, camera_y=0, scale=1.0, viewport_x=0):
+        # v2.9.12：viewport_x 用于分屏，旧调用点不传则保持 0
         if self.lifetime <= 0:
             return
         progress = 1.0 - (self.lifetime / self.max_lifetime)  # 0→1
         alpha = int(220 * (1.0 - progress))
-        px = int((self.x - camera_x) * scale)
+        px = int((self.x - camera_x) * scale) + viewport_x
         py = int((self.y - camera_y) * scale)
         if self.kind == "tracer":
             # 直线曳光：从中心向主方向延伸

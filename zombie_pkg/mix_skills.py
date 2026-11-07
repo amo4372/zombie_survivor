@@ -288,6 +288,11 @@ class SkillsMixin:
         return False
 
     def _use_skill(self, skill_type):
+        # v2.9.12：格挡期间禁止释放技能
+        _bp = getattr(self, 'player', None)
+        if _bp is not None and getattr(_bp, 'block', None) is not None \
+                and _bp.block.blocks_attack:
+            return False
         # v2.9.1：技能释放记入回放（此前回放里看不到玩家放了什么技能）
         try:
             _pl = getattr(self, 'player', None)
@@ -801,13 +806,10 @@ class SkillsMixin:
             nova_damage = 40
             is_max = False
         freeze_dur = 4.0 if is_max else 2.0
-        for enemy in self.enemies:
-            dist = math.hypot(enemy.x - self.player.x, enemy.y - self.player.y)
-            if dist < nova_radius:
-                enemy.frozen_timer = freeze_dur
-                if nova_damage > 0:
-                    enemy.take_damage(nova_damage)
-                    self.damage_numbers.append(DamageNumber(enemy.x, enemy.y, nova_damage, color=CYAN))
+        # v2.9.12：统一目标结算（僵尸 + 敌方玩家），抗性/冻结/击杀回调一致
+        self.apply_area_damage(self.player.x, self.player.y, nova_radius,
+                               nova_damage, "ice", self.player,
+                               freeze=freeze_dur)
         self.particles.spawn_explosion(self.player.x, self.player.y, BLUE, 60)
         self.camera.shake(8, 0.3)
         label = "绝对零度!" if is_max else "冰霜新星!"
@@ -943,13 +945,8 @@ class SkillsMixin:
             fx = self.player.x + math.cos(rad) * 100
             fy = self.player.y + math.sin(rad) * 100
             # 幻影造成伤害
-            for enemy in self.enemies:
-                dist = math.hypot(enemy.x - fx, enemy.y - fy)
-                if dist < 40:
-                    enemy.take_damage(60)
-                    self.damage_numbers.append(DamageNumber(enemy.x, enemy.y, 60, color=LIME))
-                    if not enemy.alive:
-                        self._on_enemy_death(enemy)
+            # v2.9.12：幻影打击同样命中敌方玩家
+            self.apply_area_damage(fx, fy, 40, 60, "physical", self.player)
             self.particles.spawn_explosion(fx, fy, LIME, 25)
             # 幻影突袭刀光（三个方向的绿色弧斩）
             self.slash_arcs.append(SlashArc(
@@ -1571,101 +1568,92 @@ class SkillsMixin:
             ))
         return success
 
-    def _select_skill_card(self, index):
-        """选择技能卡（双人：作用于当前升级的玩家）"""
-        # v2.5.8 修复：与 _apply_skill_card 保持一致的玩家选择逻辑
-        _upw = getattr(self, '_upgrade_pause_player', None)
-        player = self.player2 if (_upw == "P2" or getattr(self, 'pending_upgrade_for', None) == "P2") and self.player2 else self.player
-        if 0 <= index < len(player.skill_cards):
-            skill = player.skill_cards[index]
-            self._apply_skill_card(skill)
+    def _select_skill_card(self, index, player=None, tag=None):
+        """选择技能卡（v2.9.11：可显式指定玩家，双人不再靠全局单值推断）"""
+        if player is None:
+            tag = (tag or getattr(self, '_upgrade_pause_player', None)
+                   or getattr(self, 'pending_upgrade_for', None) or 'P1')
+            player = self.player_for_tag(tag)
+        if tag is None:
+            tag = self.tag_for_player(player)
+        _cards = getattr(player, 'skill_cards', None) or [] if player else []
+        if 0 <= index < len(_cards):
+            self._apply_skill_card(_cards[index], player=player, tag=tag)
 
-    def _apply_skill_card(self, skill):
-        """应用选中的技能卡（双人：作用于当前升级的玩家）"""
-        # v2.1.3：双人 per-player 升级优先读 _upgrade_pause_player（单机仍走 pending_upgrade_for）
-        _upw = getattr(self, '_upgrade_pause_player', None)
-        player = self.player2 if (_upw == "P2" or getattr(self, 'pending_upgrade_for', None) == "P2") and self.player2 else self.player
-        tag = _upw or getattr(self, 'pending_upgrade_for', "P1") or "P1"
-        # v2.5.6：防重复应用（超时自动选卡与玩家点击可能同帧发生 → 同一技能被升两级）
-        if not (getattr(player, 'pending_level_up', False) or getattr(player, 'skill_cards', None)):
+    def _apply_skill_card(self, skill, player=None, tag=None):
+        """应用选中的技能卡 —— v2.9.11：显式指定玩家，P1/P2 完全独立
+
+        旧版靠 `_upgrade_pause_player` 这个单值推断作用对象，两人同时升级时
+        会把卡加到错的玩家身上、或者直接 return；收尾还无条件把全局
+        `_upgrade_pause_player` 清空，导致另一方的选卡会话永久悬空。
+        """
+        if player is None:
+            tag = (tag or getattr(self, '_upgrade_pause_player', None)
+                   or getattr(self, 'pending_upgrade_for', None) or 'P1')
+            player = self.player_for_tag(tag)
+        if tag is None:
+            tag = self.tag_for_player(player)
+        if player is None:
+            return
+        # 防重复应用（超时自动选卡与玩家点击可能同帧发生）
+        if not (getattr(player, 'pending_level_up', False)
+                or getattr(player, 'skill_cards', None)):
             return
         if player.skill_tree.upgrade_skill(skill.skill_type):
             self.floating_texts.append(FloatingText(
-                player.x, player.y - 40, 
-                f"{tag} 升级: {skill.name}!", color=GOLD, lifetime=2.0
-            ))
-            # 记录技能升级
+                player.x, player.y - 40,
+                f"{tag} 升级: {skill.name}!", color=GOLD, lifetime=2.0))
             if self.session:
                 self.session.add_skill_upgrade()
-                # 记录附魔拥有情况
                 if skill.skill_type == SkillType.FLAME_ENCHANT:
                     self.session.set_has_enchant("flame", True)
                 elif skill.skill_type == SkillType.FROST_ENCHANT:
                     self.session.set_has_enchant("frost", True)
                 elif skill.skill_type == SkillType.POISON_ENCHANT:
                     self.session.set_has_enchant("poison", True)
-            # 肾上腺素：应用体力加成
             if skill.skill_type == SkillType.ADRENALINE:
-                ad_skill = player.skill_tree.get_skill(SkillType.ADRENALINE)
-                if ad_skill:
-                    player.riot_gear.adrenaline_level = ad_skill.current_level
-            # 播放音效
+                _ad = player.skill_tree.get_skill(SkillType.ADRENALINE)
+                if _ad:
+                    player.riot_gear.adrenaline_level = _ad.current_level
             self.assets.play_sound("skill_select")
-        # 升级后检查组合技
         try:
             self._check_combos()
         except Exception:
             pass
-        # v2.5.2/2.5.8 多级连升逐级弹卡：还有剩余级数则重新生成卡片再次触发选卡
+        # 多级连升：只递减**这个玩家**自己的待结算级数
         _left = getattr(player, 'pending_levels', 0) - 1
         player.pending_levels = max(0, _left)
+        try:
+            _mp_now = (self.is_multiplayer_active()
+                       and getattr(self, 'multiplayer_mode', None) == "same_screen")
+        except Exception:
+            _mp_now = False
         if _left > 0:
-            player.skill_cards = player.skill_tree.get_random_skill_cards(getattr(player, 'skill_slot_count', 3))
+            player.skill_cards = player.skill_tree.get_random_skill_cards(
+                getattr(player, 'skill_slot_count', 3))
             player.pending_level_up = True
-            # v2.6.1 修复：连升多级时重新调用 show 方法（确保卡片列表正确初始化）
-            try:
-                if hasattr(self, 'skill_card_selector') and self.skill_card_selector:
-                    _tag = "P1" if player is self.player else ("P2" if player is getattr(self, 'player2', None) else "P1")
-                    # v2.7.0 修复：半屏 region 只用于同屏双人；单机连升多级时若用半屏，
-                    # 第二张及以后的技能卡只会显示在左半屏（与首次全屏不一致）。
-                    try:
-                        _mp_now = (self.is_multiplayer_active()
-                                   and getattr(self, 'multiplayer_mode', None) == "same_screen")
-                    except Exception:
-                        _mp_now = False
-                    _region = None
-                    if _mp_now:
-                        import pygame
-                        _half = max(320, getattr(self, 'scaled_width', 1280) // 2)
-                        _region = pygame.Rect(0 if _tag == "P1" else getattr(self, 'scaled_width', 1280) - _half,
-                                              0, _half, getattr(self, 'scaled_height', 720))
-                    self.skill_card_selector.show(player.skill_cards, region=_region,
-                                                  title=f"{_tag} 升级！选择你的强化",
-                                                  subtitle=f"{_tag} 等级 {player.level} → 选择技能卡")
-            except Exception:
-                pass
-        else:
-            player.pending_level_up = False
-            player.skill_cards = []
-            self.pending_upgrade_for = None
-        # v2.1.3：双人 per-player 升级结束 → 恢复该玩家（重新可被怪物锁定/可移动）
-        if getattr(self, '_upgrade_pause_player', None):
-            self._upgrade_pause_player = None
-            player.upgrade_paused = False
-            # v2.5.6：清除限时免伤保护
-            player.upgrade_grace_timer = 0.0
-        if _left > 0:
-            # 还有下一级：多人 per-player 立即重新进入暂停选卡（恢复会在下一级确认后再执行）
-            # v2.6.5 修复：确保 _tag 正确确定（优先使用已知的 tag 值）
-            _tag = tag if tag in ("P1", "P2") else ("P1" if player is self.player else "P2")
-            self._upgrade_pause_player = _tag
-            player.upgrade_paused = True
-            # v2.5.8 修复：确保 pending_upgrade_for 同步更新（防止状态不一致）
-            self.pending_upgrade_for = _tag
-            # v2.5.6：新一轮选卡重新计时（保护限时 + 超时自动选）
             player.upgrade_grace_timer = self.UPGRADE_GRACE_TIME
-            self._upgrade_pause_timer = self.UPGRADE_AUTO_PICK_TIME
-        # v2.5.2 每次技能卡选择完毕：对玩家周围一定范围僵尸眩晕+击退（选卡保底防围死）
+            player.upgrade_auto_timer = self.UPGRADE_AUTO_PICK_TIME
+            if _mp_now:
+                player.upgrade_paused = True
+                self._upgrade_pause_player = tag      # 兼容
+                self.pending_upgrade_for = tag
+                _region = self.upgrade_region_for(tag)
+                _sel = self.selector_for(tag)
+            else:
+                _region = None
+                _sel = self.skill_card_selector
+            # 连升下一级：必须重新 show 对应 selector（旧版只 show P1 的）
+            _sel.show(player.skill_cards, region=_region,
+                      title=f"{tag} 升级！选择你的强化",
+                      subtitle=f"{tag} 等级 {player.level} → 选择技能卡")
+            if not _mp_now:
+                self.state = GameState.SKILL_SELECT
+        else:
+            self._finish_upgrade_session(player, tag)
+            if not _mp_now:
+                self.state = GameState.PLAYING
+        # 每次选卡完毕：该玩家周围僵尸眩晕 + 击退（选卡保底防围死）
         try:
             _sr = 260.0
             for _e in list(self.enemies):
@@ -1680,22 +1668,15 @@ class SkillsMixin:
                         _k = 230.0 / _dd
                         _e.x += _dx * _k
                         _e.y += _dy * _k
-                    self.particles.spawn(_e.x, _e.y, (255, 220, 120), 6, size_range=(2, 5),
-                                         velocity_range=(-60, 60), lifetime_range=(0.2, 0.4))
+                    self.particles.spawn(
+                        _e.x, _e.y, (255, 220, 120), 6, size_range=(2, 5),
+                        velocity_range=(-60, 60), lifetime_range=(0.2, 0.4))
         except Exception:
             pass
-        # v2.7.0 修复：连升多级时不能无条件 hide()+PLAYING。
-        # 上面 _left>0 分支刚为下一级 show() 了新卡片，这里再 hide() 会立刻把它关掉，
-        # 玩家看不到后续升级页（表现为「连升多级选卡异常 / 卡在 PLAYING」）。
-        if _left <= 0:
-            self.skill_card_selector.hide()
-            self.state = GameState.PLAYING
-        else:
-            # 还有剩余级数：保持选择器可见，并把状态切回选卡（避免中间帧漏掉输入）
-            try:
-                _mp_now = (self.is_multiplayer_active()
-                           and getattr(self, 'multiplayer_mode', None) == "same_screen")
-            except Exception:
-                _mp_now = False
-            if not _mp_now and not getattr(self, '_upgrade_pause_player', None):
-                self.state = GameState.SKILL_SELECT
+
+
+    # v2.9.11：这里原先还有一份**同名** `_apply_skill_card(self, skill)`
+    # 历史重复定义，且是文件最后一个方法。Python 类里后定义的覆盖先定义的，
+    # 所以此前所有版本真正执行的一直是那份旧实现：靠 _upgrade_pause_player
+    # 单值推断玩家、收尾无条件清空全局状态 —— 这是双人连升多级死锁的最后一环。
+    # 已整体删除，统一由上面带 player/tag 参数的版本负责。

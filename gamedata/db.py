@@ -302,11 +302,19 @@ class GameDatabase:
             if not _need:
                 try:
                     from . import defaults as _D
-                    for _t, _exp in (("weapons", len(_D.extract_weapons())),
-                                     ("enemies", len(_D.extract_enemies())),
-                                     ("runes", len(_D.extract_runes())),
-                                     ("buffs", len(_D.extract_buffs())),
-                                     ("skills", len(_D.extract_skills()))):
+                    _expected = [("weapons", len(_D.extract_weapons())),
+                                 ("enemies", len(_D.extract_enemies())),
+                                 ("runes", len(_D.extract_runes())),
+                                 ("buffs", len(_D.extract_buffs())),
+                                 ("skills", len(_D.extract_skills()))]
+                    try:
+                        from combat_pkg.damage import DEFAULT_PROFILES
+                        from combat_pkg.status import STATUS_DEFS
+                        _expected += [("resistances", len(DEFAULT_PROFILES)),
+                                      ("status_defs", len(STATUS_DEFS))]
+                    except Exception:
+                        pass
+                    for _t, _exp in _expected:
                         if _exp <= 0:
                             continue
                         _n = conn.execute(f"SELECT COUNT(*) FROM {_t}").fetchone()[0]
@@ -372,7 +380,9 @@ class GameDatabase:
                 _conn.row_factory = sqlite3.Row
                 _cur = _conn.cursor()
                 _cache, _by = {}, {}
-                for _t in ("weapons", "enemies", "runes", "buffs", "skills", "difficulty", "tuning", "meta"):
+                for _t in ("weapons", "enemies", "runes", "buffs", "skills",
+                           "difficulty", "tuning", "meta",
+                           "resistances", "status_defs"):
                     try:
                         _cur.execute(f"SELECT * FROM {_t}")
                         _rows = [dict(_r) for _r in _cur.fetchall()]

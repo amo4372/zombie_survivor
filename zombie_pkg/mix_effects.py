@@ -453,6 +453,16 @@ class EffectsMixin:
                 if not enemy.alive:
                     self._on_enemy_death(enemy)
 
+        # v2.9.12：空袭/手雷爆炸对敌方玩家同样生效（含燃烧/EMP 状态）
+        try:
+            self.apply_area_damage(
+                x, y, explosion_radius, base_damage, "explosion", None,
+                players_only=True, scale_by_dist=True,
+                status_kind=("burn" if has_fire else ("stun" if has_emp else None)),
+                status_duration=(5.0 if has_fire else (4.0 if has_nuke else 2.0)))
+        except Exception:
+            pass
+
         # 核爆：对玩家也有轻微自伤（远处），增加真实感
         if has_nuke:
             for _p in self._alive_players():
@@ -512,6 +522,19 @@ class EffectsMixin:
                     enemy.take_damage(bh.get("damage", 30) * dt)
                     if not enemy.alive:
                         self._on_enemy_death(enemy)
+            # v2.9.12：黑洞对敌方玩家同样有持续伤害与牵引
+            try:
+                self.apply_area_damage(bh["x"], bh["y"], 30,
+                                       bh.get("damage", 30) * dt, "magic",
+                                       None, players_only=True,
+                                       damage_numbers=False)
+                for _p in self.pvp_targets(None):
+                    _d = math.hypot(_p.x - bh["x"], _p.y - bh["y"])
+                    if 20 < _d < bh["radius"]:
+                        _p.x += (bh["x"] - _p.x) / _d * 3
+                        _p.y += (bh["y"] - _p.y) / _d * 3
+            except Exception:
+                pass
             # 视觉效果
             self.particles.spawn(bh["x"], bh["y"], PURPLE, 5, (2, 5), (-2, 2), (0.3, 0.6))
             if bh["timer"] <= 0:

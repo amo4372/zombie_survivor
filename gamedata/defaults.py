@@ -236,21 +236,31 @@ def extract_weapons():
 
 
 def enemy_melee_defaults(etype_name, config):
-    """v2.9.10：近战攻击间隔 / 攻击范围余量的**唯一默认值来源**
+    """v2.9.11：近战「攻击间隔 / 攻击范围 / 前摇 / 后摇」唯一默认值来源
 
     enemy.py 与数据库播种都调用这里，避免两处规则分叉。
-    策划在数据库 enemies 表 extra 里改这两个键即可覆盖（数据库权威）。
+    四个键都会写进 enemies 表的 extra，策划在数据库软件里直接改即可生效
+    （数据库权威）；代码里 setdefault 不会覆盖策划设定值。
     """
-    _cd = 1.2
-    if (config.get("is_boss") or config.get("is_titan")
-            or config.get("is_elite")):
-        _cd = 1.6
-    elif str(etype_name) in ("ZOMBIE_FAST", "ZOMBIE_CRAWLER", "ZOMBIE_LEAPER",
-                             "ZOMBIE_GHOUL", "ZOMBIE_BERSERKER"):
-        _cd = 0.9
-    elif config.get("is_ranged") or config.get("can_throw"):
-        _cd = 1.4
-    return _cd, 10.0
+    _boss = bool(config.get("is_boss") or config.get("is_titan")
+                 or config.get("is_elite"))
+    _fast = str(etype_name) in ("ZOMBIE_FAST", "ZOMBIE_CRAWLER", "ZOMBIE_LEAPER",
+                                "ZOMBIE_GHOUL", "ZOMBIE_BERSERKER")
+    _ranged = bool(config.get("is_ranged") or config.get("can_throw"))
+    if _boss:
+        cd, windup, recover = 1.6, 0.55, 0.45
+    elif _fast:
+        cd, windup, recover = 0.9, 0.22, 0.18
+    elif _ranged:
+        cd, windup, recover = 1.4, 0.42, 0.30
+    else:
+        cd, windup, recover = 1.2, 0.35, 0.25
+    return {
+        "melee_attack_cooldown": cd,   # 两次攻击起手之间的间隔
+        "melee_attack_reach": 10.0,    # 攻击范围余量（加在双方 size 上）
+        "melee_windup": windup,        # 前摇：显示预警范围，可被主动格挡
+        "melee_recover": recover,      # 后摇：硬直，不能再起手
+    }
 
 
 def extract_enemies():
@@ -267,9 +277,8 @@ def extract_enemies():
     for _k, _cfg in _out.items():
         if not isinstance(_cfg, dict):
             continue
-        _cd, _reach = enemy_melee_defaults(_k, _cfg)
-        _cfg.setdefault("melee_attack_cooldown", _cd)
-        _cfg.setdefault("melee_attack_reach", _reach)
+        for _mk, _mv in enemy_melee_defaults(_k, _cfg).items():
+            _cfg.setdefault(_mk, _mv)
     return _out
 
 

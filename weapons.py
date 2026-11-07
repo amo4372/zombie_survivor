@@ -228,39 +228,10 @@ class Projectile:
             pygame.draw.circle(screen, WHITE, (px, py), s)
             pygame.draw.circle(screen, CYAN, (px, py), s - 2)
         elif self.is_scythe_slash:
-            # ===== 死神剑气：大型月牙紫刃，旋转流光，局内炸裂帅 =====
-            import math as _m
-            _dir = _m.atan2(self.vy, self.vx)
-            _spin = _m.radians((pygame.time.get_ticks() / 9.0) % 360)
-            _a = _dir + _m.sin(_spin) * 0.55  # 月牙随飞行轻微摆动旋转
-            _r = max(16, int(self.size * 1.9 * scale))  # 大剑气
-            # 紫光晕
-            _glow = _r + 12
-            _g = pygame.Surface((_glow * 2, _glow * 2), pygame.SRCALPHA)
-            pygame.draw.circle(_g, (170, 50, 215, 50), (_glow, _glow), _glow)
-            pygame.draw.circle(_g, (200, 100, 240, 30), (_glow, _glow), _glow - 4)
-            screen.blit(_g, (int(px - _glow), int(py - _glow)))
-            # 月牙外侧大刃（深紫）
-            pygame.draw.arc(screen, (120, 40, 190),
-                            (px - _r, py - _r, _r * 2, _r * 2),
-                            _a - 2.0, _a + 1.2, max(5, int(8 * scale)))
-            # 月牙主刃（亮紫）
-            pygame.draw.arc(screen, (196, 110, 245),
-                            (px - _r, py - _r, _r * 2, _r * 2),
-                            _a - 1.8, _a + 1.0, max(4, int(6 * scale)))
-            # 内刃月牙（白亮高光，形成月牙开口）
-            _ir = _r - 6
-            pygame.draw.arc(screen, (255, 220, 255),
-                            (px - _ir, py - _ir, _ir * 2, _ir * 2),
-                            _a - 1.55, _a + 0.75, max(2, int(3 * scale)))
-            # 刃尖拖尾（运动方向反侧流光）
-            _tx = px - _m.cos(_dir) * _r * 1.35
-            _ty = py - _m.sin(_dir) * _r * 1.35
-            pygame.draw.line(screen, (150, 60, 210, 160), (px, py), (int(_tx), int(_ty)), max(2, int(4 * scale)))
-            pygame.draw.line(screen, (216, 130, 250, 120), (px, py), (int(_tx), int(_ty)), max(1, int(2 * scale)))
-            # 中心亮点
-            pygame.draw.circle(screen, WHITE, (px, py), max(2, int(3 * scale)))
-            pygame.draw.circle(screen, (235, 190, 255), (px, py), max(1, int(2 * scale)))
+            # v2.9.12：死神剑气改用统一的月牙渲染（长拖尾 / 残影 /
+            # 三层刃光 / 旋转流光），与近战挥砍共用同一套视觉语言。
+            from combat_pkg import draw_sword_qi_projectile
+            draw_sword_qi_projectile(screen, px, py, self, scale)
         elif self.is_scythe_throw:
             # ===== 死神镰刀抛掷：旋转镰刀（紫刃+长柄），局内清晰可见 =====
             import math as _m

@@ -47,9 +47,30 @@ class Enemy:
         self.throw_cd = random.uniform(7.0, 11.0)  # 投掷道具CD
         self.buff_damage_events = []
         self._setup_enemy()
+        # ---- v2.9.12 战斗数据层：抗性档案 + 结构化状态 ----
+        from combat_pkg import attach_resistances, attach_status, profile_for
+        _prof = profile_for(
+            getattr(getattr(self, 'enemy_type', None), 'name', str(self.enemy_type)),
+            is_boss=bool(getattr(self, 'is_boss', False)),
+            is_elite=bool(getattr(self, 'is_elite', False)))
+        if bool(getattr(self, 'is_shield', False)):
+            _prof = "SHIELD"
+        attach_resistances(self, _prof)
+        attach_status(self)
+        self.last_damage_result = None
         # v2.9.10：每名玩家独立的近战攻击 CD（key = id(player)）。
-        # 一个僵尸咬了 P1 不应妨碍它咬 P2，P1..Pn 在数据层平等。
         self.melee_attack_timers = {}
+        # ---- v2.9.11 近战普攻前摇/后摇状态机 ----
+        # idle → windup（显示预警范围，是主动格挡的反应窗口）
+        #      → impact（1~3 帧内只结算一次伤害）
+        #      → recover（后摇硬直）→ idle
+        self.melee_state = "idle"
+        self.melee_state_timer = 0.0
+        self.melee_target_pid = None       # 前摇锁定的目标玩家
+        self.melee_warn_angle = 0.0        # 预警扇形朝向（度）
+        self.melee_warn_radius = 0.0       # 预警范围（世界单位）
+        self.melee_hit_consumed = False    # impact 是否已结算
+        self.melee_windup_total = 0.0
         # Boss控制抗性设置（在_setup_enemy后设置is_boss）
         if getattr(self, 'is_boss', False):
             self.control_resistance = 0.85  # Boss 85%概率免疫控制
@@ -312,13 +333,13 @@ class Enemy:
         _en = getattr(self.enemy_type, "name", str(self.enemy_type))
         try:
             from gamedata.defaults import enemy_melee_defaults
-            _cd, _reach = enemy_melee_defaults(_en, config)
+            _md = enemy_melee_defaults(_en, config)
         except Exception:
-            _cd, _reach = 1.2, 10.0
+            _md = {"melee_attack_cooldown": 1.2, "melee_attack_reach": 10.0,
+                   "melee_windup": 0.35, "melee_recover": 0.25}
         # 数据库 extra 里若已有策划设定值，setdefault 不会覆盖它
-        config.setdefault("melee_attack_cooldown", _cd)
-        # 攻击距离余量：中心距离 <= size_enemy + size_player + reach 才够得着
-        config.setdefault("melee_attack_reach", _reach)
+        for _mk, _mv in _md.items():
+            config.setdefault(_mk, _mv)
         for k, v in config.items():
             setattr(self, k, v)
 
@@ -345,7 +366,56 @@ class Enemy:
         self.anim_frame = 0
         self.anim_timer = 0
 
+    def begin_melee_windup(self, target_pid, angle_deg, radius):
+        """进入近战前摇：显示预警范围，锁定单一目标（此后不会被别人打断）"""
+        if getattr(self, "melee_state", "idle") != "idle":
+            return False
+        _w = max(0.05, float(getattr(self, "melee_windup", 0.35) or 0.35))
+        self.melee_state = "windup"
+        self.melee_windup_total = _w
+        self.melee_state_timer = _w
+        self.melee_target_pid = target_pid
+        self.melee_warn_angle = float(angle_deg)
+        self.melee_warn_radius = float(radius)
+        self.melee_hit_consumed = False
+        return True
+
+    @property
+    def melee_warn_progress(self):
+        """前摇进度 0→1（渲染层据此把预警由黄渐变到红）"""
+        _tot = float(getattr(self, "melee_windup_total", 0.35) or 0.35)
+        if _tot <= 0:
+            return 1.0
+        return max(0.0, min(1.0, 1.0 - self.melee_state_timer / _tot))
+
     def update(self, dt, player_x, player_y, player, world=None):
+        # ---- v2.9.12：结构化状态推进（流血/燃烧/中毒每 0.5s 结算一次 DOT） ----
+        try:
+            _st = getattr(self, 'status', None)
+            if _st is not None:
+                for _amt, _dtype in _st.update(dt):
+                    if self.alive and self.hp > 0:
+                        self.take_damage(_amt, damage_type=_dtype)
+        except Exception:
+            pass
+        # v2.9.11：推进近战前摇/后摇状态机（与 CD 递减并列）
+        _mst = getattr(self, "melee_state", "idle")
+        if _mst != "idle":
+            self.melee_state_timer -= dt
+            if self.melee_state_timer <= 0:
+                if _mst == "windup":
+                    self.melee_state = "impact"
+                    self.melee_state_timer = 0.06   # 至少 1 帧供结算
+                elif _mst == "impact":
+                    # 没被结算（目标跑远/阵亡）→ 视为挥空，直接进后摇
+                    self.melee_hit_consumed = True
+                    self.melee_state = "recover"
+                    self.melee_state_timer = max(0.05, float(
+                        getattr(self, "melee_recover", 0.25) or 0.25))
+                elif _mst == "recover":
+                    self.melee_state = "idle"
+                    self.melee_state_timer = 0.0
+                    self.melee_target_pid = None
         # v2.9.10：推进每名玩家的近战攻击 CD
         _mt = getattr(self, "melee_attack_timers", None)
         if _mt:
@@ -1355,6 +1425,14 @@ class Enemy:
         # chase/rage/ranged 状态由正常的Enemy.update移动逻辑处理
 
     def take_damage(self, damage, damage_type="normal"):
+        # ---- v2.9.12：统一伤害计算（基础 × 倍率 → 易伤 → 抗性） ----
+        from combat_pkg import coerce_packet, resolve_damage
+        _pkt = coerce_packet(damage, damage_type=damage_type)
+        _res = resolve_damage(_pkt, self)
+        self.last_damage_result = _res
+        damage = _res.final
+        if damage <= 0:
+            return False
         # DOT伤害跳过特殊防御机制
         if damage_type != "dot":
             # 盾兵正面减伤

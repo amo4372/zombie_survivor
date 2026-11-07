@@ -3691,6 +3691,109 @@ class UiMixin:
         if _clk is None and mouse_pressed[0]:
             _clk = mouse_pos
 
+        # ===== v2.9.11 局域网房间发现（覆盖式面板，任意分辨率可用）=====
+        try:
+            g._net_start_discovery()
+        except Exception:
+            pass
+        _rooms = g._net_room_list()
+        _rooms_btn = pygame.Rect(int(sw - 220 * scale), int(18 * scale),
+                                 int(200 * scale), int(42 * scale))
+        pygame.draw.rect(self.screen, (36, 60, 92), _rooms_btn, border_radius=8)
+        pygame.draw.rect(self.screen, (110, 170, 240), _rooms_btn, 2, border_radius=8)
+        _rbt = self.game.font_small.render(
+            f"局域网房间 ({len(_rooms)})", True, WHITE)
+        self.screen.blit(_rbt, _rbt.get_rect(center=_rooms_btn.center))
+        if _clk is not None and _rooms_btn.collidepoint(_clk):
+            g.net_show_rooms = True
+            return
+        if getattr(g, 'net_show_rooms', False):
+            # 半透明覆盖层
+            _ov = pygame.Surface((sw, sh), pygame.SRCALPHA)
+            _ov.fill((6, 8, 14, 235))
+            self.screen.blit(_ov, (0, 0))
+            _ttl = self.game.font_large.render("同一局域网的房间", True, WHITE)
+            self.screen.blit(_ttl, _ttl.get_rect(center=(sw // 2, int(70 * scale))))
+            _hint = self.game.font_small.render(
+                "点房间直接加入 · 两台设备需连同一 WiFi", True, LIGHT_GRAY)
+            self.screen.blit(_hint, _hint.get_rect(center=(sw // 2, int(110 * scale))))
+            # 房间名 / 昵称
+            _nr = pygame.Rect(int(sw // 2 - 300 * scale), int(135 * scale),
+                              int(280 * scale), int(40 * scale))
+            _nn = pygame.Rect(int(sw // 2 + 20 * scale), int(135 * scale),
+                              int(280 * scale), int(40 * scale))
+            for _r, _val, _focus, _lab in (
+                    (_nr, g.net_room_name, g.net_room_focused, "房间名"),
+                    (_nn, g.net_nickname, g.net_nick_focused, "我的昵称")):
+                pygame.draw.rect(self.screen, (24, 28, 38), _r, border_radius=7)
+                pygame.draw.rect(self.screen,
+                                 (120, 220, 120) if _focus else (70, 78, 96),
+                                 _r, 2, border_radius=7)
+                _t = self.game.font_small.render(
+                    f"{_lab}: {_val}" + ("|" if _focus else ""), True, WHITE)
+                self.screen.blit(_t, _t.get_rect(midleft=(_r.x + 10, _r.centery)))
+            if _clk is not None:
+                if _nr.collidepoint(_clk):
+                    g.net_room_focused = True
+                    g.net_nick_focused = False
+                    g.start_text_input()
+                    return
+                if _nn.collidepoint(_clk):
+                    g.net_nick_focused = True
+                    g.net_room_focused = False
+                    g.start_text_input()
+                    return
+            # 房间行
+            _ly = int(195 * scale)
+            _rh = int(56 * scale)
+            _rw = int(600 * scale)
+            _rx = int(sw // 2 - _rw // 2)
+            if not _rooms:
+                _no = self.game.font.render("暂未发现房间，可手动输入主机 IP 加入", True, GRAY)
+                self.screen.blit(_no, _no.get_rect(center=(sw // 2, _ly + int(60 * scale))))
+            for _i, _r in enumerate(_rooms[:5]):
+                _rr = pygame.Rect(_rx, _ly + _i * (_rh + int(6 * scale)), _rw, _rh)
+                _hov = _clk is not None and _rr.collidepoint(_clk)
+                pygame.draw.rect(self.screen,
+                                 (46, 62, 84) if _hov else (30, 36, 50),
+                                 _rr, border_radius=8)
+                pygame.draw.rect(self.screen, (90, 130, 180), _rr, 1, border_radius=8)
+                _l1 = self.game.font.render(
+                    f"{_r['room']}   [{'已开始' if _r['started'] else '等待中'}]", True,
+                    GOLD if not _r['started'] else GRAY)
+                _l2 = self.game.font_small.render(
+                    f"{_r['ip']}:{_r['port']}  房主 {_r['host']}  "
+                    f"{_r['players']}/{_r['max']} 人  {_r['mode']}", True, LIGHT_GRAY)
+                self.screen.blit(_l1, (_rr.x + int(12 * scale), _rr.y + int(6 * scale)))
+                self.screen.blit(_l2, (_rr.x + int(12 * scale), _rr.y + int(30 * scale)))
+                if _hov and not _r['started']:
+                    g._net_join_room(_r)
+                    g.net_show_rooms = False
+                    return
+            # 底部按钮
+            _cl = pygame.Rect(int(sw // 2 - 200 * scale), int(sh - 80 * scale),
+                              int(180 * scale), int(46 * scale))
+            _rf = pygame.Rect(int(sw // 2 + 20 * scale), int(sh - 80 * scale),
+                              int(180 * scale), int(46 * scale))
+            for _r, _txt, _col in ((_cl, "关闭", (70, 60, 60)),
+                                   (_rf, "重新扫描", (40, 70, 60))):
+                pygame.draw.rect(self.screen, _col, _r, border_radius=8)
+                pygame.draw.rect(self.screen, GRAY, _r, 1, border_radius=8)
+                _t = self.game.font.render(_txt, True, WHITE)
+                self.screen.blit(_t, _t.get_rect(center=_r.center))
+            if _clk is not None:
+                if _cl.collidepoint(_clk):
+                    g.net_show_rooms = False
+                    return
+                if _rf.collidepoint(_clk):
+                    g._net_stop_discovery()
+                    g._net_start_discovery()
+                    return
+            if getattr(g, 'net_last_error', None):
+                _et = self.game.font_small.render(str(g.net_last_error)[:56], True, CRIMSON)
+                self.screen.blit(_et, _et.get_rect(center=(sw // 2, int(sh - 110 * scale))))
+            return
+
         def _cfg_box(rect, text, color=(28, 32, 44)):
             pygame.draw.rect(self.screen, color, rect, border_radius=9)
             pygame.draw.rect(self.screen, (70, 78, 96), rect, 2, border_radius=9)
@@ -3886,6 +3989,10 @@ class UiMixin:
                 g.net_port_focused = False
                 g.stop_text_input()
                 g.state = GameState.MULTIPLAYER_SELECT
+        if getattr(g, 'net_last_error', None):
+            _et = self.game.font_small.render(
+                str(g.net_last_error)[:60], True, CRIMSON)
+            self.screen.blit(_et, _et.get_rect(center=(sw // 2, int(sh - 16 * scale))))
 
     def _draw_net_wait(self):
         """网络等待：主机等待客户端 / 客户端连接中"""
@@ -3901,6 +4008,23 @@ class UiMixin:
             host_ip = g._get_local_ip()
             info = self.game.font.render(f"主机IP: {host_ip}    端口: {g.net_port}", True, GOLD)
             self.screen.blit(info, info.get_rect(center=(sw // 2, int(200 * scale))))
+            # v2.9.11：房间名 + 已连玩家（昵称 / 延迟），房主权威可见
+            try:
+                _rn = self.game.font_small.render(
+                    f"房间「{g.net_host.room_name}」  房主 {g.net_host.host_name}",
+                    True, CYAN)
+                self.screen.blit(_rn, _rn.get_rect(center=(sw // 2, int(232 * scale))))
+                _peers = g.net_host.peer_info()
+                _pl = [f"P1 {g.net_host.host_name} (本机)"]
+                for _k, _v in sorted(_peers.items()):
+                    _pl.append(f"P{_k + 1} {_v.get('nickname') or '玩家'}  "
+                               f"{_v.get('rtt_ms', '-')}ms")
+                for _i, _t in enumerate(_pl[:2]):
+                    _pt = self.game.font_small.render(_t, True, LIGHT_GRAY)
+                    self.screen.blit(_pt, _pt.get_rect(
+                        center=(sw // 2, int((256 + _i * 18) * scale))))
+            except Exception:
+                pass
             status = "已连接！点击开始游戏" if (g.net_host and g.net_host.connected) else "等待客户端连接..."
             col = GREEN if (g.net_host and g.net_host.connected) else LIGHT_GRAY
             st = self.game.font.render(status, True, col)
@@ -3937,6 +4061,16 @@ class UiMixin:
                 col = LIGHT_GRAY
             st = self.game.font.render(status, True, col)
             self.screen.blit(st, st.get_rect(center=(sw // 2, int(220 * scale))))
+            # v2.9.11：客户端显示房间 / 房主 / 延迟
+            try:
+                _nc = g.net_client
+                _extra = f"房间「{_nc.server_room or '-'}」 房主 {_nc.server_host or '-'}"
+                if getattr(_nc, 'rtt_ms', None):
+                    _extra += f"  {_nc.rtt_ms}ms"
+                _xt = self.game.font_small.render(_extra, True, CYAN)
+                self.screen.blit(_xt, _xt.get_rect(center=(sw // 2, int(252 * scale))))
+            except Exception:
+                pass
             cancel_r = pygame.Rect(int(sw // 2 - 150 * scale), int(330 * scale), int(300 * scale), int(44 * scale))
             pygame.draw.rect(self.screen, (60, 50, 50), cancel_r, border_radius=10)
             pygame.draw.rect(self.screen, GRAY, cancel_r, 2, border_radius=10)
@@ -4082,8 +4216,77 @@ class UiMixin:
         tl = max(0, int(snap.get("time_left", 0)))
         time_txt = g.font.render(f"网络联机  {tl // 60:02d}:{tl % 60:02d}", True, WHITE)
         self.screen.blit(time_txt, time_txt.get_rect(midtop=(sw // 2, int(10 * scale))))
-        conn_txt = g.font_small.render("连接主机中...", True, LIGHT_GRAY)
+        _rtt = getattr(g.net_client, 'rtt_ms', None) if g.net_client else None
+        conn_txt = g.font_small.render(
+            f"房主权威 · {snap.get('room', '')} "
+            + (f"· {_rtt}ms" if _rtt else "· 已连接"), True, LIGHT_GRAY)
         self.screen.blit(conn_txt, conn_txt.get_rect(midbottom=(sw // 2, sh - int(6 * scale))))
+        # ===== v2.9.11 客户端升级选卡：房主把可选项放进快照，客户端只回传下标 =====
+        try:
+            _cf = snap.get("cards_for") or {}
+            _my_cards = _cf.get(str(_my_idx)) or []
+            if _my_cards:
+                import time as _tt
+                _ov2 = pygame.Surface((sw, sh), pygame.SRCALPHA)
+                _ov2.fill((5, 8, 14, 205))
+                self.screen.blit(_ov2, (0, 0))
+                _ut = g.font_large.render(
+                    f"P{_my_idx + 1} 升级！选择强化", True, GOLD)
+                self.screen.blit(_ut, _ut.get_rect(center=(sw // 2, int(70 * scale))))
+                _ups = [te for te in getattr(g, 'touch_events', [])
+                        if te.get("type") == "up" and te.get("pos") is not None]
+                _clk2 = _ups[0]["pos"] if _ups else (
+                    pygame.mouse.get_pos() if pygame.mouse.get_pressed()[0] else None)
+                _cw2 = min(int(300 * scale), int(sw * 0.28))
+                _gap = int(16 * scale)
+                _x0 = int(sw // 2 - (len(_my_cards) * _cw2
+                                     + (len(_my_cards) - 1) * _gap) // 2)
+                _cy = int(sh // 2 - 90 * scale)
+                _chh = int(220 * scale)
+                _rects = []
+                for _i, _c in enumerate(_my_cards):
+                    _cr = pygame.Rect(_x0 + _i * (_cw2 + _gap), _cy, _cw2, _chh)
+                    _rects.append(_cr)
+                    _hover = _clk2 is not None and _cr.collidepoint(_clk2)
+                    pygame.draw.rect(self.screen,
+                                     (60, 78, 108) if _hover else (30, 38, 54),
+                                     _cr, border_radius=10)
+                    pygame.draw.rect(self.screen,
+                                     GOLD if _hover else (110, 130, 160),
+                                     _cr, 2, border_radius=10)
+                    _nt = g.font.render(str(_c.get("name", "强化"))[:12], True, WHITE)
+                    self.screen.blit(_nt, _nt.get_rect(
+                        center=(_cr.centerx, _cr.y + int(42 * scale))))
+                    _ds = g.font_small.render(str(_c.get("desc", ""))[:22], True, LIGHT_GRAY)
+                    self.screen.blit(_ds, _ds.get_rect(
+                        center=(_cr.centerx, _cr.y + int(84 * scale))))
+                    _kt = g.font_small.render(f"点击 / 按 {_i + 1}", True, GOLD)
+                    self.screen.blit(_kt, _kt.get_rect(
+                        center=(_cr.centerx, _cr.bottom - int(26 * scale))))
+                _picked = None
+                for _ev in getattr(g, 'all_events', []) or []:
+                    if getattr(_ev, 'type', None) == pygame.KEYDOWN:
+                        _k = getattr(_ev, 'key', None)
+                        if _k in (pygame.K_1, pygame.K_2, pygame.K_3):
+                            _picked = {pygame.K_1: 0, pygame.K_2: 1, pygame.K_3: 2}[_k]
+                            break
+                if _picked is None and _clk2 is not None:
+                    for _i, _cr in enumerate(_rects):
+                        if _cr.collidepoint(_clk2):
+                            _picked = _i
+                            break
+                if (_picked is not None and 0 <= _picked < len(_my_cards)
+                        and _tt.time() - getattr(g, '_net_pick_sent_at', 0) > 0.45):
+                    g._net_pick_sent_at = _tt.time()
+                    g.net_client.send_input({
+                        "mx": 0.0, "my": 0.0, "shoot": False, "skill": False,
+                        "throw": False, "sprint": False,
+                        "upgrade_pick": _picked})
+                    _ok = g.font_small.render("已提交，等待房主结算…", True, GREEN)
+                    self.screen.blit(_ok, _ok.get_rect(
+                        center=(sw // 2, _cy + _chh + int(30 * scale))))
+        except Exception:
+            pass
         # 客户端输入控件（触控模式）
         if g.config.control_mode == ControlMode.TOUCH:
             g.client_joystick.draw(self.screen, scale)

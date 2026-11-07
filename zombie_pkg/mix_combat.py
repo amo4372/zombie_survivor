@@ -455,6 +455,20 @@ class CombatMixin:
             self.melee_attack_duration = 0.15
             self.melee_attack_timer = 0.15
 
+        # v2.9.12：每次挥砍生成「多段连斩 + 剑气」视觉特效。
+        # 伤害仍由 _update_melee_attack 的扇形判定统一结算，剑气纯视觉，
+        # 保证画面与判定范围一致、不改变平衡。
+        try:
+            if getattr(self, 'melee_fx', None) is None:
+                from combat_pkg import MeleeFxSystem
+                self.melee_fx = MeleeFxSystem(self)
+            self.melee_fx.spawn_slash(
+                self.player.x, self.player.y, angle, self.melee_attack_range,
+                weapon, combo=getattr(self, 'melee_combo_count', 1),
+                owner=self.player)
+        except Exception:
+            pass
+
     def _update_melee_attack(self, dt):
         """更新近战攻击，进行伤害判定"""
         if not self.melee_attack_active:

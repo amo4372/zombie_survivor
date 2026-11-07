@@ -847,6 +847,15 @@ class PlayerRegistryMixin:
                     rg.grapple_state = "hit"
                     rg.grapple_hit_stun_timer = rg.grapple_hit_stun_duration
                     _o.grappled = True
+                    # v2.9.12：倒地队友是**救援**，不应触发挣脱 QTE，
+                    # 否则 qte_window 倒计时会被 gear 判定为打断 → 突然断勾。
+                    _is_rescue = bool(getattr(_o, "downed", False))
+                    if _is_rescue:
+                        _o.qte_window = 0.0
+                        _o.qte_break_tap = None
+                        _o.qte_break_hint = 0.0
+                        self._float_text(_o.x, _o.y - 30, "救援拉回!", (120, 230, 140), 1.0)
+                        return True
                     # 被打断绳索 QTE（由 gear 状态机接管）
                     if hasattr(_o, "qte_window"):
                         if getattr(_o, "qte_immune_timer", 0) > 0:

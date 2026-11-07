@@ -668,6 +668,11 @@ class MultiplayerMixin:
         self._pickup_for_player(p)
 
     def _use_skill_p2(self, skill_type):
+        # v2.9.12：格挡期间禁止释放技能
+        _bp = getattr(self, 'player2', None)
+        if _bp is not None and getattr(_bp, 'block', None) is not None \
+                and _bp.block.blocks_attack:
+            return False
         """玩家2使用技能（P2 精简实现，覆盖常用主动技与传说专属技）"""
         p2 = self.player2
         if not p2:

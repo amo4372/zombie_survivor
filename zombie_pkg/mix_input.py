@@ -200,6 +200,8 @@ class InputMixin:
     def handle_events(self):
         # ===== 统一事件收集（所有状态共享，避免重复消费导致事件丢失）=====
         all_events = pygame.event.get()
+        # v2.9.11：供渲染层（网络客户端选卡面板）读取本帧键盘事件
+        self.all_events = list(all_events)
         self.touch_events = []
         # 预处理：将所有 FINGER 事件和鼠标事件统一转换为 touch_events（dict 格式）
         # Windows 触控一体机（班班通等）的触摸会被 SDL 同时合成 FINGER 与鼠标事件，
@@ -223,6 +225,7 @@ class InputMixin:
                 self._active_touch_pos[event.finger_id] = (x, y)
                 self._active_touch_last[event.finger_id] = time.time()
                 self.touch_events.append({"type": "down", "pos": (x, y), "id": event.finger_id})
+                self.on_block_touch("down", (x, y), event.finger_id)
             elif event.type == pygame.FINGERUP:
                 x = event.x * self.scaled_width
                 y = event.y * self.scaled_height
@@ -230,6 +233,7 @@ class InputMixin:
                 self._active_touch_pos.pop(event.finger_id, None)
                 self._active_touch_last.pop(event.finger_id, None)
                 self.touch_events.append({"type": "up", "pos": (x, y), "id": event.finger_id})
+                self.on_block_touch("up", (x, y), event.finger_id)
             elif event.type == pygame.FINGERMOTION:
                 x = event.x * self.scaled_width
                 y = event.y * self.scaled_height
@@ -237,6 +241,7 @@ class InputMixin:
                     self._active_touch_pos[event.finger_id] = (x, y)
                     self._active_touch_last[event.finger_id] = time.time()
                 self.touch_events.append({"type": "move", "pos": (x, y), "id": event.finger_id})
+                self.on_block_touch("move", (x, y), event.finger_id)
             elif event.type == pygame.MOUSEBUTTONDOWN:
                 if _near_finger(event.pos, _finger_down_pos):
                     continue  # 同一手指的鼠标合成事件，去重
@@ -244,6 +249,7 @@ class InputMixin:
                 self._active_touch_pos[-1] = event.pos
                 self._active_touch_last[-1] = time.time()
                 self.touch_events.append({"type": "down", "pos": event.pos, "id": -1})
+                self.on_block_touch("down", event.pos, -1)
             elif event.type == pygame.MOUSEBUTTONUP:
                 if _near_finger(event.pos, _finger_up_pos):
                     continue  # 同一手指的鼠标合成事件，去重
@@ -251,12 +257,14 @@ class InputMixin:
                 self._active_touch_pos.pop(-1, None)
                 self._active_touch_last.pop(-1, None)
                 self.touch_events.append({"type": "up", "pos": event.pos, "id": -1})
+                self.on_block_touch("up", event.pos, -1)
             elif event.type == pygame.MOUSEMOTION:
                 if _has_finger_move:
                     continue  # 手指移动时跳过鼠标合成移动
                 if -1 in self._active_touch_ids:
                     self._active_touch_last[-1] = time.time()
                 self.touch_events.append({"type": "move", "pos": event.pos, "id": -1})
+                self.on_block_touch("move", event.pos, -1)
             elif event.type == pygame.MOUSEWHEEL:
                 # v2.2.13：滚轮事件进入统一事件流（下拉栏滚动条等使用）
                 self.touch_events.append({"type": "wheel", "pos": pygame.mouse.get_pos(), "dy": event.y})
@@ -267,36 +275,42 @@ class InputMixin:
         # 开发者模式：密码输入 / 局内面板开关
         self._handle_dev_keys(all_events)
 
-        # v2.1.3/2.5.8：同屏双人 per-player 升级 —— 升级玩家半屏点击/数字键选卡，
-        # 另一玩家半屏输入保留给正常流程，互不阻塞
-        # v2.5.8 修复：连胜多级时确保 skill_cards 已更新再处理输入
-        _upw = getattr(self, '_upgrade_pause_player', None)
-        if self.is_multiplayer_active() and _upw and self.multiplayer_mode == "same_screen":
-            _half = max(320, self.scaled_width // 2)
-            _up_pl = self.player2 if _upw == "P2" else self.player
-            # v2.5.8 修复：检查玩家是否确实有待处理的升级（防止旧状态残留导致选错卡）
-            if not getattr(_up_pl, 'pending_level_up', False) or not _up_pl.skill_cards:
-                # 没有待处理升级，跳过选卡逻辑
-                pass
-            else:
-                _sel = None
-                for event in all_events:
-                    if event.type == pygame.KEYDOWN and event.key in (pygame.K_1, pygame.K_2, pygame.K_3):
-                        # v2.7.0：数字键只切换选项，回车/空格才确认升级
-                        _idx = {pygame.K_1: 0, pygame.K_2: 1, pygame.K_3: 2}[event.key]
-                        if 0 <= _idx < len(_up_pl.skill_cards):
-                            self.skill_card_selector.select_tab(_idx)
-                    elif event.type == pygame.KEYDOWN and event.key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_SPACE):
-                        _sel = self.skill_card_selector.confirm()
+        # v2.9.11：同屏双人升级输入 —— 遍历**所有**正在选卡的玩家，
+        # 各自用自己的 selector、只吃自己半屏的触控事件。
+        # 旧版只处理 _upgrade_pause_player 一个人，且始终调用
+        # self.skill_card_selector（P1 的那个），P2 的卡根本点不动。
+        if (self.is_multiplayer_active()
+                and getattr(self, 'multiplayer_mode', None) == "same_screen"
+                and self.active_upgrade_tags()):
+            for _tag in self.active_upgrade_tags():
+                _up_pl = self.player_for_tag(_tag)
+                if _up_pl is None or not _up_pl.skill_cards:
+                    continue
+                _region = self.upgrade_region_for(_tag)
+                _evs = [_e for _e in (self.touch_events or [])
+                        if _e.get("type") == "wheel"
+                        or _region.collidepoint(_e.get("pos", (0, 0)))]
+                _sel = self.selector_for(_tag)
+                # 键控：P1 用 1/2/3 + Enter/Space；P2 用 7/8/9 + 右Shift/小键盘Enter
+                _num = {pygame.K_1: 0, pygame.K_2: 1, pygame.K_3: 2} if _tag == "P1" \
+                    else {pygame.K_7: 0, pygame.K_8: 1, pygame.K_9: 2}
+                _ok = (pygame.K_RETURN, pygame.K_SPACE) if _tag == "P1" \
+                    else (pygame.K_RSHIFT, pygame.K_KP_ENTER)
+                _picked = None
+                for _ev in all_events:
+                    if _ev.type != pygame.KEYDOWN:
+                        continue
+                    if _ev.key in _num and _num[_ev.key] < len(_up_pl.skill_cards):
+                        _sel.select_tab(_num[_ev.key])
+                    elif _ev.key in _ok:
+                        _picked = _sel.confirm()
                         break
-                if _sel is None:
-                    # 触控/鼠标：半屏内的点击、切换、滑动统一交给选择器（region 已限制在半屏）
-                    _sel = self.skill_card_selector.handle_input(
-                        (0, 0), (0, 0, 0), list(self.touch_events), self.scale
-                    )
-                if _sel is not None:
-                    self._apply_skill_card(_sel)
-            # 无论是否选中：不 return，另一玩家输入继续正常流程
+                if _picked is None:
+                    _picked = _sel.handle_input(
+                        (0, 0), (0, 0, 0), _evs, self.scale)
+                if _picked is not None:
+                    self._apply_skill_card(_picked, player=_up_pl, tag=_tag)
+            # 不 return：另一玩家 / 正常流程输入继续
 
         # 技能卡选择界面
         if self.state == GameState.SKILL_SELECT:
@@ -850,6 +864,26 @@ class InputMixin:
             except Exception:
                 pass
             return
+        # v2.9.11：房间名 / 昵称 输入框（系统输入法，触控可用）
+        if self.state == GameState.NET_MULTIPLAYER and (
+                getattr(self, 'net_room_focused', False)
+                or getattr(self, 'net_nick_focused', False)):
+            _key = 'net_room_name' if self.net_room_focused else 'net_nickname'
+            _lim = 16 if self.net_room_focused else 12
+            for ev in events:
+                if ev.type == pygame.TEXTINPUT:
+                    _cur = str(getattr(self, _key, '') or '')
+                    if len(_cur) < _lim:
+                        setattr(self, _key, _cur + ev.text)
+                elif ev.type == pygame.KEYDOWN:
+                    if ev.key == pygame.K_BACKSPACE:
+                        setattr(self, _key, str(getattr(self, _key, '') or '')[:-1])
+                    elif ev.key in (pygame.K_RETURN, pygame.K_ESCAPE,
+                                    pygame.K_KP_ENTER, pygame.K_TAB):
+                        self.net_room_focused = False
+                        self.net_nick_focused = False
+                        self.stop_text_input()
+            return
         # 网络联机 IP 输入框：聚焦时优先接受系统输入法输入
         if self.state == GameState.NET_MULTIPLAYER and self.net_ip_focused:
             self._handle_net_ip_keyboard(events)
@@ -1146,6 +1180,10 @@ class InputMixin:
 
     def _handle_keydown(self, key):
         import time
+        # v2.9.12 主动格挡：B(P1) / M(P2)，轻点短格挡、按住长按蓄力
+        if key in (pygame.K_b, pygame.K_m):
+            self.on_block_key(key, True)
+            return
         # Mod 按键钩子：返回 True 则阻止默认处理
         try:
             results = trigger_hook(HOOK_KEYDOWN, key)
@@ -1336,6 +1374,10 @@ class InputMixin:
 
 
     def _handle_keyup(self, key):
+        # v2.9.12 主动格挡抬键
+        if key in (pygame.K_b, pygame.K_m):
+            self.on_block_key(key, False)
+            return
         import time
         # 技能树方向键释放
         if self.state == GameState.SKILL_TREE and hasattr(self, 'skill_tree_renderer'):

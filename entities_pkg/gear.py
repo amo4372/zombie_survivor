@@ -223,7 +223,8 @@ class RiotGear:
             self.grapple_hit_stun_timer -= dt
             # v2.6.3 修复：QTE 判定从 hit 状态开始（而非 pulling 状态）
             # 被勾玩家应在命中瞬间就能尝试打断，而非等到拉回阶段
-            if self.grapple_target and hasattr(self.grapple_target, 'qte_window'):
+            if (self.grapple_target and hasattr(self.grapple_target, 'qte_window')
+                    and not getattr(self.grapple_target, 'downed', False)):
                 try:
                     self.grapple_target.qte_rope_from = (player_x, player_y)
                     self.grapple_target.qte_rope_to = (self.grapple_target.x, self.grapple_target.y)
@@ -255,9 +256,13 @@ class RiotGear:
                 self.grapple_state = "pulling"
                 self._pulling_timer = 0.0
             # 同步更新目标位置到钩爪头
-            if self.grapple_target and hasattr(self.grapple_target, 'alive') and self.grapple_target.alive:
+            if self.grapple_target and hasattr(self.grapple_target, 'alive') and (
+                    self.grapple_target.alive
+                    or getattr(self.grapple_target, 'downed', False)):
+                # v2.9.12：倒地队友 alive=False（Player.update 每帧置位），
+                # 但救援拉取必须继续 —— 旧代码把它当成"目标死亡"立刻 retract，
+                # 表现为「勾到倒地队友后突然断勾」。
                 self.grapple_head_pos = [self.grapple_target.x, self.grapple_target.y]
-                # 确保目标保持被勾状态
                 if hasattr(self.grapple_target, 'grappled'):
                     self.grapple_target.grappled = True
             else:
@@ -269,12 +274,15 @@ class RiotGear:
                 self._pulling_timer = 0.0
             self._pulling_timer += dt
 
-            if self.grapple_target and hasattr(self.grapple_target, 'alive') and self.grapple_target.alive:
+            if self.grapple_target and hasattr(self.grapple_target, 'alive') and (
+                    self.grapple_target.alive
+                    or getattr(self.grapple_target, 'downed', False)):
                 dx = player_x - self.grapple_target.x
                 dy = player_y - self.grapple_target.y
                 dist = math.hypot(dx, dy)
                 # v2.5.0/v2.5.5 PvP 勾取玩家：打断绳索 QTE（记录绳索几何，0.8s 内单击绳索对称轴扇形即打断）
-                if hasattr(self.grapple_target, 'qte_window'):
+                if (hasattr(self.grapple_target, 'qte_window')
+                        and not getattr(self.grapple_target, 'downed', False)):
                     try:
                         self.grapple_target.qte_rope_from = (player_x, player_y)
                         self.grapple_target.qte_rope_to = (self.grapple_target.x, self.grapple_target.y)

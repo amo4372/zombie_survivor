@@ -50,6 +50,13 @@ class Player:
         self.exp_to_level = 100
         self.score = 0
 
+        # ---- v2.9.12 战斗数据层：抗性 / 状态 / 主动格挡（每位玩家独立一份） ----
+        from combat_pkg import attach_resistances, attach_status, attach_block
+        attach_resistances(self, "PLAYER")
+        attach_status(self)
+        attach_block(self)
+        self.last_damage_result = None   # 供命中反馈 / 死亡详情 / 调试面板
+
         # 局外选定武器，局内仅一种武器，不可切换
         # v2.2.12：装备投掷物（手雷/燃烧瓶/烟雾弹）开局时附带一把手枪备用，
         # 投掷物 3 发弹药耗尽后可切换手枪继续战斗
@@ -127,6 +134,11 @@ class Player:
         # 升级选择状态
         self.pending_level_up = False
         self.pending_levels = 0  # v2.5.2 待结算升级次数（多级连升逐级弹卡）
+        # v2.9.11：每个玩家独立的选卡超时计时（旧版共用 game._upgrade_pause_timer，
+        # 两人同时升级时只有一个人会被倒计时，另一个永远不自动选卡）
+        self.upgrade_auto_timer = 0.0
+        self.upgrade_paused = False
+        self.upgrade_grace_timer = 0.0
         self.skill_cards = []
         self.skill_slot_count = 3  # 升级时可选技能卡数量
 
@@ -158,8 +170,11 @@ class Player:
 
     def can_act(self):
         """检查玩家是否可以执行主动操作（射击/技能/切换武器等）
-        死亡、眩晕、冻结、恐惧状态下不可操作"""
+        死亡、眩晕、冻结、恐惧状态下不可操作；v2.9.12 格挡期间同样禁止"""
         if not self.alive:
+            return False
+        _blk = getattr(self, 'block', None)
+        if _blk is not None and _blk.blocks_attack:
             return False
         # 检查Buff系统的眩晕/冻结状态
         if hasattr(self, 'buff_manager') and self.buff_manager:
@@ -246,6 +261,20 @@ class Player:
             self.hp = 0
             self.alive = False
             return
+
+        # ---- v2.9.12：状态 DOT 与格挡状态机每帧推进 ----
+        try:
+            _st = getattr(self, 'status', None)
+            if _st is not None:
+                for _amt, _dtype in _st.update(dt):
+                    if self.alive and self.hp > 0:
+                        self.take_damage(_amt, damage_type=_dtype,
+                                         source="status", bypass_dodge=True)
+        except Exception:
+            pass
+        _blk = getattr(self, 'block', None)
+        if _blk is not None:
+            _blk.update(dt)
 
         # v2.2.0：肾上腺素体力加成动态应用（上限+25/级、回复+4/s，装备防爆套装时生效）
         try:
@@ -545,6 +574,25 @@ class Player:
         # 怪物目标选择已排除倒地者，此处兜底所有遗漏路径（锁定技能/AOE/DOT/盾冲/钩爪/残留投射物）
         if getattr(self, 'downed', False):
             return 0
+        # ---- v2.9.12：统一伤害计算（基础伤害 × 倍率 → 状态易伤 → 抗性） ----
+        from combat_pkg import coerce_packet, resolve_damage
+        _pkt = coerce_packet(damage, damage_type=damage_type,
+                             source=source, attack_x=attack_x, attack_y=attack_y)
+        _res = resolve_damage(_pkt, self)
+        self.last_damage_result = _res
+        damage = _res.final
+        if damage <= 0:
+            return 0
+        # ---- v2.9.12：主动格挡（覆盖近战/子弹/技能/AOE 全部一次性伤害） ----
+        _blk = getattr(self, 'block', None)
+        if _blk is not None:
+            _br = _blk.try_block(damage, attack_x, attack_y, damage_type)
+            if _br.blocked:
+                if _br.perfect:
+                    return 0            # 完美格挡：完全免伤
+                damage = _br.damage     # 正常格挡：按蓄力减免
+                if damage <= 0:
+                    return 0
         # 角色受伤减免（如铁壁）
         dmg_reduce = getattr(self, 'dmg_reduce', 0.0)
         if dmg_reduce > 0:
