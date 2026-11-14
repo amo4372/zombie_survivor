@@ -18,6 +18,11 @@ class Camera:
         self.zoom = 1.0
         self._zoom_base = 1.0
 
+    def reset_zoom(self):
+        """v2.9.19 开局/结算时强制复位视野"""
+        self.zoom = 1.0
+        self._zoom_base = 1.0
+
     def shake(self, intensity=5, duration=0.3):
         if not self.shake_enabled:
             return

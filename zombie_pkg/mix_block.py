@@ -51,31 +51,13 @@ class BlockMixin:
 
     # ---------- 常驻格挡 CD（键控也能看见） ----------
     def draw_block_cd(self, screen, player, x, y, scale=1.0, font=None):
-        """血条旁的格挡冷却圆环 + 剩余秒数。每位玩家各画一份。"""
-        blk = getattr(player, "block", None) if player else None
-        if blk is None:
-            return
-        try:
-            r = max(14, int(22 * scale))
-            cx, cy = int(x), int(y)
-            cd = float(getattr(blk, "cooldown", 0.0) or 0.0)
-            tot = max(0.01, float(getattr(blk, "cooldown_total", 1.0) or 1.0))
-            active = bool(getattr(blk, "active", False))
-            col = (110, 200, 255) if active else ((140, 80, 80) if cd > 0 else (80, 110, 140))
-            pygame.draw.circle(screen, (18, 24, 34), (cx, cy), r)
-            pygame.draw.circle(screen, col, (cx, cy), r, max(2, int(3 * scale)))
-            if cd > 0:
-                frac = min(1.0, cd / tot)
-                pygame.draw.arc(screen, (255, 120, 90),
-                                pygame.Rect(cx - r, cy - r, r * 2, r * 2),
-                                -math.pi / 2, -math.pi / 2 + math.pi * 2 * frac,
-                                max(2, int(4 * scale)))
-            if font:
-                txt = f"{cd:.1f}s" if cd > 0 else ("挡" if active else "格挡")
-                lab = font.render(txt, True, (225, 235, 250))
-                screen.blit(lab, (cx - lab.get_width() // 2, cy + r + 2))
-        except Exception:
-            pass
+        """v2.9.19：按用户要求**删除**那枚蓝色圆环 + 「格挡 / 挡」文字。
+
+        格挡状态改由世界层的护盾扇形与常驻盾牌标记表达（举盾蓝色填充、
+        完美金色、冷却暗红），HUD 上不再叠一个会与按钮混淆的圆按钮。
+        保留函数签名，避免各处调用点出错。
+        """
+        return
 
     def _block_owner_for_pos(self, pos):
         """v2.9.16：按**控件实际位置**判定归属，不再靠半屏硬切。
@@ -253,11 +235,7 @@ class BlockMixin:
             if active:
                 pygame.draw.circle(screen, (235, 235, 235), (int(cx), int(cy)),
                                    int(r), max(2, int(3 * scale)))
-            if font:
-                _lab = f"{cd:.1f}s" if cd > 0 else ("挡" if active else ctrl.label)
-                _t = font.render(_lab, True, (225, 230, 235))
-                screen.blit(_t, (int(cx - _t.get_width() / 2),
-                                 int(cy + r * 0.34)))
+            # v2.9.19：不再在摇杆上写「格挡 / 挡」文字
         except Exception:
             pass
 

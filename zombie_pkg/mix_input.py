@@ -819,10 +819,11 @@ class InputMixin:
         for ev in events:
             if ev.type == pygame.TEXTINPUT:
                 if self.net_port_focused:
-                    if len(self.net_port_input) < 6 and (ev.text.isdigit() or ev.text == ""):
+                    if len(self.net_port_input) < 6 and ev.text.isdigit():
                         self.net_port_input += ev.text
-                elif len(self.net_ip_input) < 30:
+                elif self.net_ip_focused and len(self.net_ip_input) < 30:
                     self.net_ip_input += ev.text
+                # 房间名 / 昵称由 _handle_dev_keys 处理，绝不误写进 IP
             elif ev.type == pygame.KEYDOWN:
                 if self.net_port_focused:
                     if ev.key == pygame.K_RETURN:
@@ -885,7 +886,9 @@ class InputMixin:
                         self.stop_text_input()
             return
         # 网络联机 IP 输入框：聚焦时优先接受系统输入法输入
-        if self.state == GameState.NET_MULTIPLAYER and self.net_ip_focused:
+        if self.state == GameState.NET_MULTIPLAYER and (
+                getattr(self, 'net_ip_focused', False)
+                or getattr(self, 'net_port_focused', False)):
             self._handle_net_ip_keyboard(events)
             return
         if self.dev_input_active:

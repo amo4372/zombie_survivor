@@ -202,17 +202,43 @@ class PlayingMixin:
     # v2.8.8：合作模式倒地时间 20s → 45s（原时长太短，队友根本来不及赶到）
     DOWNED_DEATH_TIME = 45.0    # 同屏倒地超过该时间未获救 → 彻底死亡
 
+    def _team_has_survivor(self, team_id=None):
+        """v2.9.19：同阵营是否还有存活玩家（**含 AI**）。
+
+        用户要求：玩家自己死了，只要同阵营还有 AI 活着，本局就继续。
+        旧版只看 p1/p2，AI 在 P3~P10 完全不参与胜负判定。
+        """
+        try:
+            if team_id is None:
+                team_id = int(getattr(getattr(self, 'player', None), 'team_id', 0) or 0)
+            for _p in self._all_players():
+                if _p is None or getattr(_p, 'permanently_dead', False):
+                    continue
+                if int(getattr(_p, 'team_id', 0) or 0) != int(team_id):
+                    continue
+                if getattr(_p, 'alive', True) and not getattr(_p, 'downed', False):
+                    return True
+            return False
+        except Exception:
+            return False
+
     def _update_rescue(self, dt):
-        """双人救援系统：倒地→队友救援复活（同屏靠近自动救援 / 网络 8 秒自动复活）；全倒地则结束
-        v2.2.6：加救援冷却（防无限互救）+ 倒地超时死亡 + 受击清空救援进度"""
-        p1, p2 = self.player, self.player2
-        if not p1 or not p2:
+        """v2.9.19 救援系统：支持任意数量玩家（含最多 9 个 AI）。
+
+        旧版硬编码 `p1, p2 = self.player, self.player2`，于是：
+          * AI 在 P3~P10 时永远不会被判定倒地 / 救队友 / 被救
+          * P1 死后即使友方 AI 还活着，也会被当成"全灭"直接结算
+        现在全部走 `_all_players()`，队友取「最近的同阵营存活者」，
+        只有同阵营真的没人了才返回 True（触发结算）。
+        """
+        players = self._all_players()
+        if len(players) < 2:
             return False
         _now = time.monotonic()
-        # 1) 触发倒地：hp<=0 且未倒地 → 倒地（不立即死亡；alive 可能已被 take_damage 置 False，必须照常倒地）
-        for p in (p1, p2):
-            # v2.5.7 修复：永久死亡（救援超时）的玩家不再被重新判定为倒地
-            # （此前超时死亡后 hp 仍为 0 → 下一帧又被判倒地 → 可反复被救起）
+        _human_team = int(getattr(getattr(self, 'player', None), 'team_id', 0) or 0)
+
+        # 1) 触发倒地
+        for p in players:
             if getattr(p, 'permanently_dead', False):
                 continue
             if p.hp <= 0 and not p.downed:
@@ -221,78 +247,50 @@ class PlayingMixin:
                 p.downed_timer = 0.0
                 p.rescue_progress = 0.0
                 p.last_rescue_time = getattr(p, 'last_rescue_time', -999.0)
-                p._rescue_last_hp = p.hp
-                p._rescue_mate_last_hp = (p2 if p is p1 else p1).hp if (p2 if p is p1 else p1) else 0
-                self.floating_texts.append(FloatingText(
-                    p.x, p.y - 40, "倒地！等待救援...", color=(240, 230, 120), lifetime=2.0))
-                self.assets.play_sound_random(["player_hurt", "hurt"])
-                # v2.2.7 倒地瞬间重置该玩家触控按钮（防按住状态残留导致救起后卡死）
+                p._rescue_mate_last_hp = 0.0
                 try:
-                    tag = "P2" if p is p2 else "P1"
-                    self._reset_touch_state_for(tag)
+                    self.floating_texts.append(FloatingText(
+                        p.x, p.y - 40, "倒地！等待救援...", color=(240, 230, 120), lifetime=2.0))
+                    self.assets.play_sound_random(["player_hurt", "hurt"])
                 except Exception:
                     pass
-                # v2.2.7 倒地瞬间强制清除换弹状态（换弹中被击倒→救起后不再卡死无法开火）
-                self._reset_weapons_reload(p)
+                try:
+                    self._reset_touch_state_for(self.tag_of(p) if hasattr(self, 'tag_of') else 'P1')
+                    self._reset_weapons_reload(p)
+                except Exception:
+                    pass
+
         # 2) 救援 / 自动复活
-        for p in (p1, p2):
+        for p in players:
             if not p.downed:
                 continue
             p.downed_timer += dt
-            mate = p2 if p is p1 else p1
+            _same = [m for m in players
+                     if m is not p and int(getattr(m, 'team_id', 0) or 0) == int(getattr(p, 'team_id', 0) or 0)
+                     and getattr(m, 'alive', True) and not getattr(m, 'downed', False)]
+            mate = min(_same, key=lambda m: math.hypot(m.x - p.x, m.y - p.y)) if _same else None
             rescued = False
-            _cdh = getattr(p, '_rescue_cd_hint', 0.0) - dt
-            p._rescue_cd_hint = max(0.0, _cdh)
-            # v2.5.7 修复：救援者被怪物打中 → 救援被打断（此前只检测被救者掉血，
-            #   而倒地的玩家不会被怪物选中 → 救援永远不被打断）
-            if mate is not None:
-                _mlh = getattr(p, '_rescue_mate_last_hp', mate.hp)
-                if _mlh > mate.hp and p.rescue_progress > 0:
-                    p.rescue_progress = 0.0
-                    self.floating_texts.append(FloatingText(
-                        mate.x, mate.y - 60, "救援被打断!", color=(230, 140, 120), lifetime=0.9))
-                p._rescue_mate_last_hp = mate.hp
-            if self.multiplayer_mode == "same_screen":
+            if self.multiplayer_mode == "same_screen" or getattr(p, 'is_bot', False) or (mate is not None and getattr(mate, 'is_bot', False)):
                 _cd_ok = (_now - getattr(p, 'last_rescue_time', -999.0)) >= self.RESCUE_COOLDOWN
-                # v2.4.0 PvPvE：只有同阵营队友可救援（异阵营不能互相救）
-                _same_team = True
-                if getattr(self.config, 'pvp_enabled', False):
-                    _same_team = getattr(p, 'team_id', 0) == getattr(mate, 'team_id', 1)
-                near = (mate is not None and not mate.downed and _same_team
-                        and math.hypot(mate.x - p.x, mate.y - p.y) < 120)
-                if near and not _cd_ok and getattr(p, '_rescue_cd_hint', 0.0) <= 0:
-                    # 冷却中给个提示（否则队友就在旁边却救不了，玩家毫无反馈）
-                    p._rescue_cd_hint = 3.0
-                    self.floating_texts.append(FloatingText(
-                        p.x, p.y - 70, "救援冷却中...", color=(200, 180, 140), lifetime=1.4))
+                near = (mate is not None and
+                        math.hypot(mate.x - p.x, mate.y - p.y) < 120)
                 if near and _cd_ok:
                     p.rescue_progress += dt
-                    # v2.2.7 救援者 UI 反馈：救援者与被救者都看到进度（0.5s 节流浮字）
-                    _fb = getattr(self, '_rescue_fb_timer', 0.0) - dt
-                    self._rescue_fb_timer = _fb
-                    if _fb <= 0:
-                        self._rescue_fb_timer = 0.5
-                        _pct = int(p.rescue_progress / 2.5 * 100)
-                        _rtag = "P2" if p is p2 else "P1"
-                        self.floating_texts.append(FloatingText(
-                            mate.x, mate.y - 55, f"正在救援 {_rtag}... {_pct}%", color=(120, 230, 140), lifetime=0.6))
-                        self.floating_texts.append(FloatingText(
-                            p.x, p.y - 70, f"队友正在救援... {_pct}%", color=(120, 230, 140), lifetime=0.6))
                     if p.rescue_progress >= 2.5:
                         rescued = True
                 else:
                     p.rescue_progress = 0.0
-                # 倒地超时 → 彻底死亡（防无限拖延；全倒地由调用方判定结束）
                 if p.downed_timer >= self.DOWNED_DEATH_TIME:
                     p.downed = False
                     p.alive = False
-                    # v2.5.7：标记永久死亡（不再被重新判定倒地）
                     p.permanently_dead = True
-                    self.floating_texts.append(FloatingText(
-                        p.x, p.y - 40, "救援超时，未能生还...", color=(200, 60, 60), lifetime=2.5))
+                    try:
+                        self.floating_texts.append(FloatingText(
+                            p.x, p.y - 40, "救援超时，未能生还...", color=(200, 60, 60), lifetime=2.5))
+                    except Exception:
+                        pass
                     continue
             else:
-                # 网络联机：8 秒自动复活（跨设备救援不便，给保底）
                 if p.downed_timer >= 8.0:
                     rescued = True
             if rescued:
@@ -300,32 +298,18 @@ class PlayingMixin:
                 p.alive = True
                 p.permanently_dead = False
                 p._rescue_cd_hint = 0.0
-                # v2.5.2 救援统计（成就 mp_rescue_10）
-                try:
-                    if getattr(self, 'records', None) is not None:
-                        self.records.add_mp_stat("mp_rescues")
-                except Exception:
-                    pass
                 p.hp = int(p.max_hp * 0.5)
                 p.rescue_progress = 0.0
-                p.last_rescue_time = _now  # 进入救援冷却
-                # v2.9.9：删除复活后的通用无敌帧（只保留冲刺技能词条写入）
-                pass
-                self.floating_texts.append(FloatingText(p.x, p.y - 40, "已复活!", color=GREEN, lifetime=1.5))
-                # v2.2.7 被救起后重置该玩家触控按钮（防倒地期间按住的按钮残留卡死）
+                p.last_rescue_time = _now
                 try:
-                    tag = "P2" if p is p2 else "P1"
-                    self._reset_touch_state_for(tag)
+                    self._reset_touch_state_for(self.tag_of(p) if hasattr(self, 'tag_of') else 'P1')
+                    self._reset_weapons_reload(p)
+                    self.floating_texts.append(FloatingText(p.x, p.y - 40, "已复活!", color=GREEN, lifetime=1.5))
                 except Exception:
                     pass
-                # v2.2.7 被救起后强制清除换弹状态（换弹卡死根因修复）
-                self._reset_weapons_reload(p)
-                try:
-                    self.assets.play_sound("heal")
-                except Exception:
-                    pass
-        # 3) 双人全部倒地 → 游戏结束
-        return bool((p1.downed or not p1.alive) and (p2.downed or not p2.alive))
+
+        # 3) 只有「人类阵营全灭」才结算；友方 AI 还活着就继续（观战）
+        return not self._team_has_survivor(_human_team)
 
     def _update_overdrive(self, player, dt):
         """v2.5.7 过热倾泻统一更新（P1/P2 共用）：
@@ -370,21 +354,23 @@ class PlayingMixin:
         except Exception:
             pass
 
-    def _alive_players(self):
-        """返回存活的玩家列表（单人=[P1]，双人=[P1,P2]）"""
-        ps = [self.player]
-        if self.player2:
-            ps.append(self.player2)
-        return [p for p in ps if p is not None and getattr(p, 'alive', True) and not getattr(p, 'downed', False)]
-
     def _all_players(self):
-        """v2.2.7 PvPvE：返回全部玩家实体（P1~P4，含 AI 补位）"""
-        ps = []
-        for _a in ("player", "player2", "player3", "player4"):
-            _p = getattr(self, _a, None)
-            if _p is not None:
-                ps.append(_p)
-        return ps
+        """v2.9.19：全部玩家实体（含最多 9 个 AI），统一走注册表。
+
+        旧版硬编码只遍历 player..player4，AI 放在 P5~P10 时完全不参与
+        伤害/救援/结算/经验拾取 —— 这是"AI 不吃经验、不救援"的根因之一。
+        """
+        try:
+            return [p for p in self.registered_players() if p is not None]
+        except Exception:
+            return [p for p in (self.player, getattr(self, 'player2', None),
+                                getattr(self, 'player3', None), getattr(self, 'player4', None))
+                    if p is not None]
+
+    def _alive_players(self):
+        """存活（未倒地）的全部玩家，含 AI。"""
+        return [p for p in self._all_players()
+                if getattr(p, 'alive', True) and not getattr(p, 'downed', False)]
 
     def _damage_players_near(self, x, y, radius, damage, dtype="melee", from_front=True, shake_cam=None):
         """对半径内所有存活玩家造成伤害（双人双判定），shake_cam=(cam, intensity, dur) 可选震屏"""
@@ -2843,9 +2829,10 @@ class PlayingMixin:
         # v2.1.3：同屏双人经验球按距离磁吸到最近玩家，P1/P2 均可吸经验
         # （此前只吸 self.player，P2 永远吃不到经验）
         for orb in self.exp_orbs[:]:
-            _targets = [self.player]
-            if self.is_multiplayer_active() and self.player2 and getattr(self.player2, 'alive', True):
-                _targets.append(self.player2)
+            # v2.9.19：AI 玩家同样能吸经验（旧版只有 P1/P2）
+            _targets = [p for p in self._all_players() if getattr(p, 'alive', True)]
+            if not _targets:
+                _targets = [self.player]
             if len(_targets) > 1:
                 _best = min(_targets, key=lambda _pl: math.hypot(orb.x - _pl.x, orb.y - _pl.y))
             else:

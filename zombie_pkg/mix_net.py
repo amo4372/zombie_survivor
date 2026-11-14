@@ -546,9 +546,10 @@ class NetMixin:
         """点房间列表直接加入（自动填 IP / 端口）"""
         if not room:
             return
-        self.net_ip_input = str(room.get('ip', '127.0.0.1'))
+        self.net_ip_input = str(room.get('host_ip') or room.get('ip') or '')
         self.net_port_input = str(room.get('port', 26000))
         self.net_last_error = None
+        self.net_joined_room = str(room.get('room', ''))
         self._net_join()
 
     def _net_stop_discovery(self):
@@ -560,15 +561,26 @@ class NetMixin:
         self.net_discovery = None
 
     def _get_local_ip(self):
-        """获取本机局域网IP"""
+        """v2.9.19：取本机局域网 IP，优先私有网段，绝不把 127.0.0.1 当房主地址。"""
         try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect(("8.8.8.8", 80))
-            ip = s.getsockname()[0]
-            s.close()
-            return ip
+            from net_discovery import local_lan_ip
+            return local_lan_ip()
         except Exception:
-            return "127.0.0.1"
+            pass
+        _cands = []
+        try:
+            _s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                _s.connect(("8.8.8.8", 80))
+                _cands.append(_s.getsockname()[0])
+            finally:
+                _s.close()
+        except Exception:
+            pass
+        for _ip in _cands:
+            if _ip and _ip != "127.0.0.1":
+                return _ip
+        return _cands[0] if _cands else "127.0.0.1"
 
     def _net_start_host(self):
         """启动主机监听"""
@@ -595,7 +607,14 @@ class NetMixin:
             self.net_port, room_cfg=_rc,
             room_name=str(getattr(self, 'net_room_name', '') or '幸存者房间'),
             host_name=str(getattr(self, 'net_nickname', '') or '房主'))
-        if self.net_host.start():
+        if not self.net_host.start():
+            self.net_last_error = "创建房间失败：%s（端口可能被占用，换一个试试）" % \
+                (getattr(self.net_host, 'error', None) or '未知错误')
+            self.net_role = None
+            self.net_host = None
+            self.state = GameState.NET_MULTIPLAYER
+            return
+        if True:
             try:
                 from net_discovery import RoomBeacon
                 self.net_beacon = RoomBeacon(
@@ -622,7 +641,14 @@ class NetMixin:
         from net import NetClient
         self._net_stop()
         self.net_role = "client"
-        ip = (self.net_ip_input or "127.0.0.1").strip()
+        ip = (self.net_ip_input or "").strip()
+        if not ip:
+            self.net_last_error = "请先填房主 IP（或点右侧发现的房间）"
+            from config import GameState as _GS
+            self.state = _GS.NET_MULTIPLAYER
+            return
+        if ip in ("127.0.0.1", "localhost", "::1"):
+            self.net_last_error = "提示：127.0.0.1 只会连自己；同 WiFi 请填房主显示的局域网 IP"
         try:
             self.net_port = max(1024, min(65535, int(getattr(self, 'net_port_input', '26000') or '26000')))
         except Exception:
@@ -636,6 +662,8 @@ class NetMixin:
             nickname=str(getattr(self, 'net_nickname', '') or '玩家'))
         ok = self.net_client.start()
         if not ok:
+            _err = getattr(self.net_client, 'error', None) or "连接失败"
+            self.net_last_error = "连不上 %s:%s → %s" % (ip, self.net_port, _err)
             self.net_role = None
             self.net_client = None
             self.state = GameState.NET_MULTIPLAYER

@@ -21,6 +21,12 @@ import socket as _zs_socket
 
 
 def _zs_lan_ip():
+    """v2.9.19：与 net_discovery 信标用同一份地址，避免页面显示和广播不一致。"""
+    try:
+        from net_discovery import local_lan_ip
+        return local_lan_ip()
+    except Exception:
+        pass
     try:
         _sk = _zs_socket.socket(_zs_socket.AF_INET, _zs_socket.SOCK_DGRAM)
         try:
@@ -3844,498 +3850,437 @@ class UiMixin:
             g.state = GameState.MULTI_ROOM_CONFIG
 
     def _draw_net_multiplayer(self):
-        """网络联机：创建房间 / 加入房间
-        v2.4.0 最大人数/玩法/模式/地图改为下滑栏（点击展开选择，不再点击循环）"""
-        self.screen.fill(VOID_BLACK)
-        scale = self.game.scale
-        sw = self.game.scaled_width
-        sh = self.game.scaled_height
-        title = self.game.font_title.render("网络联机 · 房间配置", True, WHITE)
-        self.screen.blit(title, title.get_rect(center=(sw // 2, int(60 * scale))))
-        mouse_pos = pygame.mouse.get_pos()
-        mouse_pressed = pygame.mouse.get_pressed()
-        g = self.game
-        cx = int(sw // 2 - 180 * scale)
-        cw = int(360 * scale)
-        ch = int(46 * scale)
-        cgap = int(8 * scale)
-        y = int(110 * scale)
-        _ups_n = [te for te in getattr(g, 'touch_events', [])
-                  if te.get("type") == "up" and te.get("pos") is not None]
-        # v2.9.17：单一 _clk 只取"第一个 up"，多指/合成鼠标事件下
-        # 下拉行与选项经常收不到点击 → "网络联机下滑栏点不动"。
-        # 改用全量点击列表，下拉行/选项各自遍历；页面交互仍用主点击。
-        _clk_all = [te["pos"] for te in _ups_n if te.get("pos") is not None]
-        _clk = _clk_all[0] if _clk_all else (mouse_pos if mouse_pressed[0] else None)
+        """v2.9.19 网络联机：**双栏房间页**（参考《铁锈战争》直连体验）。
 
-        # ===== v2.9.11 局域网房间发现（覆盖式面板，任意分辨率可用）=====
+        旧版把 9 个控件竖着堆在一列，底部按钮与下拉浮层互相压住；
+        更要命的是展开下拉后，函数末尾会用**上一帧**的空 overlay 判定
+        "点在空白 → 收起"，于是刚设的 net_dd_key 当帧就被清掉，
+        下滑栏永远展不开 —— 这就是"点不动"的真正根因。
+
+        现在：
+          * 左栏 = 创建房间（房间名/端口/配置/地址/创建），右栏 = 加入房间
+            （昵称/IP/局域网房间列表/加入），静态控件零重叠
+          * 点击统一走 `_clk_all` 全量队列；选项、下拉行、空白收起、
+            页面按钮按优先级依次消费，互不抢事件
+          * 房主 IP 直连 + 一键复制 + 房间列表点一下即加入 + 明确错误提示
+        """
+        self.screen.fill(VOID_BLACK)
+        g = self.game
+        s = g.scale
+        sw, sh = g.scaled_width, g.scaled_height
+        def P(v): return int(v * s)
+        def C(x, y, w, h): return pygame.Rect(P(x), P(y), P(w), P(h))
+        def txt(t, x, y, font=None, color=None, center=False):
+            _f = font or self.game.font_small
+            _t = _f.render(t, True, color or LIGHT_GRAY)
+            _r = _t.get_rect(center=(P(x), P(y))) if center else _t.get_rect(topleft=(P(x), P(y)))
+            self.screen.blit(_t, _r)
+            return _t
+
+        # ---- 标题与分栏 ----
+        txt("网络联机 · 房间", 640, 34, self.game.font_title, WHITE, center=True)
+        txt("同一 WiFi 可直接点房间加入；也可把房主 IP:端口发给对方手输直连",
+            640, 66, self.game.font_small, (150, 165, 185), center=True)
+        pygame.draw.line(self.screen, (55, 62, 78), (P(640), P(84)), (P(640), P(625)), 2)
+        txt("① 创建房间（本机作房主）", 320, 88, self.game.font, GOLD, center=True)
+        txt("② 加入房间（连接房主）", 960, 88, self.game.font, CYAN, center=True)
+
+        # ---- 事件队列 ----
+        _ups = [te for te in getattr(g, 'touch_events', [])
+                if te.get("type") == "up" and te.get("pos") is not None]
+        _clk_all = [te["pos"] for te in _ups]
+        _mp = pygame.mouse.get_pos()
+        _mpr = pygame.mouse.get_pressed()
+        if not _clk_all and _mpr[0]:
+            _clk_all = [_mp]
+        _consumed = set()
+
+        # ---- 房间发现 ----
         try:
             g._net_start_discovery()
         except Exception:
             pass
         _rooms = g._net_room_list()
-        _rooms_btn = pygame.Rect(int(sw - 220 * scale), int(18 * scale),
-                                 int(200 * scale), int(42 * scale))
-        pygame.draw.rect(self.screen, (36, 60, 92), _rooms_btn, border_radius=8)
-        pygame.draw.rect(self.screen, (110, 170, 240), _rooms_btn, 2, border_radius=8)
-        _rbt = self.game.font_small.render(
-            f"局域网房间 ({len(_rooms)})", True, WHITE)
-        self.screen.blit(_rbt, _rbt.get_rect(center=_rooms_btn.center))
-        if _clk is not None and _rooms_btn.collidepoint(_clk):
-            g.net_show_rooms = True
-            return
-        if getattr(g, 'net_show_rooms', False):
-            # 半透明覆盖层
-            _ov = pygame.Surface((sw, sh), pygame.SRCALPHA)
-            _ov.fill((6, 8, 14, 235))
-            self.screen.blit(_ov, (0, 0))
-            _ttl = self.game.font_large.render("同一局域网的房间", True, WHITE)
-            self.screen.blit(_ttl, _ttl.get_rect(center=(sw // 2, int(70 * scale))))
-            _hint = self.game.font_small.render(
-                "点房间直接加入 · 两台设备需连同一 WiFi", True, LIGHT_GRAY)
-            self.screen.blit(_hint, _hint.get_rect(center=(sw // 2, int(110 * scale))))
-            # 房间名 / 昵称
-            _nr = pygame.Rect(int(sw // 2 - 300 * scale), int(135 * scale),
-                              int(280 * scale), int(40 * scale))
-            _nn = pygame.Rect(int(sw // 2 + 20 * scale), int(135 * scale),
-                              int(280 * scale), int(40 * scale))
-            for _r, _val, _focus, _lab in (
-                    (_nr, g.net_room_name, g.net_room_focused, "房间名"),
-                    (_nn, g.net_nickname, g.net_nick_focused, "我的昵称")):
-                pygame.draw.rect(self.screen, (24, 28, 38), _r, border_radius=7)
-                pygame.draw.rect(self.screen,
-                                 (120, 220, 120) if _focus else (70, 78, 96),
-                                 _r, 2, border_radius=7)
-                _t = self.game.font_small.render(
-                    f"{_lab}: {_val}" + ("|" if _focus else ""), True, WHITE)
-                self.screen.blit(_t, _t.get_rect(midleft=(_r.x + 10, _r.centery)))
-            if _clk is not None:
-                if _nr.collidepoint(_clk):
-                    g.net_room_focused = True
-                    g.net_nick_focused = False
-                    g.start_text_input()
-                    return
-                if _nn.collidepoint(_clk):
-                    g.net_nick_focused = True
-                    g.net_room_focused = False
-                    g.start_text_input()
-                    return
-            # 房间行
-            _ly = int(195 * scale)
-            _rh = int(56 * scale)
-            _rw = int(600 * scale)
-            _rx = int(sw // 2 - _rw // 2)
-            if not _rooms:
-                _no = self.game.font.render("暂未发现房间，可手动输入主机 IP 加入", True, GRAY)
-                self.screen.blit(_no, _no.get_rect(center=(sw // 2, _ly + int(60 * scale))))
-            for _i, _r in enumerate(_rooms[:5]):
-                _rr = pygame.Rect(_rx, _ly + _i * (_rh + int(6 * scale)), _rw, _rh)
-                _hov = _clk is not None and _rr.collidepoint(_clk)
-                pygame.draw.rect(self.screen,
-                                 (46, 62, 84) if _hov else (30, 36, 50),
-                                 _rr, border_radius=8)
-                pygame.draw.rect(self.screen, (90, 130, 180), _rr, 1, border_radius=8)
-                _l1 = self.game.font.render(
-                    f"{_r['room']}   [{'已开始' if _r['started'] else '等待中'}]", True,
-                    GOLD if not _r['started'] else GRAY)
-                _l2 = self.game.font_small.render(
-                    f"{_r['ip']}:{_r['port']}  房主 {_r['host']}  "
-                    f"{_r['players']}/{_r['max']} 人  {_r['mode']}", True, LIGHT_GRAY)
-                self.screen.blit(_l1, (_rr.x + int(12 * scale), _rr.y + int(6 * scale)))
-                self.screen.blit(_l2, (_rr.x + int(12 * scale), _rr.y + int(30 * scale)))
-                if _hov and not _r['started']:
-                    g._net_join_room(_r)
-                    g.net_show_rooms = False
-                    return
-            # 底部按钮
-            _cl = pygame.Rect(int(sw // 2 - 200 * scale), int(sh - 80 * scale),
-                              int(180 * scale), int(46 * scale))
-            _rf = pygame.Rect(int(sw // 2 + 20 * scale), int(sh - 80 * scale),
-                              int(180 * scale), int(46 * scale))
-            for _r, _txt, _col in ((_cl, "关闭", (70, 60, 60)),
-                                   (_rf, "重新扫描", (40, 70, 60))):
-                pygame.draw.rect(self.screen, _col, _r, border_radius=8)
-                pygame.draw.rect(self.screen, GRAY, _r, 1, border_radius=8)
-                _t = self.game.font.render(_txt, True, WHITE)
-                self.screen.blit(_t, _t.get_rect(center=_r.center))
-            if _clk is not None:
-                if _cl.collidepoint(_clk):
-                    g.net_show_rooms = False
-                    return
-                if _rf.collidepoint(_clk):
-                    g._net_stop_discovery()
-                    g._net_start_discovery()
-                    return
-            if getattr(g, 'net_last_error', None):
-                _et = self.game.font_small.render(str(g.net_last_error)[:56], True, CRIMSON)
-                self.screen.blit(_et, _et.get_rect(center=(sw // 2, int(sh - 110 * scale))))
-            return
-
-        def _cfg_box(rect, text, color=(28, 32, 44)):
-            pygame.draw.rect(self.screen, color, rect, border_radius=9)
-            pygame.draw.rect(self.screen, (70, 78, 96), rect, 2, border_radius=9)
-            _t = self.game.font.render(text, True, (235, 235, 235))
-            self.screen.blit(_t, _t.get_rect(midleft=(rect.x + int(12 * scale), rect.centery)))
-
-        # ---- 下滑栏状态（v2.4.0）----
-        _ddk = getattr(g, 'net_dd_key', None)  # 当前展开的下拉 key
-        _dd_scroll = float(getattr(g, 'net_dd_scroll', 0.0))
-        _dd_opt_h = int(40 * scale)
-        _dd_visible = 5
-        _opt_pending = []  # (key, rect, [(label, value),...], setter) 尾部统一渲染
-
-        def _dd_row(key, rect, text, options, setter, cur_label):
-            """网络页下滑栏行：点击展开/收起；展开时把选项收集到 _opt_pending 尾部渲染"""
-            _cfg_box(rect, text + ("  ▼" if _ddk != key else "  ▲"))
-            if _ddk == key:
-                _opt_pending.append((key, rect, options, setter))
-            if any(rect.collidepoint(_c) for _c in _clk_all):
-                g.net_dd_key = key if _ddk != key else None
-                g.net_dd_scroll = 0
-                return True
-            return False
-
-        # 创建房间按钮
-        host_r = pygame.Rect(cx, y, cw, ch)
-        pygame.draw.rect(self.screen, (40, 90, 40), host_r, border_radius=10)
-        pygame.draw.rect(self.screen, GREEN, host_r, 2, border_radius=10)
-        ht = self.game.font.render("创建房间（主机）", True, WHITE)
-        self.screen.blit(ht, ht.get_rect(center=host_r.center))
-        y += ch + cgap
-        # ---- v2.9.15 房主连接信息：别人该怎么连我 ----
         _addr = _zs_host_addr(g)
-        addr_r = pygame.Rect(cx, y, cw - int(120 * scale), ch)
-        copy_r = pygame.Rect(int(addr_r.right + int(8 * scale)), y,
-                             int(112 * scale), ch)
-        pygame.draw.rect(self.screen, (22, 34, 30), addr_r, border_radius=8)
-        pygame.draw.rect(self.screen, (90, 170, 120), addr_r, 2, border_radius=8)
-        _at = self.game.font_small.render("本机地址  " + _addr, True, (170, 240, 190))
-        self.screen.blit(_at, _at.get_rect(midleft=(addr_r.x + int(10 * scale), addr_r.centery)))
-        pygame.draw.rect(self.screen, (40, 90, 65), copy_r, border_radius=8)
-        _ct = self.game.font_small.render("一键复制", True, WHITE)
-        self.screen.blit(_ct, _ct.get_rect(center=copy_r.center))
-        if getattr(g, 'net_copy_hint', 0) > 0:
-            g.net_copy_hint = max(0, float(g.net_copy_hint) - 1 / 60.0)
-            _hint = self.game.font_small.render("已复制地址，发给队友即可加入", True, GOLD)
-            self.screen.blit(_hint, (cx, int(y - 22 * scale)))
-        y += ch + cgap
-        # 端口输入框
-        port_r = pygame.Rect(cx, y, cw, ch)
-        _pc = (120, 220, 120) if g.net_port_focused else (70, 78, 96)
-        pygame.draw.rect(self.screen, (25, 25, 35), port_r, border_radius=8)
-        pygame.draw.rect(self.screen, _pc, port_r, 2, border_radius=8)
-        _pt = self.game.font.render("端口：" + g.net_port_input + ("▏" if g.net_port_focused else ""), True, WHITE)
-        self.screen.blit(_pt, (port_r.x + 10, port_r.y + 8))
-        y += ch + cgap
-        # 最大人数（网络 2-4）→ 下滑栏
-        _ccn = int(getattr(g, 'coop_player_count', 2) or 2)
-        _ccn = 2 if _ccn < 2 else (4 if _ccn > 4 else _ccn)
-        cnt_r = pygame.Rect(cx, y, cw, ch)
-        _dd_row("net_cnt", cnt_r, f"最大人数：{_ccn} 人", [(f"{n} 人", n) for n in (2, 3, 4)],
-                lambda v: setattr(g, 'coop_player_count', v), str(_ccn))
-        y += ch + cgap
-        # 玩法 → 下滑栏（合作 / PvP 2-4 阵营）
+
+        # ---- 通用绘制 ----
+        def box(r, fill=(24, 28, 40), edge=(70, 82, 102), text="", col=None, focused=False):
+            pygame.draw.rect(self.screen, fill, r, border_radius=8)
+            pygame.draw.rect(self.screen, (120, 220, 120) if focused else edge, r, 2, border_radius=8)
+            if text:
+                _t = self.game.font.render(text, True, col or (232, 236, 245))
+                self.screen.blit(_t, _t.get_rect(midleft=(r.x + P(12), r.centery)))
+
+        def button(r, text, fill, edge=None, font=None):
+            pygame.draw.rect(self.screen, fill, r, border_radius=9)
+            pygame.draw.rect(self.screen, edge or GRAY, r, 2, border_radius=9)
+            _t = (font or self.game.font).render(text, True, WHITE)
+            self.screen.blit(_t, _t.get_rect(center=r.center))
+
+        # ================= 配置数据 =================
+        try:
+            from config import GameMode
+            _modes = [GameMode.ENDLESS, GameMode.STORY, GameMode.TIMED]
+            _mi = _modes.index(g.config.game_mode) if g.config.game_mode in _modes else 0
+        except Exception:
+            _modes, _mi = [], 0
+        _mode_names = ["无尽生存", "故事模式", "争分夺秒"]
+        _maps = ["沦陷的校园", "末日街区", "市中心", "郊区小镇", "核电站"]
+        _mapi = int(getattr(g, 'room_map_idx', 0) or 0) % len(_maps)
+        _ccn = max(2, min(4, int(getattr(g, 'coop_player_count', 2) or 2)))
         _pv = bool(getattr(g.config, 'pvp_enabled', False))
         _nt = int(getattr(g.config, 'pvp_teams', 2) or 2)
-        _pvtxt = "合作 nPvE" if not _pv else f"对战 PvPvE（{_nt} 阵营）"
-        pvp_r = pygame.Rect(cx, y, cw, ch)
-        _pvp_opts = [("合作 nPvE", ("coop", 0))]
-        for _tn in (2, 3, 4):
-            _pvp_opts.append((f"对战 PvPvE（{_tn} 阵营）", ("pvp", _tn)))
+        _pvtxt = "合作 nPvE" if not _pv else "对战 PvPvE（%d 阵营）" % _nt
+
         def _set_pvp(v):
             if v[0] == "coop":
                 g.config.pvp_enabled = False
             else:
                 g.config.pvp_enabled = True
                 g.config.pvp_teams = v[1]
-        _dd_row("net_pvp", pvp_r, f"玩法：{_pvtxt}", _pvp_opts, _set_pvp, _pvtxt)
-        y += ch + cgap
-        # 模式 → 下滑栏
-        _mode_names = ["无尽生存", "故事模式", "争分夺秒"]
-        try:
-            from config import GameMode
-            _mg = getattr(g.config, 'game_mode', GameMode.ENDLESS)
-            _mi = [GameMode.ENDLESS, GameMode.STORY, GameMode.TIMED].index(_mg) if _mg in [GameMode.ENDLESS, GameMode.STORY, GameMode.TIMED] else 0
-        except Exception:
-            _mi = 0
-        mode_r = pygame.Rect(cx, y, cw, ch)
         def _set_mode(v):
             try:
                 from config import GameMode
                 g.config.game_mode = [GameMode.ENDLESS, GameMode.STORY, GameMode.TIMED][v]
             except Exception:
                 pass
-        _dd_row("net_mode", mode_r, f"模式：{_mode_names[_mi]}",
-                [(n, i) for i, n in enumerate(_mode_names)], _set_mode, _mode_names[_mi])
-        y += ch + cgap
-        # 地图 → 下滑栏
-        _maps_n = ["沦陷的校园", "末日街区", "市中心", "郊区小镇", "核电站"]
-        _mapi = int(getattr(g, 'room_map_idx', 0) or 0) % len(_maps_n)
-        map_r = pygame.Rect(cx, y, cw, ch)
-        _dd_row("net_map", map_r, f"地图：{_maps_n[_mapi]}",
-                [(m, i) for i, m in enumerate(_maps_n)],
-                lambda v: setattr(g, 'room_map_idx', v), _maps_n[_mapi])
-        y += ch + cgap
-        # IP 输入框
-        ip_r = pygame.Rect(cx, y, cw, ch)
-        _bc = (120, 220, 120) if g.net_ip_focused else (70, 78, 96)
-        pygame.draw.rect(self.screen, (25, 25, 35), ip_r, border_radius=8)
-        pygame.draw.rect(self.screen, _bc, ip_r, 2, border_radius=8)
-        _ipv = g.net_ip_input or ("点此输入房主地址" if not g.net_ip_focused else "")
-        _ipc = (150, 165, 185) if not g.net_ip_input else WHITE
-        ip_txt = self.game.font.render("主机IP：" + _ipv + ("▏" if g.net_ip_focused else ""), True, _ipc)
-        self.screen.blit(ip_txt, (ip_r.x + 10, ip_r.y + 8))
-        y += ch + cgap
-        # 加入按钮
-        join_r = pygame.Rect(cx, y, cw, ch)
-        pygame.draw.rect(self.screen, (60, 90, 40), join_r, border_radius=10)
-        pygame.draw.rect(self.screen, GOLD, join_r, 2, border_radius=10)
-        jt = self.game.font.render("加入房间", True, WHITE)
-        self.screen.blit(jt, jt.get_rect(center=join_r.center))
-        y += ch + cgap
-        # 返回
-        back_r = pygame.Rect(cx, y, cw, int(40 * scale))
-        pygame.draw.rect(self.screen, (60, 50, 50), back_r, border_radius=10)
-        pygame.draw.rect(self.screen, GRAY, back_r, 2, border_radius=10)
-        bt = self.game.font_small.render("返回", True, LIGHT_GRAY)
-        self.screen.blit(bt, bt.get_rect(center=back_r.center))
 
-        # ---- 展开的下拉选项：页面末尾统一渲染（位于一切元素之上）----
-        _net_overlay = []
-        for _key, _brect, _options, _setter in _opt_pending:
-            _net_overlay.append(_brect)
-            _ox = _brect.x
-            _oy = _brect.bottom + int(2 * scale)
-            _ow = _brect.w
-            _total = len(_options)
-            _maxi = max(0, min(_total - 1, int(_dd_scroll)))
-            _vis = min(_dd_visible, _total - _maxi)
-            _box_h = _vis * _dd_opt_h
-            _net_overlay.append(pygame.Rect(_ox, _oy, _ow, _box_h + int(6 * scale)))
-            _overlay = pygame.Surface((_ow, _box_h + int(6 * scale)), pygame.SRCALPHA)
-            _overlay.fill((20, 24, 34, 245))
-            self.screen.blit(_overlay, (_ox, _oy))
-            for _oi in range(_vis):
-                _o = _options[_maxi + _oi]
-                _or = pygame.Rect(_ox + int(2 * scale), _oy + int(3 * scale) + _oi * _dd_opt_h,
-                                  _ow - int(4 * scale), _dd_opt_h - int(4 * scale))
-                _hover = any(_or.collidepoint(_c) for _c in _clk_all)
-                pygame.draw.rect(self.screen, (40, 46, 62) if _hover else (30, 34, 46), _or, border_radius=6)
-                pygame.draw.rect(self.screen, (90, 100, 120), _or, 1, border_radius=6)
-                _ot = self.game.font_small.render(str(_o[0]), True, WHITE)
-                self.screen.blit(_ot, _ot.get_rect(midleft=(_or.x + int(8 * scale), _or.centery)))
-            # 滚轮/触控拖动滚动（v2.5.0：列表内按下即拖动，手指滑到哪到哪）
-            for _ev in getattr(g, 'scroll_events', []):
+        # 行定义： (key, rect, 显示文字, 选项[(label,value)], setter)
+        _ddk = getattr(g, 'net_dd_key', None)
+        _rows = [
+            ("net_cnt", C(40, 204, 560, 44), "最大人数：%d 人" % _ccn,
+             [("%d 人" % n, n) for n in (2, 3, 4)],
+             lambda v: setattr(g, 'coop_player_count', v)),
+            ("net_pvp", C(40, 256, 560, 44), "玩法：" + _pvtxt,
+             [("合作 nPvE", ("coop", 0))] +
+             [("对战 PvPvE（%d 阵营）" % n, ("pvp", n)) for n in (2, 3, 4)], _set_pvp),
+            ("net_mode", C(40, 308, 560, 44), "模式：" + _mode_names[_mi],
+             [(n, i) for i, n in enumerate(_mode_names)], _set_mode),
+            ("net_map", C(40, 360, 560, 44), "地图：" + _maps[_mapi],
+             [(m, i) for i, m in enumerate(_maps)],
+             lambda v: setattr(g, 'room_map_idx', v)),
+        ]
+
+        # ---- 左栏：输入框 ----
+        room_r = C(40, 100, 560, 44)
+        port_r = C(40, 152, 560, 44)
+        box(room_r, text="房间名：" + str(getattr(g, 'net_room_name', '') or ''),
+            focused=bool(getattr(g, 'net_room_focused', False)))
+        box(port_r, text="端口：" + str(getattr(g, 'net_port_input', '26000') or ''),
+            focused=bool(getattr(g, 'net_port_focused', False)))
+
+        # ---- 左栏：下拉行 ----
+        for _key, _r, _label, _opts, _setter in _rows:
+            box(_r, text=_label + ("   ▲" if _ddk == _key else "   ▼"))
+
+        # ---- 左栏：地址 + 复制 ----
+        addr_r = C(40, 412, 420, 44)
+        copy_r = C(468, 412, 132, 44)
+        box(addr_r, (22, 34, 30), (90, 170, 120), "本机地址  " + _addr, (170, 240, 190))
+        button(copy_r, "一键复制", (40, 90, 65), (90, 170, 120), self.game.font_small)
+        create_r = C(40, 476, 560, 52)
+        button(create_r, "创建房间（房主）", (40, 100, 48), GREEN)
+        txt("房主把上面地址发给队友；队友在右栏填 IP 或点房间即可加入",
+            320, 546, self.game.font_small, (145, 160, 180), center=True)
+        _tip = "同一 WiFi 下房间会自动出现在右栏；跨网需同一局域网或中继"
+        if _addr.startswith("169.254.") or _addr.startswith("127.0."):
+            _tip = "⚠ 未取到有效局域网 IP：请确认两台设备连的是同一个 WiFi"
+        txt(_tip, 320, 570, self.game.font_small,
+            CRIMSON if _addr.startswith("169.254.") else (145, 160, 180), center=True)
+
+        # ---- 右栏：输入框 ----
+        nick_r = C(680, 100, 560, 44)
+        ip_r = C(680, 152, 560, 44)
+        box(nick_r, text="我的昵称：" + str(getattr(g, 'net_nickname', '') or ''),
+            focused=bool(getattr(g, 'net_nick_focused', False)))
+        _ipv = str(getattr(g, 'net_ip_input', '') or '')
+        _iphint = _ipv or ("点此输入房主 IP（如 192.168.1.5）" if not getattr(g, 'net_ip_focused', False) else "")
+        box(ip_r, text="房主IP：" + _iphint + ("▏" if getattr(g, 'net_ip_focused', False) else ""),
+            col=(150, 165, 185) if not _ipv else WHITE,
+            focused=bool(getattr(g, 'net_ip_focused', False)))
+        port_info_r = C(680, 204, 560, 44)
+        box(port_info_r, (20, 24, 32), (60, 68, 82),
+            "端口：" + str(getattr(g, 'net_port_input', '26000') or '') + "（与房主一致，左栏可改）",
+            (170, 180, 195))
+        scan_r = C(680, 256, 560, 44)
+        button(scan_r, "重新扫描局域网房间", (36, 60, 92), (110, 170, 240), self.game.font_small)
+
+        # ---- 右栏：房间列表（铁锈战争式，常显不弹浮层）----
+        txt("发现的房间（点击直接加入）", 960, 310,
+            self.game.font_small, (170, 190, 215), center=True)
+        _room_rects = []
+        for _i, _rm in enumerate(_rooms[:4]):
+            _rr = C(680, 332 + _i * 48, 560, 44)
+            _room_rects.append((_rr, _rm))
+            _st = "已开始" if _rm.get('started') else "等待中"
+            _l1 = "%s  [%s]" % (_rm.get('room', '房间'), _st)
+            _l2 = "%s:%s · %s · %s/%s 人" % (_rm.get('ip', ''), _rm.get('port', ''),
+                                            _rm.get('mode', ''), _rm.get('players', 1), _rm.get('max', 4))
+            pygame.draw.rect(self.screen, (30, 36, 50), _rr, border_radius=8)
+            pygame.draw.rect(self.screen, (90, 130, 180), _rr, 1, border_radius=8)
+            _t1 = self.game.font_small.render(_l1, True, GOLD if not _rm.get('started') else GRAY)
+            self.screen.blit(_t1, (_rr.x + P(10), _rr.y + P(3)))
+            _t2 = self.game.font_small.render(_l2, True, (160, 180, 205))
+            self.screen.blit(_t2, (_rr.x + P(10), _rr.y + P(23)))
+        if not _rooms:
+            txt("暂未发现房间 · 也可直接填房主 IP 加入", 960, 352,
+                self.game.font_small, GRAY, center=True)
+        join_r = C(680, 540, 560, 52)
+        button(join_r, "加入房间", (60, 100, 44), GOLD)
+        _st = "已选房间：" + str(getattr(g, 'net_joined_room', '') or '（手动直连）')
+        txt(_st, 960, 604, self.game.font_small, (150, 175, 200), center=True)
+
+        # ---- 底部 ----
+        back_r = C(40, 650, 180, 44)
+        button(back_r, "返回", (70, 52, 52), GRAY, self.game.font_small)
+        _err = str(getattr(g, 'net_last_error', '') or '')
+        if _err:
+            txt(_err[:70], 700, 668, self.game.font_small, CRIMSON, center=True)
+        else:
+            txt("房主权威 · 客户端只发输入，世界由房主模拟", 700, 668,
+                self.game.font_small, (120, 132, 150), center=True)
+        if getattr(g, 'net_copy_hint', 0) > 0:
+            g.net_copy_hint = max(0.0, float(g.net_copy_hint) - 1 / 60.0)
+            txt("已复制地址，发给队友即可", 700, 636, self.game.font_small, GOLD, center=True)
+
+        # ================= 点击分派（按优先级消费）=================
+        # 1) 展开态：先算本帧选项矩形，处理选项点击
+        _overlay = []
+        if _ddk:
+            _hit = next((r for r in _rows if r[0] == _ddk), None)
+            if _hit:
+                _key, _brect, _label, _opts, _setter = _hit
+                _oy = _brect.bottom + P(2)
+                _oh = P(38)
+                _n = min(5, len(_opts))
+                _panel = pygame.Rect(_brect.x, _oy, _brect.w, _oh * _n + P(6))
+                _overlay.append(_brect)
+                _overlay.append(_panel)
+                _surf = pygame.Surface((_panel.w, _panel.h), pygame.SRCALPHA)
+                _surf.fill((18, 22, 32, 246))
+                self.screen.blit(_surf, _panel.topleft)
+                _scroll = max(0, min(max(0, len(_opts) - _n),
+                                     int(getattr(g, 'net_dd_scroll', 0) or 0)))
+                for _oi in range(_n):
+                    _o = _opts[_scroll + _oi]
+                    _or = pygame.Rect(_brect.x + P(3), _oy + P(3) + _oi * _oh,
+                                      _brect.w - P(6), _oh - P(4))
+                    pygame.draw.rect(self.screen, (42, 50, 68), _or, border_radius=6)
+                    pygame.draw.rect(self.screen, (95, 108, 132), _or, 1, border_radius=6)
+                    _t = self.game.font_small.render(str(_o[0]), True, WHITE)
+                    self.screen.blit(_t, _t.get_rect(midleft=(_or.x + P(10), _or.centery)))
+                    for _ci, _c in enumerate(_clk_all):
+                        if _ci in _consumed:
+                            continue
+                        if _or.collidepoint(_c):
+                            _setter(_o[1])
+                            g.net_dd_key = None
+                            g.net_dd_scroll = 0
+                            _consumed.add(_ci)
+                            break
+                for _ev in getattr(g, 'scroll_events', []) or []:
+                    try:
+                        g.net_dd_scroll = max(0, min(max(0, len(_opts) - _n),
+                            float(getattr(g, 'net_dd_scroll', 0) or 0) - int(_ev["dy"] / 20)))
+                    except Exception:
+                        pass
+        g._net_dd_overlay_rects = _overlay
+
+        # 2) 下拉行点击（展开 / 收起）
+        for _key, _r, _label, _opts, _setter in _rows:
+            for _ci, _c in enumerate(_clk_all):
+                if _ci in _consumed or not _r.collidepoint(_c):
+                    continue
+                g.net_dd_key = None if _ddk == _key else _key
+                g.net_dd_scroll = 0
+                _consumed.add(_ci)
+                break
+
+        # 3) 展开态点空白 → 只收起，不传给按钮（防误触）
+        if _ddk and not getattr(g, 'net_dd_key', None):
+            pass
+        elif getattr(g, 'net_dd_key', None):
+            for _ci, _c in enumerate(_clk_all):
+                if _ci in _consumed:
+                    continue
+                if not any(_r.collidepoint(_c) for _r in _overlay):
+                    g.net_dd_key = None
+                    _consumed.add(_ci)
+
+        # 4) 其余点击：输入框 / 按钮 / 房间行
+        _focus_rects = (room_r, nick_r, port_r, ip_r)
+        for _ci, _c in enumerate(_clk_all):
+            if _ci in _consumed:
+                continue
+            _in_room, _in_nick = room_r.collidepoint(_c), nick_r.collidepoint(_c)
+            _in_port, _in_ip = port_r.collidepoint(_c), ip_r.collidepoint(_c)
+            _in_focus = _in_room or _in_nick or _in_port or _in_ip
+            if not _in_focus and (getattr(g, 'net_ip_focused', False) or
+                                  getattr(g, 'net_port_focused', False) or
+                                  getattr(g, 'net_room_focused', False) or
+                                  getattr(g, 'net_nick_focused', False)):
+                for _k in ('net_ip_focused', 'net_port_focused', 'net_room_focused', 'net_nick_focused'):
+                    setattr(g, _k, False)
+                try: g.stop_text_input()
+                except Exception: pass
+            if _in_room or _in_nick or _in_port or _in_ip:
+                for _k in ('net_ip_focused', 'net_port_focused', 'net_room_focused', 'net_nick_focused'):
+                    setattr(g, _k, False)
+                if _in_room: g.net_room_focused = True
+                elif _in_nick: g.net_nick_focused = True
+                elif _in_port: g.net_port_focused = True
+                else: g.net_ip_focused = True
                 try:
-                    _dv = -int(_ev["dy"] / 20)
-                    _dd_scroll = max(0.0, min(float(max(0, _total - _vis)), _dd_scroll + _dv))
-                    g.net_dd_scroll = _dd_scroll
+                    g.stop_text_input()   # 先 stop 再 start，应对系统收起软键盘
+                    g.start_text_input()
                 except Exception:
                     pass
-            _net_dn = [te for te in getattr(g, 'touch_events', [])
-                       if te.get("type") == "down" and te.get("pos") is not None]
-            _net_mv = [te for te in getattr(g, 'touch_events', [])
-                       if te.get("type") in ("move", "motion") and te.get("pos") is not None]
-            if _net_dn:
-                for _te in _net_dn:
-                    if _brect.collidepoint(_te["pos"]):
-                        g.net_dd_drag = True
-                        g.net_dd_drag_start = float(_te["pos"][1])
-                        g.net_dd_drag_moved = False
-            if getattr(g, 'net_dd_drag', False) and _net_mv:
-                _fy = float(_net_mv[-1]["pos"][1])
-                _sy = float(getattr(g, 'net_dd_drag_start', _fy) or _fy)
-                if abs(_fy - _sy) >= max(4.0, 5.0 * scale):
-                    _ratio = (_fy - _oy) / float(max(1, _box_h))
-                    _dd_scroll = max(0.0, min(float(max(0, _total - _vis)), _ratio * (max(0, _total - _vis))))
-                    g.net_dd_scroll = _dd_scroll
-                    g.net_dd_drag_moved = True
-            if _clk is not None and not getattr(g, 'net_dd_drag_moved', False):
-                for _oi in range(_vis):
-                    _o = _options[_maxi + _oi]
-                    _or = pygame.Rect(_ox + int(2 * scale), _oy + int(3 * scale) + _oi * _dd_opt_h,
-                                      _ow - int(4 * scale), _dd_opt_h - int(4 * scale))
-                    if any(_or.collidepoint(_c) for _c in _clk_all):
-                        _setter(_o[1])
-                        g.net_dd_key = None
-                        _clk = None
-                        break
-            _net_ups = [te for te in getattr(g, 'touch_events', [])
-                        if te.get("type") == "up" and te.get("pos") is not None]
-            if _net_ups:
-                g.net_dd_drag = False
-                g.net_dd_drag_moved = False
-
-        g._net_dd_overlay_rects = _net_overlay
-        # v2.9.16：网络页下拉展开时只屏蔽"落在下拉区域上"的点击，
-        # 其余按钮（返回、复制、输入框）仍可正常操作，不再一刀切。
-        if getattr(g, 'net_dd_key', None) and _clk is not None:
-            # 只屏蔽"落在下拉区域"的点击（含下拉行与选项列表）；
-            # 这些已由 _dd_row / 选项循环消费，不再传给页面按钮。
-            _net_ov = [r for r in getattr(g, '_net_dd_overlay_rects', []) or []
-                       if hasattr(r, 'collidepoint')]
-            if any(_r.collidepoint(_c) for _c in _clk_all for _r in _net_ov):
-                _clk = None
-            else:
-                g.net_dd_key = None       # 点空白处先收起下拉
-                _clk = None
-        # 交互（输入框/按钮；下拉行已处理）
-        if _clk:
-            # v2.9.17：点击输入框以外的区域一律失焦并收起输入法；
-            # 再次点击输入框/端口框重新聚焦并唤起输入法。
-            _in_ip = ip_r.collidepoint(_clk)
-            _in_port = port_r.collidepoint(_clk)
-            if not _in_ip and not _in_port and not copy_r.collidepoint(_clk):
-                if getattr(g, 'net_ip_focused', False) or getattr(g, 'net_port_focused', False):
-                    g.net_ip_focused = False
-                    g.net_port_focused = False
-                    try: g.stop_text_input()
-                    except Exception: pass
-            if copy_r.collidepoint(_clk):
+                _consumed.add(_ci)
+                continue
+            if copy_r.collidepoint(_c):
                 if _zs_copy_text(_addr):
                     g.net_copy_hint = 2.5
                     g.net_last_error = ""
                 else:
-                    # 剪贴板不可用 → 至少把地址完整显示出来供手抄
-                    g.net_last_error = "剪贴板不可用，请手抄地址：" + _addr
-            elif host_r.collidepoint(_clk):
+                    g.net_last_error = "剪贴板不可用，请手抄：" + _addr
+                _consumed.add(_ci)
+            elif create_r.collidepoint(_c):
+                g.net_last_error = ""
                 g._net_start_host()
-            elif port_r.collidepoint(_clk):
-                g.net_ip_focused = False
-                # 重新点击已聚焦的输入框也要重新唤起输入法（可能被系统收起）
-                try: g.stop_text_input()
-                except Exception: pass
-                g.net_port_focused = True
-                g.start_text_input()
-            elif ip_r.collidepoint(_clk):
-                g.net_port_focused = False
-                try: g.stop_text_input()
-                except Exception: pass
-                g.net_ip_focused = True
-                g.start_text_input()
-            elif join_r.collidepoint(_clk):
-                g.net_ip_focused = False
-                g.net_port_focused = False
-                g.stop_text_input()
+                _consumed.add(_ci)
+            elif scan_r.collidepoint(_c):
+                try:
+                    g._net_stop_discovery(); g._net_start_discovery()
+                except Exception:
+                    pass
+                _consumed.add(_ci)
+            elif join_r.collidepoint(_c):
+                g.net_last_error = ""
                 g._net_join()
-            elif back_r.collidepoint(_clk):
-                g.net_ip_focused = False
-                g.net_port_focused = False
-                g.stop_text_input()
+                _consumed.add(_ci)
+            elif back_r.collidepoint(_c):
+                for _k in ('net_ip_focused', 'net_port_focused', 'net_room_focused', 'net_nick_focused'):
+                    setattr(g, _k, False)
+                try: g.stop_text_input()
+                except Exception: pass
                 g.state = GameState.MULTIPLAYER_SELECT
-        if getattr(g, 'net_last_error', None):
-            _et = self.game.font_small.render(
-                str(g.net_last_error)[:60], True, CRIMSON)
-            self.screen.blit(_et, _et.get_rect(center=(sw // 2, int(sh - 16 * scale))))
+                _consumed.add(_ci)
+            else:
+                _joined = False
+                for _rr, _rm in _room_rects:
+                    if _rr.collidepoint(_c) and not _rm.get('started'):
+                        g._net_join_room(_rm)
+                        _joined = True
+                        break
+                if _joined:
+                    _consumed.add(_ci)
 
     def _draw_net_wait(self):
-        """网络等待：主机等待客户端 / 客户端连接中"""
+        """v2.9.19 等待页重排：房主/客户端分区清晰、零重叠、触控与鼠标都能点。
+
+        旧版把「玩家列表」和「状态文字」都画在 y=256~274，互相压住；
+        而且按钮只看 mouse_pressed[0]，手机触控完全点不动。
+        """
         self.screen.fill(VOID_BLACK)
-        scale = self.game.scale
-        sw = self.game.scaled_width
         g = self.game
-        mouse_pos = pygame.mouse.get_pos()
-        mouse_pressed = pygame.mouse.get_pressed()
+        s = g.scale
+        sw, sh = g.scaled_width, g.scaled_height
+        def P(v): return int(v * s)
+        def C(x, y, w, h): return pygame.Rect(P(x), P(y), P(w), P(h))
+        def txt(t, x, y, f=None, col=None, center=True):
+            _f = f or self.game.font_small
+            _t = _f.render(t, True, col or LIGHT_GRAY)
+            _r = _t.get_rect(center=(P(x), P(y))) if center else _t.get_rect(topleft=(P(x), P(y)))
+            self.screen.blit(_t, _r)
+        def btn(r, t, fill, edge):
+            pygame.draw.rect(self.screen, fill, r, border_radius=9)
+            pygame.draw.rect(self.screen, edge, r, 2, border_radius=9)
+            txt(t, r.centerx / s, r.centery / s, self.game.font_small, WHITE)
+
+        _ups = [te["pos"] for te in getattr(g, 'touch_events', [])
+                if te.get("type") == "up" and te.get("pos") is not None]
+        _mp = pygame.mouse.get_pos(); _mpr = pygame.mouse.get_pressed()
+        if not _ups and _mpr[0]:
+            _ups = [_mp]
+        def hit(r): return any(r.collidepoint(c) for c in _ups)
+
         if g.net_role == "host":
-            # v2.9.15：建房后最需要"我该怎么告诉队友"
+            txt("等待玩家加入", 640, 44, self.game.font_title, WHITE)
+            _addr = _zs_host_addr(g)
+            addr_r = C(340, 92, 470, 46)
+            copy_r = C(818, 92, 122, 46)
+            pygame.draw.rect(self.screen, (22, 34, 30), addr_r, border_radius=8)
+            pygame.draw.rect(self.screen, (90, 170, 120), addr_r, 2, border_radius=8)
+            txt("发给队友  " + _addr, 350, 115, self.game.font_small, (170, 240, 190), center=False)
+            pygame.draw.rect(self.screen, (40, 90, 65), copy_r, border_radius=8)
+            txt("一键复制", 879, 115, self.game.font_small, WHITE)
+            if hit(copy_r):
+                if _zs_copy_text(_addr):
+                    g.net_copy_hint = 2.5; g.net_last_error = ""
+                else:
+                    g.net_last_error = "剪贴板不可用，请手抄：" + _addr
+            txt("本机 IP: %s    端口: %s" % (g._get_local_ip(), g.net_port),
+                640, 160, self.game.font, GOLD)
             try:
-                _wa = _zs_host_addr(g)
-                _wr = pygame.Rect(int(sw // 2 - 210 * scale), int(96 * scale),
-                                  int(320 * scale), int(40 * scale))
-                _wc = pygame.Rect(int(_wr.right + 8 * scale), _wr.y,
-                                  int(100 * scale), _wr.h)
-                pygame.draw.rect(self.screen, (22, 34, 30), _wr, border_radius=8)
-                pygame.draw.rect(self.screen, (90, 170, 120), _wr, 2, border_radius=8)
-                _wt = self.game.font_small.render("房间地址  " + _wa, True, (170, 240, 190))
-                self.screen.blit(_wt, _wt.get_rect(midleft=(_wr.x + int(8 * scale), _wr.centery)))
-                pygame.draw.rect(self.screen, (40, 90, 65), _wc, border_radius=8)
-                _wct = self.game.font_small.render("复制", True, WHITE)
-                self.screen.blit(_wct, _wct.get_rect(center=_wc.center))
-                if mouse_pressed[0] and _wc.collidepoint(mouse_pos):
-                    g.net_copy_hint = 2.5 if _zs_copy_text(_wa) else 0
-                if getattr(g, 'net_copy_hint', 0) > 0:
-                    _wh = self.game.font_small.render("已复制，发给队友即可", True, GOLD)
-                    self.screen.blit(_wh, (int(sw // 2 - 210 * scale), int(140 * scale)))
-            except Exception:
-                pass
-            title = self.game.font_title.render("等待玩家加入...", True, WHITE)
-            self.screen.blit(title, title.get_rect(center=(sw // 2, int(120 * scale))))
-            host_ip = g._get_local_ip()
-            info = self.game.font.render(f"主机IP: {host_ip}    端口: {g.net_port}", True, GOLD)
-            self.screen.blit(info, info.get_rect(center=(sw // 2, int(200 * scale))))
-            # v2.9.11：房间名 + 已连玩家（昵称 / 延迟），房主权威可见
-            try:
-                _rn = self.game.font_small.render(
-                    f"房间「{g.net_host.room_name}」  房主 {g.net_host.host_name}",
-                    True, CYAN)
-                self.screen.blit(_rn, _rn.get_rect(center=(sw // 2, int(232 * scale))))
+                txt("房间「%s」  房主 %s" % (g.net_host.room_name, g.net_host.host_name),
+                    640, 192, self.game.font_small, CYAN)
                 _peers = g.net_host.peer_info()
-                _pl = [f"P1 {g.net_host.host_name} (本机)"]
+                _lines = ["P1  %s  (本机)" % g.net_host.host_name]
                 for _k, _v in sorted(_peers.items()):
-                    _pl.append(f"P{_k + 1} {_v.get('nickname') or '玩家'}  "
-                               f"{_v.get('rtt_ms', '-')}ms")
-                for _i, _t in enumerate(_pl[:2]):
-                    _pt = self.game.font_small.render(_t, True, LIGHT_GRAY)
-                    self.screen.blit(_pt, _pt.get_rect(
-                        center=(sw // 2, int((256 + _i * 18) * scale))))
+                    _lines.append("P%d  %s  %sms" % (_k + 1, _v.get('nickname') or '玩家',
+                                                    _v.get('rtt_ms', '-')))
+                for _i, _l in enumerate(_lines[:4]):
+                    txt(_l, 640, 226 + _i * 24, self.game.font_small, LIGHT_GRAY)
             except Exception:
                 pass
-            status = "已连接！点击开始游戏" if (g.net_host and g.net_host.connected) else "等待客户端连接..."
-            col = GREEN if (g.net_host and g.net_host.connected) else LIGHT_GRAY
-            st = self.game.font.render(status, True, col)
-            self.screen.blit(st, st.get_rect(center=(sw // 2, int(260 * scale))))
-            # 开始按钮（客户端已连接时可用）
-            start_r = pygame.Rect(int(sw // 2 - 150 * scale), int(330 * scale), int(300 * scale), int(55 * scale))
-            can_start = bool(g.net_host and g.net_host.connected)
-            pygame.draw.rect(self.screen, (40, 90, 40) if can_start else (50, 50, 55), start_r, border_radius=10)
-            pygame.draw.rect(self.screen, GREEN if can_start else GRAY, start_r, 2, border_radius=10)
-            stxt = self.game.font.render("开始游戏", True, WHITE)
-            self.screen.blit(stxt, stxt.get_rect(center=start_r.center))
-            # 取消
-            cancel_r = pygame.Rect(int(sw // 2 - 150 * scale), int(410 * scale), int(300 * scale), int(44 * scale))
-            pygame.draw.rect(self.screen, (60, 50, 50), cancel_r, border_radius=10)
-            pygame.draw.rect(self.screen, GRAY, cancel_r, 2, border_radius=10)
-            ct = self.game.font_small.render("取消", True, LIGHT_GRAY)
-            self.screen.blit(ct, ct.get_rect(center=cancel_r.center))
-            if mouse_pressed[0]:
-                if can_start and start_r.collidepoint(mouse_pos):
-                    g._net_host_start_game()
-                elif cancel_r.collidepoint(mouse_pos):
-                    g._net_stop()
-        else:
-            title = self.game.font_title.render("连接中...", True, WHITE)
-            self.screen.blit(title, title.get_rect(center=(sw // 2, int(120 * scale))))
-            if g.net_client and g.net_client.connected:
-                status = "已连接！等待主机开始游戏..."
-                col = GREEN
-            elif g.net_client and g.net_client.error:
-                status = f"连接失败: {g.net_client.error}"
-                col = CRIMSON
-            else:
-                status = f"正在连接 {g.net_ip_input}:{g.net_port} ..."
-                col = LIGHT_GRAY
-            st = self.game.font.render(status, True, col)
-            self.screen.blit(st, st.get_rect(center=(sw // 2, int(220 * scale))))
-            # v2.9.11：客户端显示房间 / 房主 / 延迟
-            try:
-                _nc = g.net_client
-                _extra = f"房间「{_nc.server_room or '-'}」 房主 {_nc.server_host or '-'}"
-                if getattr(_nc, 'rtt_ms', None):
-                    _extra += f"  {_nc.rtt_ms}ms"
-                _xt = self.game.font_small.render(_extra, True, CYAN)
-                self.screen.blit(_xt, _xt.get_rect(center=(sw // 2, int(252 * scale))))
-            except Exception:
-                pass
-            cancel_r = pygame.Rect(int(sw // 2 - 150 * scale), int(330 * scale), int(300 * scale), int(44 * scale))
-            pygame.draw.rect(self.screen, (60, 50, 50), cancel_r, border_radius=10)
-            pygame.draw.rect(self.screen, GRAY, cancel_r, 2, border_radius=10)
-            ct = self.game.font_small.render("取消", True, LIGHT_GRAY)
-            self.screen.blit(ct, ct.get_rect(center=cancel_r.center))
-            if mouse_pressed[0] and cancel_r.collidepoint(mouse_pos):
+            _conn = bool(g.net_host and g.net_host.connected)
+            txt("已连接！点击开始游戏" if _conn else "等待客户端连接（同 WiFi 或输入上方地址）",
+                640, 332, self.game.font, GREEN if _conn else LIGHT_GRAY)
+            start_r = C(490, 372, 300, 54)
+            cancel_r = C(490, 444, 300, 46)
+            btn(start_r, "开始游戏", (40, 90, 40) if _conn else (50, 50, 55),
+                GREEN if _conn else GRAY)
+            btn(cancel_r, "取消房间", (64, 48, 48), GRAY)
+            if _conn and hit(start_r):
+                g._net_host_start_game()
+            elif hit(cancel_r):
                 g._net_stop()
-            # 客户端收到 started 快照 → 进入客户端游玩
-            if g.net_client and g.net_client.get_snapshot().get("started"):
-                g.state = GameState.NET_CLIENT_PLAY
+        else:
+            txt("加入房间", 640, 60, self.game.font_title, WHITE)
+            _nc = g.net_client
+            if _nc and _nc.connected and not getattr(_nc, 'error', None):
+                _st, _col = "已连接！等待房主开始游戏...", GREEN
+            elif _nc and getattr(_nc, 'error', None):
+                _st, _col = "连接失败：" + str(_nc.error)[:46], CRIMSON
+            else:
+                _st, _col = "正在连接 %s:%s ..." % (getattr(g, 'net_ip_input', ''), g.net_port), LIGHT_GRAY
+            txt(_st, 640, 156, self.game.font, _col)
+            try:
+                txt("房间「%s」  房主 %s  %s" % (
+                    getattr(_nc, 'server_room', '-') or '-',
+                    getattr(_nc, 'server_host', '-') or '-',
+                    ("%sms" % _nc.rtt_ms) if getattr(_nc, 'rtt_ms', None) else ''),
+                    640, 196, self.game.font_small, CYAN)
+            except Exception:
+                pass
+            _err = str(getattr(g, 'net_last_error', '') or '')
+            if _err:
+                txt(_err[:64], 640, 232, self.game.font_small, CRIMSON)
+            else:
+                txt("连不上？确认两台设备同一 WiFi、房主已创建房间、IP 与端口一致",
+                    640, 232, self.game.font_small, (150, 165, 185))
+            cancel_r = C(490, 300, 300, 48)
+            btn(cancel_r, "取消连接 / 返回", (64, 48, 48), GRAY)
+            if hit(cancel_r):
+                g._net_stop()
+            try:
+                if _nc and _nc.get_snapshot().get("started"):
+                    g.state = GameState.NET_CLIENT_PLAY
+            except Exception:
+                pass
+        if getattr(g, 'net_copy_hint', 0) > 0:
+            g.net_copy_hint = max(0.0, float(g.net_copy_hint) - 1 / 60.0)
+            txt("已复制地址，发给队友即可", 640, 520, self.game.font_small, GOLD)
 
     def _draw_net_client(self):
         """网络客户端游玩：渲染主机广播的世界快照"""

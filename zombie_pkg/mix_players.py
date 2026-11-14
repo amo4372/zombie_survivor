@@ -204,10 +204,8 @@ class PlayerRegistryMixin:
             _me = getattr(self, 'player', None)
             if _me is None:
                 return False
-            if getattr(self.config, 'pvp_enabled', False):
-                self.spectating = False
-                self.spectate_target = None
-                return False
+            # v2.9.19：不再因 PvP 开关直接放弃观战 —— 玩家死了但同阵营
+            # 友方 AI 还活着时，本局必须继续（用户明确要求）。
             # 自己是否彻底出局
             _out = (not getattr(_me, 'alive', True)) and \
                    (not getattr(_me, 'downed', False)
@@ -216,15 +214,18 @@ class PlayerRegistryMixin:
                 self.spectating = False
                 self.spectate_target = None
                 return False
-            if not self.is_multiplayer_active():
+            if len(self.registered_players()) < 2:
                 # 单人模式自己死了就是结束，交给正常结算
                 self.spectating = False
                 self.spectate_target = None
                 return False
-            # 找还活着的队友
+            # v2.9.19：只跟随**同阵营**存活者（含 AI），PvP 里不去看对手
+            _my_team = int(getattr(_me, 'team_id', 0) or 0)
             _target = None
             for _p in self.registered_players():
                 if _p is _me:
+                    continue
+                if int(getattr(_p, 'team_id', 0) or 0) != _my_team:
                     continue
                 if getattr(_p, 'alive', False) and not getattr(_p, 'permanently_dead', False):
                     _target = _p
@@ -272,19 +273,23 @@ class PlayerRegistryMixin:
         return max(self.ZOOM_MIN, min(1.0, _z))
 
     def update_dynamic_zoom_for(self, cam, player, dt):
-        """v2.9.18：为**任意**摄像机/玩家对计算动态 zoom（分屏各自独立）。
+        """v2.9.19：只在「主动瞄准」时拉远，其余时刻必定回弹到 1.0。
 
-        全模式统一：武器射程 / 蓄力收敛 / 技能预瞄距离取最大值，
-        超出当前视口可见范围时平滑拉远（zoom<1），松开后恢复基准。
+        旧版把 `武器射程 * 0.5` 当成常驻目标距离，于是拿到 AWM / 轨道炮
+        （range 1100+）一进游戏 zoom 就掉到 0.45，而且目标值永远不是基准，
+        平滑项再怎么算也回不来 —— 这就是"一进游戏就缩放、不回弹"的根因。
+
+        现在：**只有按住蓄力射击 / 技能预瞄进行中**才计算拉远；
+        常态目标恒为 1.0，且基准固定写死，绝不被当前 zoom 污染。
         """
         try:
             if cam is None or player is None:
                 return
             if not hasattr(cam, "zoom"):
                 cam.zoom = 1.0
-            if getattr(cam, "_zoom_base", 0.0) <= 0.0:
-                cam._zoom_base = float(getattr(cam, "zoom", 1.0) or 1.0)
-            _base = cam._zoom_base
+            # 基准永远固定，防止上一局残留的 zoom 把 base 拉低
+            cam._zoom_base = 1.0
+            _base = 1.0
             try:
                 _w = player.get_current_weapon()
             except Exception:
@@ -297,24 +302,28 @@ class PlayerRegistryMixin:
             _charge = bool(_w is not None and getattr(_w, "hold_charge", False)
                            and (getattr(player, "_awm_saved", None) is not None
                                 or getattr(player, "_charge_active", False)))
-            _want = max(float(getattr(player, "_aim_dist", 0.0) or 0.0), _wr * 0.5)
-            if _charge:
-                _want = max(_want, _wr * (0.35 + 0.65 * _ratio))
-            try:
-                _want = max(_want, float(getattr(player, "_skill_aim_dist", 0.0) or 0.0))
-            except Exception:
-                pass
-            if _want <= 0:
+            # 技能预瞄只在 caster 确实处于瞄准态时算数，避免残留值卡住视野
+            _caster = getattr(self, "skill_caster", None)
+            _casting = bool(_caster is not None and (
+                getattr(_caster, "active", False) or getattr(_caster, "aiming", False)))
+            _skill_d = float(getattr(player, "_skill_aim_dist", 0.0) or 0.0) if _casting else 0.0
+            _aiming = bool(_charge or _skill_d > 0.0)
+            if not _aiming:
                 _target = _base
             else:
-                _vis = 0.5 * min(float(getattr(self, "scaled_width", 1280) or 1280),
-                                 float(getattr(self, "scaled_height", 720) or 720))
-                _z = _vis / max(1.0, float(_want))
-                _target = max(0.45, min(_base, _z))
+                _want = max(_skill_d, _wr * (0.35 + 0.65 * _ratio) if _charge else 0.0)
+                if _want <= 0:
+                    _target = _base
+                else:
+                    _vis = 0.5 * min(float(getattr(self, "scaled_width", 1280) or 1280),
+                                     float(getattr(self, "scaled_height", 720) or 720))
+                    _z = _vis / max(1.0, float(_want))
+                    _target = max(0.45, min(_base, _z))
             _cur = float(getattr(cam, "zoom", 1.0) or 1.0)
-            _k = 1.0 - pow(0.001, max(0.0, float(dt)))
+            _k = 1.0 - pow(0.0001, max(0.0, float(dt)))
             cam.zoom = _cur + (_target - _cur) * _k
-            if abs(cam.zoom - _base) < 0.002:
+            # 回弹末端直接吸附，杜绝"差一点点永远回不到 1.0"
+            if abs(cam.zoom - _base) < 0.004:
                 cam.zoom = _base
         except Exception:
             pass

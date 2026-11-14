@@ -29,6 +29,30 @@ import random
 from dataclasses import dataclass, field
 from enum import Enum
 
+# v2.9.19：AI 玩家实体。**不复制玩法**，直接继承多人玩家同一个 Player 类，
+# 因此伤害 / 状态 / 升级 / 回放 / 图鉴 / 技能树 / 抗性等全部接口天然一致；
+# 这里只多挂两个标记字段供上层识别"这是 AI 而非人类视口"。
+try:
+    from entities_pkg.player import Player as _PlayerBase
+except Exception:                                    # pragma: no cover
+    from entities import Player as _PlayerBase
+
+
+class AIPlayer(_PlayerBase):
+    """多人模式 AI 玩家实体（与人类玩家共用全部接口）。
+
+    * is_bot         → 视口/HUD/输入分派据此排除，不再为 AI 开视口
+    * bot_profile    → 阵营/难度/策略配置，供伤害与胜负判定读取
+    * ai_controller  → 反向引用 PlayerBot（可选，方便调试）
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.is_bot = True
+        self.bot_profile = None
+        self.ai_controller = None
+
+
 
 class BotDifficulty(Enum):
     EASY = "简单"
@@ -138,47 +162,93 @@ class PlayerBot:
                 and self.perception.visible(p)]
 
     def _team_of(self, p):
-        return int(getattr(p, 'team', 0) or 0)
+        # v2.9.19：优先 team_id（现有 PvP/救援/伤害链路都读它）
+        return int(getattr(p, 'team_id', getattr(p, 'team', 0)) or 0)
 
     def _is_foe_player(self, p):
-        g = self.game
-        _pvp = bool(getattr(getattr(g, 'config', None), 'pvp_enabled', False))
-        return _pvp and self._team_of(p) != self._team_of(self.player)
+        """v2.9.19：敌方 AI 必须能打人类玩家、也必须与友方 AI 区分。
+
+        旧版只有 config.pvp_enabled=True 才算敌对，而加 AI 时没人去开这个
+        开关 → 敌方 AI 永远把人类当队友，既不攻击也不结算。现在按队伍判定。
+        """
+        _me = self.player
+        if getattr(p, 'bot_hostile', None) is not None or getattr(_me, 'bot_hostile', None) is not None:
+            _ph = bool(getattr(p, 'bot_hostile', False))
+            _mh = bool(getattr(_me, 'bot_hostile', False))
+            # 人类视为友方阵营；只要两边 hostile 不同就是敌人
+            if _ph != _mh:
+                return True
+        _a, _b = self._team_of(_me), self._team_of(p)
+        if _a == _b:
+            return False
+        return bool(getattr(getattr(self.game, 'config', None), 'pvp_enabled', False)) \
+            or bool(getattr(p, 'bot_hostile', False)) or bool(getattr(_me, 'bot_hostile', False))
 
     # ------------------------------------------------------------ 决策
     def _pick_target(self):
+        """v2.9.19：目标优先级 敌方玩家 > 倒地队友(救援) > 僵尸 > 经验球。
+
+        旧版没有经验球，无敌人时 _decide_move 用 `cos(_angle*0.7)` 原地
+        绕圈（"一直转，也不吃经验"），而且 `_angle` 在无目标时从不更新。
+        """
         g = self.game
         _p = self.player
+        self._target_kind = "foe"
         _foes = [p for p in self._other_players() if self._is_foe_player(p)]
         _z = self._candidates()
         _hp_ratio = float(getattr(_p, 'hp', 1)) / max(1.0, float(getattr(_p, 'max_hp', 100)))
+
+        # 友方 AI（含非激进策略）看到倒地队友 → 过去救援
+        if not getattr(_p, 'bot_hostile', False):
+            _down = [p for p in self._other_players()
+                     if getattr(p, 'downed', False) and not self._is_foe_player(p)]
+            if _down:
+                self._target_kind = "rescue"
+                return min(_down, key=lambda o: (o.x - _p.x) ** 2 + (o.y - _p.y) ** 2)
         if self.tactic is BotTactic.AGGRESSIVE and _foes:
             return min(_foes, key=lambda o: (o.x - _p.x) ** 2 + (o.y - _p.y) ** 2)
-        if self.tactic is BotTactic.SUPPORT:
-            # 优先救援倒地队友
-            for p in self._other_players():
-                if getattr(p, 'downed', False) and not self._is_foe_player(p):
-                    return p
         if self.tactic is BotTactic.SURVIVAL and _hp_ratio < 0.35 and _z:
-            # 低血：把最近僵尸当"要远离的对象"，由 _decide_move 处理
             return min(_z, key=lambda o: (o.x - _p.x) ** 2 + (o.y - _p.y) ** 2)
         if _z:
             return min(_z, key=lambda o: (o.x - _p.x) ** 2 + (o.y - _p.y) ** 2)
-        return _foes[0] if _foes else None
+        if _foes:
+            return min(_foes, key=lambda o: (o.x - _p.x) ** 2 + (o.y - _p.y) ** 2)
+        # 没有敌人：去捡最近的经验球 / 世界道具
+        _orbs = [o for o in (getattr(g, 'exp_orbs', []) or [])
+                 if getattr(o, 'alive', True) and self.perception.visible(o, 900.0)]
+        if _orbs:
+            self._target_kind = "pickup"
+            return min(_orbs, key=lambda o: (o.x - _p.x) ** 2 + (o.y - _p.y) ** 2)
+        _items = [o for o in (getattr(getattr(g, 'world', None), 'items', []) or [])
+                  if getattr(o, 'alive', True) and self.perception.visible(o, 700.0)]
+        if _items:
+            self._target_kind = "pickup"
+            return min(_items, key=lambda o: (o.x - _p.x) ** 2 + (o.y - _p.y) ** 2)
+        self._target_kind = "idle"
+        return None
 
     def _decide_move(self, target, dt):
         _p = self.player
         _hp_ratio = float(getattr(_p, 'hp', 1)) / max(1.0, float(getattr(_p, 'max_hp', 100)))
         if target is None:
-            # 无目标：缓慢游走拾取
-            self._move_x = math.cos(self._angle * 0.7 + self._strafe) * 0.35
-            self._move_y = math.sin(self._angle * 0.7 + self._strafe) * 0.35
+            # v2.9.19：无目标走直线巡逻（旧版用不断变化的 _angle 算出旋转轨迹 → 一直转圈）
+            self._patrol_t = getattr(self, '_patrol_t', 0.0) + 0.016
+            if self._patrol_t > 3.2:
+                self._patrol_t = 0.0
+                self._patrol_angle = getattr(self, '_patrol_angle', random.uniform(0, 6.28)) \
+                    + random.uniform(-1.2, 1.2)
+            _pa = getattr(self, '_patrol_angle', 0.0)
+            self._move_x = math.cos(_pa) * 0.65
+            self._move_y = math.sin(_pa) * 0.65
+            self._angle = math.degrees(_pa)
             return
         dx, dy = target.x - _p.x, target.y - _p.y
         d = math.hypot(dx, dy) or 1.0
         ux, uy = dx / d, dy / d
         _want = 0.0
-        if self.tactic is BotTactic.SNIPER:
+        if getattr(self, '_target_kind', 'foe') in ('rescue', 'pickup'):
+            _want = 26.0
+        elif self.tactic is BotTactic.SNIPER:
             _want = 420.0
         elif self.tactic is BotTactic.AMBUSHER:
             _want = 190.0
@@ -226,23 +296,55 @@ class PlayerBot:
                     return
 
     def _try_skill(self, dt):
+        """v2.9.19：AI 会放技能。技能来源 = 自己 skill_tree 里已点出的主动技。
+
+        旧版读 `active_skills`（其实是**冷却字典**），几乎永远为空或不合法，
+        所以"AI 放不出技能"。
+        """
         _p = self.player
         _rate = self.diff.params[3]
         self._skill_t -= dt
         if self._skill_t > 0 or random.random() > _rate * dt * 2.2:
             return
-        self._skill_t = 1.2 + random.random() * 1.6
+        self._skill_t = 1.0 + random.random() * 1.4
         try:
-            _skills = list(getattr(_p, 'active_skills', {}) or {})
-            # 只挑已冷却好、且属于主动类的技能
-            for st in _skills:
-                if float(getattr(_p, 'active_skills', {}).get(st, 0) or 0) > 0:
+            _tree = getattr(_p, 'skill_tree', None)
+            # v2.9.19：SkillTree.skills 是 **list[Skill]**，旧版按 dict.items()
+            # 遍历，结果永远空 → "AI 放不出技能"。
+            _skills = getattr(_tree, 'skills', None) or []
+            if isinstance(_skills, dict):
+                _iter = [(_k, _v) for _k, _v in _skills.items()]
+            else:
+                _iter = [(getattr(_sk, 'skill_type', None), _sk) for _sk in _skills]
+            _cds = getattr(_p, 'active_skills', {}) or {}
+            _usable = []
+            for _st, _sk in _iter:
+                if _st is None or _st in _cds:
                     continue
-                _ok = self.game._bot_use_skill(_p, st)
-                if _ok:
-                    break
+                if float(getattr(_sk, 'current_level', 0) or 0) <= 0:
+                    continue
+                if not getattr(_sk, 'is_active', False):
+                    continue
+                _usable.append(_st)
+            if not _usable:
+                return
+            _st = random.choice(_usable)
+            self.game._bot_use_skill(_p, _st, self._angle)
         except Exception:
             pass
+
+    def _try_rescue(self):
+        """v2.9.19：靠近倒地队友即由通用救援系统累计进度；这里只负责
+        把 AI 停在救援半径内并保持朝向，避免出现"跑过头"导致进度反复清零。"""
+        if getattr(self, '_target_kind', '') != 'rescue':
+            return
+        _mate = self._target
+        if _mate is None:
+            return
+        _d = math.hypot(_mate.x - self.player.x, _mate.y - self.player.y)
+        if _d < 100:
+            self._move_x *= 0.25
+            self._move_y *= 0.25
 
     def update(self, dt):
         _p = self.player
@@ -262,13 +364,14 @@ class PlayerBot:
                       getattr(self.game, 'world', None), sprinting=False)
         except Exception:
             pass
-        # 开火（超难强锁：命中率 100%）
-        if self._target is not None:
+        # 开火（超难强锁：命中率 100%）；拾取物 / 倒地队友不是射击目标
+        if self._target is not None and getattr(self, '_target_kind', 'foe') == 'foe':
             try:
                 self.game._bot_fire(_p, self._angle,
                                     locked=bool(self.diff.params[5]))
             except Exception:
                 pass
+        self._try_rescue()
         self._try_block()
         self._try_skill(dt)
 
@@ -290,14 +393,22 @@ class BotManager:
         """在 start_game 末尾调用：把启用的 AI 创建成 Player 并注册到槽位。"""
         g = self.game
         self.bots = []
-        try:
-            from entities_pkg.player import Player
-        except Exception:
-            try:
-                from entities import Player
-            except Exception:
-                return
+        _PlayerCls = AIPlayer
         _slot = max(1, int(human_count)) + 1
+        # v2.9.19：只要存在敌方 AI，就开启 PvP 结算链路并给人类分队，
+        # 否则敌方 AI 的攻击/胜负判定会被"合作模式同阵营"整个吞掉。
+        _has_hostile = any(p.hostile for p in self.enabled_profiles())
+        if _has_hostile:
+            try:
+                g.config.pvp_enabled = True
+                g.config.pvp_teams = max(2, int(getattr(g.config, 'pvp_teams', 2) or 2))
+            except Exception:
+                pass
+            try:
+                if getattr(g, 'player', None) is not None:
+                    g.player.team_id = 0
+            except Exception:
+                pass
         for prof in self.enabled_profiles():
             if _slot > 10:
                 break
@@ -305,12 +416,26 @@ class BotManager:
                 _base = getattr(g, 'player', None)
                 _x = (_base.x if _base else 0) + random.randint(-260, 260)
                 _y = (_base.y if _base else 0) + random.randint(-260, 260)
+                # v2.9.19：夹到地图边界内，否则 AI 出生在界外会被 world
+                # 碰撞逻辑钉死，表现就是"一直站着不动 / 一直转"
+                try:
+                    _bd = getattr(getattr(g, 'world', None), 'bounds', None)
+                    if _bd and len(_bd) == 2:
+                        _lo, _hi = float(_bd[0]) + 40.0, float(_bd[1]) - 40.0
+                        if _hi > _lo:
+                            _x = max(_lo, min(_hi, _x))
+                            _y = max(_lo, min(_hi, _y))
+                except Exception:
+                    pass
                 _w = prof.weapon or getattr(g, 'selected_weapon', None)
-                _pl = Player(_x, _y, start_weapon=_w)
+                _pl = _PlayerCls(_x, _y, start_weapon=_w)
                 _pl.is_bot = True
                 _pl.bot_profile = prof
-                _pl.team = int(prof.team)
                 _pl.bot_hostile = bool(prof.hostile)
+                # v2.9.19：team_id 才是现有伤害/救援/胜负链路读的字段（旧版只写 .team）
+                _pl.team = 1 if prof.hostile else 0
+                _pl.team_id = 1 if prof.hostile else 0
+                prof.team = _pl.team_id
                 try:
                     if prof.character:
                         from gamedata.models import CharacterData
@@ -321,7 +446,9 @@ class BotManager:
                     pass
                 _attr = g.PLAYER_ATTRS[_slot - 1]
                 setattr(g, _attr, _pl)
-                self.bots.append(PlayerBot(g, _pl, prof))
+                _bot = PlayerBot(g, _pl, prof)
+                _pl.ai_controller = _bot
+                self.bots.append(_bot)
             except Exception:
                 continue
             _slot += 1

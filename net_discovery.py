@@ -1,11 +1,16 @@
 # -*- coding: utf-8 -*-
-"""局域网房间发现（UDP 广播，v2.9.11）
+"""局域网房间发现（UDP 广播，v2.9.11 / v2.9.19 加固）
 
-主机每秒向 255.255.255.255:26001 广播一条信标，客户端监听同端口即可
-看到「同一 WiFi / 同一局域网」里所有房间，点一下直接加入，不用手输 IP。
+主机每 0.6s 广播一条信标，客户端监听同端口即可看到「同一 WiFi / 同一局域网」
+里所有房间，点一下直接加入，不用手输 IP。
 
-跨网段（邻居家 / 外地）广播到不了，需要走 net_p2p.py 的信令 + 打洞 /
-中继，本模块只负责局域网这一段。
+v2.9.19：Android 与家用路由常丢弃 255.255.255.255 全局广播，因此同时发送
+**子网定向广播**（由本机 IP 推导 /24、/16）与常见热点网段；信标里附带
+host_ip，客户端不再依赖 UDP 源地址。监听端加 SO_REUSEPORT，避免端口占用
+导致「同一 WiFi 两台设备互相看不见」。
+
+跨网段（邻居家 / 外地）广播到不了，需要走 net_p2p.py 的信令 + 打洞 / 中继，
+本模块只负责局域网这一段。
 """
 import socket
 import threading
@@ -14,6 +19,43 @@ import json
 
 BROADCAST_PORT = 26001
 MAGIC = "ZSLAN1"
+
+
+def local_lan_ip():
+    """取本机局域网地址（UDP connect 不实际发包），优先私有网段。"""
+    _cands = []
+    try:
+        _sk = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            _sk.connect(("8.8.8.8", 80))
+            _cands.append(_sk.getsockname()[0])
+        finally:
+            _sk.close()
+    except Exception:
+        pass
+    try:
+        _cands.append(socket.gethostbyname(socket.gethostname()))
+    except Exception:
+        pass
+    for _ip in _cands:
+        if _ip and _ip != "127.0.0.1" and not _ip.startswith("169.254."):
+            return _ip
+    return _cands[0] if _cands else "127.0.0.1"
+
+
+def broadcast_targets():
+    """全局广播 + 子网定向广播 + 常见热点网段。"""
+    _out = ["255.255.255.255", "<broadcast>"]
+    _ip = local_lan_ip()
+    _parts = _ip.split(".")
+    if len(_parts) == 4 and _ip != "127.0.0.1":
+        _out.append(".".join(_parts[:3]) + ".255")       # /24
+        _out.append(".".join(_parts[:2]) + ".255.255")   # /16
+    for _p in ("192.168.43.255", "192.168.0.255", "192.168.1.255",
+               "10.0.2.255", "172.20.10.255"):
+        if _p not in _out:
+            _out.append(_p)
+    return _out
 
 
 class RoomBeacon:
@@ -46,6 +88,7 @@ class RoomBeacon:
         return json.dumps({
             "magic": MAGIC,
             "port": self.tcp_port,
+            "host_ip": local_lan_ip(),
             "room": self.room_name,
             "host": self.host_name,
             "players": _n,
@@ -73,17 +116,18 @@ class RoomBeacon:
             return False
 
     def _loop(self):
+        _targets = broadcast_targets()
         while self.running:
             try:
                 _data = self._payload()
-                for _addr in ("255.255.255.255", "<broadcast>"):
+                for _addr in _targets:
                     try:
                         self.sock.sendto(_data, (_addr, BROADCAST_PORT))
                     except Exception:
                         pass
             except Exception:
                 pass
-            time.sleep(1.0)
+            time.sleep(0.6)
 
     def stop(self):
         self.running = False
@@ -98,10 +142,10 @@ class RoomBeacon:
 class RoomDiscovery:
     """客户端发现：收集局域网内所有主机信标（带超时清理）"""
 
-    TIMEOUT = 3.5
+    TIMEOUT = 4.0
 
     def __init__(self):
-        self.rooms = {}          # key = (ip, port) -> dict
+        self.rooms = {}
         self.running = False
         self.sock = None
         self._th = None
@@ -113,17 +157,21 @@ class RoomDiscovery:
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             try:
+                self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+            except Exception:
+                pass
+            try:
                 self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
             except Exception:
                 pass
-            self.sock.bind(("", BROADCAST_PORT))
+            self.sock.bind(("0.0.0.0", BROADCAST_PORT))
             self.sock.settimeout(0.5)
             self.running = True
             self._th = threading.Thread(target=self._loop, daemon=True)
             self._th.start()
             return True
         except Exception as e:
-            self.error = str(e)      # 端口被占用等，房间列表不可用但手动 IP 仍可连
+            self.error = str(e)
             self.running = False
             return False
 
@@ -134,13 +182,19 @@ class RoomDiscovery:
                 _m = json.loads(_data.decode("utf-8", "replace"))
                 if _m.get("magic") != MAGIC:
                     continue
-                _key = (_addr[0], int(_m.get("port", 26000)))
+                _ip = str(_m.get("host_ip") or _addr[0])
+                _key = (_ip, int(_m.get("port", 26000)))
                 with self.lock:
                     self.rooms[_key] = {
-                        "ip": _addr[0], "port": int(_m.get("port", 26000)),
-                        "room": str(_m.get("room", "")), "host": str(_m.get("host", "")),
+                        "ip": _ip,
+                        "host_ip": _ip,
+                        "src_ip": _addr[0],
+                        "port": int(_m.get("port", 26000)),
+                        "room": str(_m.get("room", "")),
+                        "host": str(_m.get("host", "")),
                         "players": int(_m.get("players", 1)),
-                        "max": int(_m.get("max", 4)), "mode": str(_m.get("mode", "")),
+                        "max": int(_m.get("max", 4)),
+                        "mode": str(_m.get("mode", "")),
                         "started": bool(_m.get("started", False)),
                         "last": time.time(),
                     }
@@ -150,7 +204,6 @@ class RoomDiscovery:
                 continue
 
     def list_rooms(self):
-        """返回仍在有效期内的房间（按房间名排序）"""
         _now = time.time()
         with self.lock:
             for _k in [k for k, v in self.rooms.items()

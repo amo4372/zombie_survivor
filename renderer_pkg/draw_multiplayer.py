@@ -173,38 +173,36 @@ def draw_enemy_player_indicators(renderer, game, viewports, vp):
 
 
 def build_split_viewports(game):
-    # v2.9.17：AI 玩家不占视口，视口数 = 人类玩家数（1/2）
+    """v2.9.19：视口数 **严格等于人类玩家数**，AI 永远不占视口。
 
-    """由游戏状态推导同屏视口列表（数据驱动，N 人扩展点）"""
+    旧版遍历 player/player2/player3/player4 属性，而 BotManager 会把 AI
+    注册进这些槽位 —— 于是"创建几个 AI 就多渲染几个视口"。现在从玩家
+    注册表里过滤掉 is_bot，只取前 human_player_count 个人类。
+    """
     sw = game.scaled_width
     sh = game.scaled_height
-    # v2.7.1：改为从玩家注册表推导——任意数量的玩家都能拿到自己的视口，
-    # 摄像机由注册表惰性创建（此前 P3/P4 缺 camera3/camera4 就没有视口）
+    _humans = max(1, min(2, int(getattr(game, "human_player_count", 1) or 1)))
+    try:
+        _all = list(game.registered_players())
+    except Exception:
+        _all = [p for p in (getattr(game, "player", None), getattr(game, "player2", None)) if p is not None]
+    _hp = [p for p in _all if p is not None and not getattr(p, "is_bot", False)][:_humans]
+    if not _hp and getattr(game, "player", None) is not None:
+        _hp = [game.player]
     _ensure_cam = getattr(game, "camera_for", None)
     players = []
-    if getattr(game, "player", None) is not None:
-        _cam = game.camera
-        if _cam is None and _ensure_cam:
-            _cam = _ensure_cam(game.player)
-        players.append(("P1", game.player, _cam))
-    for _i in (2, 3, 4):
-        _pn = getattr(game, f"player{_i}", None)
-        if _pn is None:
+    for _i, _p in enumerate(_hp):
+        _cam = _ensure_cam(_p) if _ensure_cam else (game.camera if _i == 0 else None)
+        if _cam is None:
             continue
-        _cam = getattr(game, f"camera{_i}", None)
-        if _cam is None and _ensure_cam:
-            _cam = _ensure_cam(_pn)
-        players.append((f"P{_i}", _pn, _cam))
-    n = len(players)
+        players.append(("P%d" % (_i + 1), _p, _cam))
+    n = max(1, len(players))
     half = sw // n
     viewports = []
     for idx, (label, player, camera) in enumerate(players):
-        if player is None or camera is None:
-            continue
         viewports.append(SplitViewport(
             player=player, camera=camera, label=label,
-            rect=pygame.Rect(idx * half, 0, half, sh), index=idx,
-        ))
+            rect=pygame.Rect(idx * half, 0, half, sh), index=idx))
     return viewports
 
 

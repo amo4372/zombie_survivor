@@ -77,13 +77,25 @@ class BotMixin:
             return False
 
     # ------------------------------------------------------------ 技能
-    def _bot_use_skill(self, player, skill_type):
-        """AI 放技能：P1 走 _use_skill，其余走 P2 的通用实现。"""
+    def _bot_use_skill(self, player, skill_type, angle_deg=0.0):
+        """v2.9.19：任意槽位 AI 都能放技能。
+
+        旧版只有 P1 走 _use_skill、其余固定走 _use_skill_p2_aimed，
+        而后者内部硬编码 self.player2 —— P3~P10 的 AI 放出来的技能
+        全落在 P2 身上甚至直接失败。这里临时把「当前施法者」挂到
+        player2 再复用那套完整实现，结束一定恢复，不影响人类玩家。
+        """
         try:
             if player is getattr(self, 'player', None):
                 return bool(self._use_skill(skill_type))
-            import math as _m
-            _a = _m.radians(float(getattr(player, 'facing_angle', 0.0) or 0.0))
-            return bool(self._use_skill_p2_aimed(skill_type, _a, 1.0))
+            _orig = getattr(self, 'player2', None)
+            try:
+                self.player2 = player
+                import math as _m
+                _a = _m.radians(float(angle_deg if angle_deg else
+                                      getattr(player, 'facing_angle', 0.0) or 0.0))
+                return bool(self._use_skill_p2_aimed(skill_type, _a, 1.0))
+            finally:
+                self.player2 = _orig
         except Exception:
             return False

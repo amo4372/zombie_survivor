@@ -495,7 +495,8 @@ class GameCore:
         # v2.2.13 网络配置自定义：端口（文本输入）/最大人数/玩法/模式/地图
         self.net_port_input = "26000"
         self.net_port_focused = False
-        self.net_ip_input = "127.0.0.1"
+        # v2.9.19：默认留空，避免"同 WiFi 两台设备却连了自己"
+        self.net_ip_input = ""
         self.net_ip_focused = False
         self.net_started = False
         # 同屏双人 P2 键控输入状态
@@ -1076,6 +1077,13 @@ class GameCore:
         self.session = self.records.on_game_start(self.config.difficulty, self.config.game_mode)
         self.session.set_difficulty(self.config.difficulty)
         self.session.set_mode(self.config.game_mode)
+        # v2.9.19：开局强制复位动态视野（防上一局残留 zoom）
+        try:
+            for _c in [getattr(self, "camera", None)] + [getattr(self, "camera%d" % _i, None) for _i in range(2, 11)]:
+                if _c is not None and hasattr(_c, "reset_zoom"):
+                    _c.reset_zoom()
+        except Exception:
+            pass
         # 播放游戏音乐
         # 播放地图专属音乐（争分夺秒模式优先用 race_urgency.ogg，缺文件自动回退）
         map_music = self._resolve_map_music()
