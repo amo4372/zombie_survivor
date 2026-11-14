@@ -3971,7 +3971,7 @@ class UiMixin:
 
         # ---- 左栏：下拉行 ----
         for _key, _r, _label, _opts, _setter in _rows:
-            box(_r, text=_label + ("   ▲" if _ddk == _key else "   ▼"))
+            box(_r, text=_label + "   ▼")
 
         # ---- 左栏：地址 + 复制 ----
         addr_r = C(40, 412, 420, 44)
@@ -4043,137 +4043,120 @@ class UiMixin:
             g.net_copy_hint = max(0.0, float(g.net_copy_hint) - 1 / 60.0)
             txt("已复制地址，发给队友即可", 700, 636, self.game.font_small, GOLD, center=True)
 
-        # ================= 点击分派（按优先级消费）=================
-        # 1) 展开态：先算本帧选项矩形，处理选项点击
-        _overlay = []
-        if _ddk:
-            _hit = next((r for r in _rows if r[0] == _ddk), None)
+        # ================= 点击分派 =================
+        # v2.9.19：**模态下拉**。旧版把选项面板画在下拉行正下方，而它正好
+        # 压住下面 3 组下拉行 —— 点 net_mode 变成了选 net_pvp 的选项，
+        # 表现就是"下面几组下滑栏点不动"。现在展开时画一个居中模态面板，
+        # 选项大而独立、不与任何静态控件重叠；点面板外即收起，本帧不穿透。
+        _dd_open = getattr(g, 'net_dd_key', None)
+        if _dd_open:
+            _hit = next((r for r in _rows if r[0] == _dd_open), None)
             if _hit:
                 _key, _brect, _label, _opts, _setter = _hit
-                _oy = _brect.bottom + P(2)
-                _oh = P(38)
-                _n = min(5, len(_opts))
-                _panel = pygame.Rect(_brect.x, _oy, _brect.w, _oh * _n + P(6))
-                _overlay.append(_brect)
-                _overlay.append(_panel)
-                _surf = pygame.Surface((_panel.w, _panel.h), pygame.SRCALPHA)
-                _surf.fill((18, 22, 32, 246))
-                self.screen.blit(_surf, _panel.topleft)
-                _scroll = max(0, min(max(0, len(_opts) - _n),
-                                     int(getattr(g, 'net_dd_scroll', 0) or 0)))
-                for _oi in range(_n):
-                    _o = _opts[_scroll + _oi]
-                    _or = pygame.Rect(_brect.x + P(3), _oy + P(3) + _oi * _oh,
-                                      _brect.w - P(6), _oh - P(4))
-                    pygame.draw.rect(self.screen, (42, 50, 68), _or, border_radius=6)
-                    pygame.draw.rect(self.screen, (95, 108, 132), _or, 1, border_radius=6)
-                    _t = self.game.font_small.render(str(_o[0]), True, WHITE)
-                    self.screen.blit(_t, _t.get_rect(midleft=(_or.x + P(10), _or.centery)))
-                    for _ci, _c in enumerate(_clk_all):
-                        if _ci in _consumed:
-                            continue
+                _pw, _ph = 620, 96 + len(_opts) * 62
+                _panel = C(640 - _pw // 2, 360 - _ph // 2, _pw, _ph)
+                _shade = pygame.Surface((_panel.w, _panel.h), pygame.SRCALPHA)
+                _shade.fill((14, 18, 28, 248))
+                self.screen.blit(_shade, _panel.topleft)
+                pygame.draw.rect(self.screen, (95, 118, 150), _panel, 2, border_radius=12)
+                txt(_label.replace("   ▲", ""), 640, _panel.y / s + 30,
+                    self.game.font, GOLD, center=True)
+                _opt_rects = []
+                for _oi, _o in enumerate(_opts):
+                    _or = pygame.Rect(_panel.x + P(20),
+                                      _panel.y + P(70) + _oi * P(62),
+                                      _panel.w - P(40), P(54))
+                    _opt_rects.append((_or, _o))
+                    pygame.draw.rect(self.screen, (38, 46, 64), _or, border_radius=8)
+                    pygame.draw.rect(self.screen, (88, 104, 132), _or, 1, border_radius=8)
+                    _t = self.game.font.render(str(_o[0]), True, WHITE)
+                    self.screen.blit(_t, _t.get_rect(midleft=(_or.x + P(14), _or.centery)))
+                txt("点选项确认 · 点面板外收起", 640, (_panel.bottom + 24) / s,
+                    self.game.font_small, (145, 160, 185))
+                for _ci, _c in enumerate(_clk_all):
+                    if _ci in _consumed:
+                        continue
+                    _picked = False
+                    for _or, _o in _opt_rects:
                         if _or.collidepoint(_c):
                             _setter(_o[1])
-                            g.net_dd_key = None
-                            g.net_dd_scroll = 0
-                            _consumed.add(_ci)
+                            _picked = True
                             break
-                for _ev in getattr(g, 'scroll_events', []) or []:
-                    try:
-                        g.net_dd_scroll = max(0, min(max(0, len(_opts) - _n),
-                            float(getattr(g, 'net_dd_scroll', 0) or 0) - int(_ev["dy"] / 20)))
-                    except Exception:
-                        pass
-        g._net_dd_overlay_rects = _overlay
-
-        # 2) 下拉行点击（展开 / 收起）
-        for _key, _r, _label, _opts, _setter in _rows:
-            for _ci, _c in enumerate(_clk_all):
-                if _ci in _consumed or not _r.collidepoint(_c):
-                    continue
-                g.net_dd_key = None if _ddk == _key else _key
-                g.net_dd_scroll = 0
-                _consumed.add(_ci)
-                break
-
-        # 3) 展开态点空白 → 只收起，不传给按钮（防误触）
-        if _ddk and not getattr(g, 'net_dd_key', None):
-            pass
-        elif getattr(g, 'net_dd_key', None):
+                    g.net_dd_key = None       # 选中或点外部都收起，不穿透到其它按钮
+                    g.net_dd_scroll = 0
+                    _consumed.add(_ci)
+            g._net_dd_overlay_rects = [_panel] if _hit else []
+        else:
+            g._net_dd_overlay_rects = []
+            # 下拉行：点哪组展开哪组
+            for _key, _r, _label, _opts, _setter in _rows:
+                for _ci, _c in enumerate(_clk_all):
+                    if _ci in _consumed or not _r.collidepoint(_c):
+                        continue
+                    g.net_dd_key = _key
+                    g.net_dd_scroll = 0
+                    _consumed.add(_ci)
+                    break
+            # 输入框 / 按钮 / 房间行
             for _ci, _c in enumerate(_clk_all):
                 if _ci in _consumed:
                     continue
-                if not any(_r.collidepoint(_c) for _r in _overlay):
-                    g.net_dd_key = None
+                _in_room, _in_nick = room_r.collidepoint(_c), nick_r.collidepoint(_c)
+                _in_port, _in_ip = port_r.collidepoint(_c), ip_r.collidepoint(_c)
+                _in_focus = _in_room or _in_nick or _in_port or _in_ip
+                if not _in_focus and (getattr(g, 'net_ip_focused', False) or
+                                      getattr(g, 'net_port_focused', False) or
+                                      getattr(g, 'net_room_focused', False) or
+                                      getattr(g, 'net_nick_focused', False)):
+                    for _k in ('net_ip_focused', 'net_port_focused',
+                               'net_room_focused', 'net_nick_focused'):
+                        setattr(g, _k, False)
+                    try: g.stop_text_input()
+                    except Exception: pass
+                if _in_focus:
+                    for _k in ('net_ip_focused', 'net_port_focused',
+                               'net_room_focused', 'net_nick_focused'):
+                        setattr(g, _k, False)
+                    if _in_room: g.net_room_focused = True
+                    elif _in_nick: g.net_nick_focused = True
+                    elif _in_port: g.net_port_focused = True
+                    else: g.net_ip_focused = True
+                    try:
+                        g.stop_text_input()
+                        g.start_text_input()
+                    except Exception:
+                        pass
                     _consumed.add(_ci)
-
-        # 4) 其余点击：输入框 / 按钮 / 房间行
-        _focus_rects = (room_r, nick_r, port_r, ip_r)
-        for _ci, _c in enumerate(_clk_all):
-            if _ci in _consumed:
-                continue
-            _in_room, _in_nick = room_r.collidepoint(_c), nick_r.collidepoint(_c)
-            _in_port, _in_ip = port_r.collidepoint(_c), ip_r.collidepoint(_c)
-            _in_focus = _in_room or _in_nick or _in_port or _in_ip
-            if not _in_focus and (getattr(g, 'net_ip_focused', False) or
-                                  getattr(g, 'net_port_focused', False) or
-                                  getattr(g, 'net_room_focused', False) or
-                                  getattr(g, 'net_nick_focused', False)):
-                for _k in ('net_ip_focused', 'net_port_focused', 'net_room_focused', 'net_nick_focused'):
-                    setattr(g, _k, False)
-                try: g.stop_text_input()
-                except Exception: pass
-            if _in_room or _in_nick or _in_port or _in_ip:
-                for _k in ('net_ip_focused', 'net_port_focused', 'net_room_focused', 'net_nick_focused'):
-                    setattr(g, _k, False)
-                if _in_room: g.net_room_focused = True
-                elif _in_nick: g.net_nick_focused = True
-                elif _in_port: g.net_port_focused = True
-                else: g.net_ip_focused = True
-                try:
-                    g.stop_text_input()   # 先 stop 再 start，应对系统收起软键盘
-                    g.start_text_input()
-                except Exception:
-                    pass
-                _consumed.add(_ci)
-                continue
-            if copy_r.collidepoint(_c):
-                if _zs_copy_text(_addr):
-                    g.net_copy_hint = 2.5
-                    g.net_last_error = ""
+                    continue
+                if copy_r.collidepoint(_c):
+                    if _zs_copy_text(_addr):
+                        g.net_copy_hint = 2.5; g.net_last_error = ""
+                    else:
+                        g.net_last_error = "剪贴板不可用，请手抄：" + _addr
+                    _consumed.add(_ci)
+                elif create_r.collidepoint(_c):
+                    g.net_last_error = ""; g._net_start_host(); _consumed.add(_ci)
+                elif scan_r.collidepoint(_c):
+                    try: g._net_stop_discovery(); g._net_start_discovery()
+                    except Exception: pass
+                    _consumed.add(_ci)
+                elif join_r.collidepoint(_c):
+                    g.net_last_error = ""; g._net_join(); _consumed.add(_ci)
+                elif back_r.collidepoint(_c):
+                    for _k in ('net_ip_focused', 'net_port_focused',
+                               'net_room_focused', 'net_nick_focused'):
+                        setattr(g, _k, False)
+                    try: g.stop_text_input()
+                    except Exception: pass
+                    g.state = GameState.MULTIPLAYER_SELECT
+                    _consumed.add(_ci)
                 else:
-                    g.net_last_error = "剪贴板不可用，请手抄：" + _addr
-                _consumed.add(_ci)
-            elif create_r.collidepoint(_c):
-                g.net_last_error = ""
-                g._net_start_host()
-                _consumed.add(_ci)
-            elif scan_r.collidepoint(_c):
-                try:
-                    g._net_stop_discovery(); g._net_start_discovery()
-                except Exception:
-                    pass
-                _consumed.add(_ci)
-            elif join_r.collidepoint(_c):
-                g.net_last_error = ""
-                g._net_join()
-                _consumed.add(_ci)
-            elif back_r.collidepoint(_c):
-                for _k in ('net_ip_focused', 'net_port_focused', 'net_room_focused', 'net_nick_focused'):
-                    setattr(g, _k, False)
-                try: g.stop_text_input()
-                except Exception: pass
-                g.state = GameState.MULTIPLAYER_SELECT
-                _consumed.add(_ci)
-            else:
-                _joined = False
-                for _rr, _rm in _room_rects:
-                    if _rr.collidepoint(_c) and not _rm.get('started'):
-                        g._net_join_room(_rm)
-                        _joined = True
-                        break
-                if _joined:
-                    _consumed.add(_ci)
+                    for _rr, _rm in _room_rects:
+                        if _rr.collidepoint(_c) and not _rm.get('started'):
+                            g._net_join_room(_rm)
+                            _consumed.add(_ci)
+                            break
+
 
     def _draw_net_wait(self):
         """v2.9.19 等待页重排：房主/客户端分区清晰、零重叠、触控与鼠标都能点。

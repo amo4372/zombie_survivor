@@ -61,13 +61,21 @@ g2.touch_events = [{'type': 'up', 'pos': (300, 226)}]
 g2.renderer.render()
 check(getattr(g2, 'net_dd_key', None) == 'net_cnt', "点击展开 net_cnt")
 g2.touch_events = []; g2.renderer.render()
-check(len(getattr(g2, '_net_dd_overlay_rects', []) or []) >= 2, "展开态生成选项浮层")
+check(len(getattr(g2, '_net_dd_overlay_rects', []) or []) >= 1, "展开态生成模态选项面板")
 _before = getattr(g2, 'coop_player_count', 2)
-# 第三项 "4 人"：oy=248+2=250, oh=38, 第3项 y=250+3+2*38=329..365
-g2.touch_events = [{'type': 'up', 'pos': (300, 340)}]
+# 模态面板：ph=96+3*62=282, y=360-141=219；第3项中心 y=219+70+2*62+27=440
+g2.touch_events = [{'type': 'up', 'pos': (640, 440)}]
 g2.renderer.render()
 check(getattr(g2, 'coop_player_count', 2) == 4, "选中 4 人生效 (%s→%s)" % (_before, getattr(g2,'coop_player_count',2)))
 check(getattr(g2, 'net_dd_key', None) is None, "选完自动收起")
+# 四组下拉各自都能展开（模态互不覆盖）
+for _key, _ry in (('net_pvp', 256), ('net_mode', 308), ('net_map', 360)):
+    g2.touch_events = [{'type': 'up', 'pos': (300, _ry + 22)}]; g2.renderer.render()
+    _ok = getattr(g2, 'net_dd_key', None) == _key
+    g2.touch_events = []; g2.renderer.render()
+    g2.touch_events = [{'type': 'up', 'pos': (640, 600)}]; g2.renderer.render()  # 点外部收起
+    check(_ok and getattr(g2, 'net_dd_key', None) is None,
+          "%s 可展开且点外部收起" % _key)
 # 展开后点空白收起
 g2.touch_events = [{'type': 'up', 'pos': (300, 226)}]; g2.renderer.render()
 g2.touch_events = [{'type': 'up', 'pos': (640, 600)}]; g2.renderer.render()
@@ -219,6 +227,50 @@ try:
     check(bool(_calls), "AI 能放技能（%d 次）" % len(_calls))
 except Exception as ex:
     check(False, "AI 技能异常 %r" % ex)
+
+print("[F2] 敌方 AI 真的能打伤人类玩家（投射物链路实测）")
+g11 = Game(); g11.config.control_mode = ControlMode.TOUCH
+g11.config.game_mode = GameMode.ENDLESS
+g11.multiplayer_mode = 'same_screen'; g11.human_player_count = 1
+_m11 = g11._bots(); _pr = _m11.profiles[0]
+_pr.enabled = True; _pr.hostile = True; _pr.difficulty = BotDifficulty.NIGHTMARE
+g11.start_game(); g11.setup_bots(1); g11.state = GameState.PLAYING
+_b11 = g11.player2
+g11.enemies = []; g11.exp_orbs = []; g11.projectiles = []
+# 其它 AI 移到远处，避免同帧多实体干扰（持久化 bot 配置可能带出额外 AI）
+for _tag, _p in g11.iter_player_slots():
+    if _p is not g11.player and _p is not _b11:
+        _p.x, _p.y = 6000.0, 6000.0
+g11.player.x, g11.player.y = 1000.0, 1000.0
+_b11.x, _b11.y = 1000.0, 1150.0
+_b11.team_id = 1; _b11.bot_hostile = True; g11.player.team_id = 0
+g11.config.pvp_enabled = True
+_hp0 = g11.player.hp
+# 记录 take_damage 调用：数值平衡（PvP 系数/护甲）不应影响"链路是否跑通"
+_td_calls = []
+_orig_td = g11.player.take_damage
+def _rec_td(*a, **kw):
+    _td_calls.append(a[0] if a else None)
+    return _orig_td(*a, **kw)
+g11.player.take_damage = _rec_td
+_ok = g11._bot_fire(_b11, -90.0, locked=True)
+check(_ok and len(g11.projectiles) == 1, "AI 第一枪确实生成投射物（不丢弹）")
+if g11.projectiles:
+    check(g11.projectiles[0].owner is _b11, "投射物 owner 为 AI 玩家")
+for _f in range(90):
+    # 贴近真实 AI：持续开火，并保持两人站位（world 不会把测试点推走）
+    g11.player.x, g11.player.y = 1000.0, 1000.0
+    _b11.x, _b11.y = 1000.0, 1150.0
+    if _f % 8 == 0:
+        g11._bot_fire(_b11, -90.0, locked=True)
+    g11.update(1/60)
+    if g11.player.hp < _hp0:
+        break
+check(bool(_td_calls), "敌方 AI 投射物触发玩家受伤接口（%d 次）" % len(_td_calls))
+check(g11.player.hp <= _hp0, "玩家血量未反向异常 (%s→%s)" % (_hp0, g11.player.hp))
+check("or []).extend" not in src('zombie_pkg/mix_bots.py'), "_bot_fire 不再用临时列表吞弹")
+check("_my_team = int(getattr(player, 'team_id'" in src('zombie_pkg/mix_bots.py'),
+      "超难强锁排除同阵营目标")
 
 print("[G] 全模式跑帧")
 for _m in ('STORY','ENDLESS','TIMED'):

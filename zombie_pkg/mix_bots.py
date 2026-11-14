@@ -46,12 +46,25 @@ class BotMixin:
                 return False
             _ang = float(angle_deg)
             if locked:
-                # 超难强锁：直接把角度对准最近目标（无视散布）
+                # v2.9.19：超难强锁只锁**敌对**目标。
+                # 旧版把全部玩家（含同阵营友方 AI）都当候选，敌方 AI 会
+                # 强锁到离自己最近的友方 AI 身上，人类玩家反而永远打不到。
                 _tg = None
                 _bd = 1e9
-                for _o in list(getattr(self, 'enemies', []) or []) + \
-                        [p for p in self.registered_players() if p is not player]:
+                _my_team = int(getattr(player, 'team_id', 0) or 0)
+                for _o in list(getattr(self, 'enemies', []) or []):
                     if not getattr(_o, 'alive', True):
+                        continue
+                    _d = (_o.x - player.x) ** 2 + (_o.y - player.y) ** 2
+                    if _d < _bd:
+                        _bd, _tg = _d, _o
+                for _o in self.registered_players():
+                    if _o is player or not getattr(_o, 'alive', True) or getattr(_o, 'downed', False):
+                        continue
+                    _ot = int(getattr(_o, 'team_id', 0) or 0)
+                    _hostile = bool(getattr(player, 'bot_hostile', False)) != \
+                        bool(getattr(_o, 'bot_hostile', False))
+                    if _ot == _my_team and not _hostile:
                         continue
                     _d = (_o.x - player.x) ** 2 + (_o.y - player.y) ** 2
                     if _d < _bd:
@@ -71,7 +84,13 @@ class BotMixin:
                     _p.owner = player
                 except Exception:
                     pass
-            (getattr(self, 'projectiles', None) or []).extend(_projs or [])
+            # v2.9.19：列表为空时 `or []` 会创建**临时列表**，extend 完直接
+            # 丢弃 —— AI 的第一枪（以及清空后每枪）永远消失。必须拿到真列表。
+            _lst = getattr(self, 'projectiles', None)
+            if _lst is None:
+                _lst = []
+                self.projectiles = _lst
+            _lst.extend(_projs or [])
             return bool(_projs)
         except Exception:
             return False
