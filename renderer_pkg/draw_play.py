@@ -1463,16 +1463,20 @@ class PlayMixin:
             pass
         # 常驻格挡 CD：键控/触控都显示，双人各一份
         try:
-            _cdb = int(70 * scale)
-            self.game.draw_block_cd(self.screen, self.game.player,
-                                    _cdb, int(self.game.scaled_height * 0.30),
-                                    scale, self.game.font_small)
-            if getattr(self.game, "player2", None) is not None and \
-                    self.game.is_multiplayer_active():
-                self.game.draw_block_cd(self.screen, self.game.player2,
-                                        int(self.game.scaled_width * 0.5) + _cdb,
-                                        int(self.game.scaled_height * 0.30),
+            # v2.9.16：CD 圆环挂在格挡摇杆正上方，跟着 HUD 布局一起移动
+            try:
+                _bc1 = self.game._block_stick_geom(self.game.player)
+                self.game.draw_block_cd(self.screen, self.game.player,
+                                        int(_bc1[0]), int(_bc1[1] - _bc1[2] - 26 * scale),
                                         scale, self.game.font_small)
+                if getattr(self.game, "player2", None) is not None and \
+                        self.game.is_multiplayer_active():
+                    _bc2 = self.game._block_stick_geom(self.game.player2)
+                    self.game.draw_block_cd(self.screen, self.game.player2,
+                                            int(_bc2[0]), int(_bc2[1] - _bc2[2] - 26 * scale),
+                                            scale, self.game.font_small)
+            except Exception:
+                pass
         except Exception:
             pass
         # v2.5.6：世界按窗口铺满（可视区域 = 窗口/scale），

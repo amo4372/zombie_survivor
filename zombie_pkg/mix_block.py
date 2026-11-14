@@ -14,6 +14,9 @@ from combat_pkg import ARC_DEG, PERFECT_WINDOW
 BLOCK_STICK_X = BASE_WIDTH - 120
 BLOCK_STICK_Y = BASE_HEIGHT - 265
 BLOCK_STICK_R = 52
+# v2.9.16 多人半屏内的默认位置（避开射击/技能按钮），由 BlockStick 控件使用
+BLOCK_STICK_MP_X = 330
+BLOCK_STICK_MP_Y = BASE_HEIGHT - 250
 
 # 只在 PLAYING 态生效
 _PLAYING_STATES = ("PLAYING",)
@@ -21,21 +24,29 @@ _PLAYING_STATES = ("PLAYING",)
 
 class BlockMixin:
     # ------------------------------------------------------------ 基础
-    def _block_stick_geom(self, player=None, viewport_x=0):
-        s = float(getattr(self, "scale", 1.0) or 1.0)
+    def block_stick_ctrl(self, player=None):
+        """返回该玩家对应的格挡摇杆**控件对象**（P1: game.block_stick / P2: p2_controls["block"]）"""
         p2 = getattr(self, "player2", None)
-        # 同屏双人：P1 摇杆在左半屏右下，P2 在右半屏右下
-        if player is not None and getattr(self, "multiplayer_mode", "") == "same_screen" \
-                and p2 is not None:
+        if player is not None and player is p2:
+            _c2 = getattr(self, "p2_controls", None) or {}
+            return _c2.get("block") or getattr(self, "block_stick", None)
+        return getattr(self, "block_stick", None)
+
+    def _block_stick_geom(self, player=None, viewport_x=0):
+        """v2.9.16：位置**唯一来源**是控件对象，输入判定与渲染不再各算一套。"""
+        s = float(getattr(self, "scale", 1.0) or 1.0)
+        ctrl = self.block_stick_ctrl(player)
+        if ctrl is not None:
+            ss = float(getattr(ctrl, "size_scale", 1.0) or 1.0)
+            return (float(ctrl.base_x) * s + viewport_x,
+                    float(ctrl.base_y) * s,
+                    float(ctrl.base_radius) * s * ss)
+        # 控件尚未创建（初始化顺序 / 旧存档）→ 回退到默认常量
+        p2 = getattr(self, "player2", None)
+        if player is not None and player is p2 and p2 is not None:
             sw = float(getattr(self, "scaled_width", 1280 * s) or 1280 * s)
-            _half = sw * 0.5
-            # v2.9.15：以半屏右下角为基准，P1/P2 各自视口内位置完全对称。
-            # 旧式 `sw*0.5 - (1280-X)*s` 在屏幕宽高比不是 16:9 时会把 P1
-            # 摇杆推到屏幕中间，出现"底盘和摇杆不在一处"。
-            _inset = (1280 - BLOCK_STICK_X) * s
-            if player is p2:
-                return (sw - _inset, BLOCK_STICK_Y * s, BLOCK_STICK_R * s)
-            return (_half - _inset, BLOCK_STICK_Y * s, BLOCK_STICK_R * s)
+            return (sw - (1280 - BLOCK_STICK_X) * s + viewport_x,
+                    BLOCK_STICK_Y * s, BLOCK_STICK_R * s)
         return (BLOCK_STICK_X * s + viewport_x, BLOCK_STICK_Y * s, BLOCK_STICK_R * s)
 
     # ---------- 常驻格挡 CD（键控也能看见） ----------
@@ -67,16 +78,19 @@ class BlockMixin:
             pass
 
     def _block_owner_for_pos(self, pos):
-        """分屏时按左右半屏决定驱动哪位玩家"""
+        """v2.9.16：按**控件实际位置**判定归属，不再靠半屏硬切。
+        这样 HUD 编辑器把 P2 格挡摇杆拖到任意位置后，触控依然驱动正确的玩家。"""
         p2 = getattr(self, "player2", None)
-        # v2.9.13：不再依赖可能不存在的 split_screen 属性 —— 只要同屏双人
-        # 有 P2，就按左右半屏分配格挡摇杆（此前 P2 触控永远驱动 P1）。
-        if p2 is not None and getattr(self, "multiplayer_mode", "") == "same_screen":
-            try:
-                return p2 if pos[0] >= self.scaled_width * 0.5 else self.player
-            except Exception:
-                return self.player
-        return self.player
+        if p2 is None or not getattr(self, "is_multiplayer_active", lambda: False)():
+            return getattr(self, "player", None)
+        _c1 = getattr(self, "block_stick", None)
+        _c2 = (getattr(self, "p2_controls", None) or {}).get("block")
+        s = float(getattr(self, "scale", 1.0) or 1.0)
+        _d1 = math.hypot(pos[0] - _c1.base_x * s, pos[1] - _c1.base_y * s) \
+            if _c1 is not None else 1e9
+        _d2 = math.hypot(pos[0] - _c2.base_x * s, pos[1] - _c2.base_y * s) \
+            if _c2 is not None else 1e9
+        return p2 if _d2 < _d1 else getattr(self, "player", None)
 
     def _is_playing(self):
         try:
@@ -106,6 +120,9 @@ class BlockMixin:
             ids[fid] = pl
             ang = math.degrees(math.atan2(pos[1] - cy, pos[0] - cx))
             pl.block.press(ang)
+            _c = self.block_stick_ctrl(pl)
+            if _c is not None:
+                _c.sync_block(pl.block)
         elif kind == "move":
             pl = ids.get(fid)
             if pl is not None and getattr(pl, "block", None) is not None:
@@ -115,8 +132,12 @@ class BlockMixin:
                     cx, cy, _r = self._block_stick_geom(pl)
                 except Exception:
                     cx, cy = pos[0], pos[1]
+                # 拖到圈外也保持方向（不因超出半径而丢失蓄力）
                 ang = math.degrees(math.atan2(pos[1] - cy, pos[0] - cx))
                 pl.block.drag(ang, dt)
+                _c = self.block_stick_ctrl(pl)
+                if _c is not None:
+                    _c.sync_block(pl.block)
         elif kind == "up":
             pl = ids.pop(fid, None)
             if pl is not None and getattr(pl, "block", None) is not None:
@@ -184,7 +205,13 @@ class BlockMixin:
 
     # ------------------------------------------------------------ 渲染：摇杆
     def draw_block_stick(self, screen, font, scale=1.0, player=None):
-        """HUD 上的格挡摇杆（仅触控模式显示）"""
+        """v2.9.16：格挡摇杆 = 真正的 VirtualJoystick 控件，复用其它摇杆的
+        底盘/摇杆头配色与绘制；只额外叠加格挡专属的蓄力环与冷却环。
+
+        旧版手写深蓝圆盘 + 亮蓝指针，配色和其它摇杆不一致，且没有控件
+        对象 → HUD 编辑器看不见、改不了。现在它就是一个普通摇杆控件，
+        base_x/base_y/size_scale/alpha 全部走通用体系。
+        """
         try:
             from config import ControlMode
             if getattr(self.config, "control_mode", None) != ControlMode.TOUCH \
@@ -192,42 +219,47 @@ class BlockMixin:
                 return
         except Exception:
             pass
-        cx, cy, r = self._block_stick_geom(player)
+        ctrl = self.block_stick_ctrl(player)
+        if ctrl is None or not getattr(ctrl, "visible", True):
+            return
         pl = player or getattr(self, "player", None)
         blk = getattr(pl, "block", None) if pl else None
-        active = bool(blk and blk.active)
-        cd = float(blk.cooldown) if blk else 0.0
-        cd_tot = float(blk.cooldown_total) if blk else 1.0
-        # 底盘
-        pygame.draw.circle(screen, (24, 30, 40), (int(cx), int(cy)), int(r))
-        pygame.draw.circle(screen, (70, 95, 125) if not active else (110, 200, 255),
-                           (int(cx), int(cy)), int(r), max(2, int(3 * scale)))
-        # 方向指针
-        if blk is not None:
-            a = math.radians(blk.angle)
-            ex = cx + math.cos(a) * r * 0.82
-            ey = cy + math.sin(a) * r * 0.82
-            pygame.draw.line(screen, (150, 225, 255), (int(cx), int(cy)),
-                             (int(ex), int(ey)), max(2, int(4 * scale)))
-            pygame.draw.circle(screen, (210, 245, 255), (int(ex), int(ey)),
-                               max(3, int(6 * scale)))
-        # 蓄力环
-        if blk is not None and blk.charge > 0:
-            pygame.draw.arc(screen, (255, 205, 90),
-                            pygame.Rect(cx - r * 0.72, cy - r * 0.72,
-                                        r * 1.44, r * 1.44),
-                            -math.pi / 2, -math.pi / 2 + math.pi * 2 * blk.charge,
-                            max(2, int(4 * scale)))
-        # 冷却环
-        if cd > 0 and cd_tot > 0:
-            pygame.draw.arc(screen, (140, 70, 70),
-                            pygame.Rect(cx - r, cy - r, r * 2, r * 2),
-                            -math.pi / 2, -math.pi / 2 + math.pi * 2 * (cd / cd_tot),
-                            max(2, int(5 * scale)))
-        if font:
-            lab = font.render("格挡", True, (200, 225, 245))
-            screen.blit(lab, (int(cx - lab.get_width() / 2),
-                              int(cy + r * 0.30)))
+        try:
+            cx, cy, r = self._block_stick_geom(player)
+            # 底盘与摇杆头：完全复用 VirtualJoystick.draw（GRAY/WHITE/LIGHT_GRAY）
+            ctrl.sync_block(blk)
+            ctrl.draw(screen, scale)
+            if blk is None:
+                return
+            active = bool(blk.active)
+            cd = float(blk.cooldown)
+            cd_tot = max(0.01, float(blk.cooldown_total or 1.0))
+            # 蓄力环（金黄色，与其它摇杆的进度环同一画法）
+            if blk.charge > 0:
+                pygame.draw.arc(screen, (255, 205, 90),
+                                pygame.Rect(cx - r * 0.72, cy - r * 0.72,
+                                            r * 1.44, r * 1.44),
+                                -math.pi / 2,
+                                -math.pi / 2 + math.pi * 2 * float(blk.charge),
+                                max(2, int(4 * scale)))
+            # 冷却环（暗红，覆盖整个底盘外圈）
+            if cd > 0:
+                pygame.draw.arc(screen, (200, 90, 90),
+                                pygame.Rect(cx - r, cy - r, r * 2, r * 2),
+                                -math.pi / 2,
+                                -math.pi / 2 + math.pi * 2 * min(1.0, cd / cd_tot),
+                                max(2, int(5 * scale)))
+            # 激活时底盘描边提亮（不改配色，只是加一圈）
+            if active:
+                pygame.draw.circle(screen, (235, 235, 235), (int(cx), int(cy)),
+                                   int(r), max(2, int(3 * scale)))
+            if font:
+                _lab = f"{cd:.1f}s" if cd > 0 else ("挡" if active else ctrl.label)
+                _t = font.render(_lab, True, (225, 230, 235))
+                screen.blit(_t, (int(cx - _t.get_width() / 2),
+                                 int(cy + r * 0.34)))
+        except Exception:
+            pass
 
     # ------------------------------------------------------------ 渲染：世界层
     def draw_block_fx(self, screen, player, cam_x, cam_y, scale,

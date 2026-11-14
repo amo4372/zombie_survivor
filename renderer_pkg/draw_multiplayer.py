@@ -259,8 +259,16 @@ def render_split_viewports(renderer, game, viewports):
             _touch = (getattr(game.config, "control_mode", None) == ControlMode.TOUCH
                       or getattr(game, "is_android", False))
             if _touch:
+                # v2.9.16：格挡摇杆已是真正的 VirtualJoystick 控件，
+                # 位置从控件读取，与输入判定、HUD 编辑器完全一致。
                 game.draw_block_stick(renderer.screen, game.font_small,
                                      game.scale, vp.player)
+                _cx, _cy, _r = game._block_stick_geom(vp.player)
+                game.draw_block_cd(renderer.screen, vp.player,
+                                   int(_cx), int(_cy - _r - 26 * game.scale),
+                                   game.scale, game.font_small)
+                # 键控模式下也常驻 CD（不画摇杆，但 CD 要看得见）
+            if not _touch:
                 _cx, _cy, _r = game._block_stick_geom(vp.player)
                 game.draw_block_cd(renderer.screen, vp.player,
                                    int(_cx), int(_cy - _r - 26 * game.scale),

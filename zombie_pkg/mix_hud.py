@@ -220,6 +220,11 @@ class HudMixin:
         self.throwable_switch_btn = TouchButton(BASE_WIDTH - 370, BASE_HEIGHT - 320, 42, "投掷", ORANGE)
         # 投掷物释放器（中下列，复用SkillCaster的瞄准逻辑）
         self.throwable_caster = SkillCaster(BASE_WIDTH - 310, BASE_HEIGHT - 145, 48)
+        # v2.9.16：格挡摇杆做成真正的 VirtualJoystick 控件，纳入 HUD 布局体系
+        from ui_pkg import BlockStick
+        from zombie_pkg.mix_block import BLOCK_STICK_X, BLOCK_STICK_Y, BLOCK_STICK_R
+        # 独立持有：不进 touch_buttons，避免被通用按钮循环 handle_touch 抢绑手指
+        self.block_stick = BlockStick(BLOCK_STICK_X, BLOCK_STICK_Y, BLOCK_STICK_R)
         # 触控模式下显示按钮，键盘模式下隐藏
         self.throwable_caster.visible = (self.config.control_mode == ControlMode.TOUCH or getattr(self, 'is_android', False))
         # 投掷物选择系统
@@ -269,6 +274,7 @@ class HudMixin:
         _set(self.skill_caster, "skill_caster")
         _set(self.throwable_switch_btn, "throwable_switch")
         _set(self.throwable_caster, "throwable_caster")
+        _set(self.block_stick, "block")
 
     def _save_hud_layout(self, target="单机"):
         """保存触控布局（单机→hud_layout / P1→mp_p1_layout / P2→p2_hud_layout）"""
@@ -289,6 +295,7 @@ class HudMixin:
             _put(c2["skill_caster"], "skill_caster")
             _put(c2["throwable_switch"], "throwable_switch")
             _put(c2["throwable_caster"], "throwable_caster")
+            _put(c2.get("block"), "block")
             self.config.p2_hud_layout = layout
         elif target == "P1":
             _put(self.joystick, "joystick")
@@ -300,6 +307,7 @@ class HudMixin:
             _put(self.skill_caster, "skill_caster")
             _put(self.throwable_switch_btn, "throwable_switch")
             _put(self.throwable_caster, "throwable_caster")
+            _put(self.block_stick, "block")
             self.config.mp_p1_layout = layout
         else:
             _put(self.joystick, "joystick")
@@ -311,6 +319,7 @@ class HudMixin:
             _put(self.skill_caster, "skill_caster")
             _put(self.throwable_switch_btn, "throwable_switch")
             _put(self.throwable_caster, "throwable_caster")
+            _put(self.block_stick, "block")
             self.config.hud_layout = layout
         self.config.save()
         logger.info(f"HUD布局已保存({target}): {len(layout)} 个控件")
@@ -408,6 +417,13 @@ class HudMixin:
                         setattr(btn, _a, False)
                 if hasattr(btn, 'touch_id'):
                     btn.touch_id = None
+        # v2.9.16：格挡摇杆 knob 回中（独立控件，不在 touch_buttons 循环里）
+        try:
+            _bs = getattr(self, 'block_stick', None)
+            if _bs is not None:
+                _bs.knob_x, _bs.knob_y = _bs.base_x, _bs.base_y
+        except Exception:
+            pass
         # 重置攻击摇杆 / 技能施法器 / 投掷物施法器 / 技能选择器
         # 必须清掉 active / is_shooting / is_aiming / touch_id / knob 偏移，才能彻底解除卡死
         for attr in ['aim_button', 'skill_caster', 'throwable_caster', 'skill_selector']:

@@ -113,6 +113,36 @@ class VirtualJoystick:
         return self.value_x, self.value_y
 
 
+class BlockStick(VirtualJoystick):
+    """主动格挡摇杆 —— **完全复用 VirtualJoystick 的绘制逻辑与配色**。
+
+    v2.9.16：旧版 draw_block_stick 是手写的一套深蓝圆盘 + 亮蓝指针，
+    既和其它摇杆配色不一致（用户："配色好别致"），又因为没有控件对象，
+    HUD 编辑器根本看不见它、改不了尺寸/透明度/位置。
+
+    现在它是一个真正的 VirtualJoystick 实例：
+      * 底盘 / 摇杆头由 VirtualJoystick.draw() 绘制（GRAY/WHITE/LIGHT_GRAY）
+      * _install_touch_style 包装自动支持 size_scale / alpha
+      * sync_block() 把摇杆头摆到格挡方向，天然复用"摇杆头指示方向"的视觉
+      * base_x/base_y 是唯一位置来源，输入判定与渲染永不分叉
+    """
+
+    def __init__(self, x, y, radius=52, label="格挡"):
+        super().__init__(x, y, radius)
+        self.label = label
+
+    def sync_block(self, blk, scale=1.0):
+        """把摇杆头同步到当前格挡方向（复用 VirtualJoystick 的 knob 绘制）"""
+        if blk is None:
+            self.knob_x, self.knob_y = self.base_x, self.base_y
+            return
+        _r = float(self.base_radius) * float(getattr(self, "size_scale", 1.0) or 1.0)
+        _a = math.radians(float(getattr(blk, "angle", 0.0) or 0.0))
+        _f = 0.62 if getattr(blk, "active", False) else 0.0
+        self.knob_x = self.base_x + math.cos(_a) * _r * _f
+        self.knob_y = self.base_y + math.sin(_a) * _r * _f
+
+
 class TouchButton:
     """触控按钮 - 支持短按/长按检测"""
     def __init__(self, x, y, radius=60, label="", color=RED):
@@ -451,6 +481,6 @@ def _install_touch_style(cls):
     cls.draw = _draw
 
 
-for _cls in (VirtualJoystick, TouchButton, AimButton, WeaponSwitchButton):
+for _cls in (VirtualJoystick, BlockStick, TouchButton, AimButton, WeaponSwitchButton):
     _install_touch_style(_cls)
 

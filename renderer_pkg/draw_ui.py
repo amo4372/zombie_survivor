@@ -2990,6 +2990,7 @@ class UiMixin:
                 ("skill_caster", "技能释放", c2["skill_caster"], 52, "above"),
                 ("throwable_switch", "投掷切换", c2["throwable_switch"], 42, "above"),
                 ("throwable_caster", "投掷释放", c2["throwable_caster"], 48, "above"),
+                ("block", "格挡摇杆", c2.get("block"), 52, "above"),
             ]
         else:
             items = [
@@ -3002,6 +3003,7 @@ class UiMixin:
                 ("skill_caster", "技能释放", self.game.skill_caster, 52, "above"),
                 ("throwable_switch", "投掷切换", self.game.throwable_switch_btn, 42, "above"),
                 ("throwable_caster", "投掷释放", self.game.throwable_caster, 48, "above"),
+                ("block", "格挡摇杆", getattr(self.game, "block_stick", None), 52, "above"),
             ]
         mouse_pos = pygame.mouse.get_pos()
         mouse_pressed = pygame.mouse.get_pressed()
@@ -3058,6 +3060,8 @@ class UiMixin:
                     continue
                 for key, label, ctrl, radius, side in items:
                     if ctrl is None:
+                        continue
+                    if not hasattr(ctrl, "base_x"):
                         continue
                     rect, (bx, by), r = _rect_for(ctrl, radius)
                     if rect.collidepoint(e["pos"]):
@@ -3202,7 +3206,8 @@ class UiMixin:
                 g._apply_hud_layout()
             else:
                 # 双人时编辑单机布局：临时把控件恢复全屏默认
-                from ui import VirtualJoystick, AimButton, TouchButton, SkillSelector, SkillCaster
+                from ui import (VirtualJoystick, BlockStick, AimButton,
+                                TouchButton, SkillSelector, SkillCaster)
                 g.joystick = VirtualJoystick(120, BASE_HEIGHT - 120, 70)
                 g.aim_button = AimButton(780, BASE_HEIGHT - 145, 62)
                 g.touch_buttons["shoot"] = TouchButton(780, BASE_HEIGHT - 145, 62, "射击", RED)
@@ -3212,6 +3217,8 @@ class UiMixin:
                 g.skill_caster = SkillCaster(1150, BASE_HEIGHT - 145, 52)
                 g.throwable_switch_btn = TouchButton(910, BASE_HEIGHT - 320, 42, "投掷", ORANGE)
                 g.throwable_caster = SkillCaster(970, BASE_HEIGHT - 145, 48)
+                from zombie_pkg.mix_block import BLOCK_STICK_X, BLOCK_STICK_Y, BLOCK_STICK_R
+                g.block_stick = BlockStick(BLOCK_STICK_X, BLOCK_STICK_Y, BLOCK_STICK_R)
                 g._apply_layout_to(g.config.hud_layout or {})
 
     def _draw_play_select(self):
@@ -3289,15 +3296,24 @@ class UiMixin:
         sw = self.game.scaled_width
         sh = self.game.scaled_height  # v2.3.2：下拉滚动计算曾引用未定义的 sh（安卓端 NameError）
         g = self.game
-        _ups = [te for te in getattr(g, 'touch_events', [])
-                if te.get("type") == "up" and te.get("pos") is not None]
-        _all_ups = list(_ups)
-        # v2.9.15：下拉展开时，点选项的同一个 up 会**同时**命中它后面的
-        # 页面按钮（误触）。展开态一律把页面按钮的点击列表清空；
-        # 下拉选项自己在末尾用 _dd_ups 处理，点空白关闭下拉。
+        _all_ups = [te for te in getattr(g, 'touch_events', [])
+                    if te.get("type") == "up" and te.get("pos") is not None]
+        # v2.9.16：精确拦截。上一版在下拉展开时把 _ups **全部清空**，
+        # 导致展开后连下拉行本身都点不动、页面按钮全废，末尾还用 4 元组
+        # 解包 5 元组的 _dd_pending 直接抛 ValueError 打断整页绘制 ——
+        # 这正是"下滑栏又点不动了"的根因。
+        # 现在用上一帧缓存的下拉覆盖区域，只排除落在下拉行/选项列表内的
+        # up（这些由下拉自己消费），其余点击照常交给页面按钮，不误触也不卡死。
+        _dd_ov = [r for r in getattr(g, '_dd_overlay_rects', []) or []
+                  if hasattr(r, 'collidepoint')]
+        # v2.9.16：精确排除。落在"下拉行/选项覆盖区"的 up 由下拉自己消费
+        # （不给页面按钮，杜绝误触）；区域外的 up 照常交给页面按钮，
+        # 所以点「开始游戏 / 返回」一次就生效，不必先点一下收起下拉。
+        # 上一版把 _ups 全清 → 下拉行自己也点不动，且末尾 4 元组解包
+        # 5 元组抛 ValueError 打断整页绘制，这就是"下滑栏又点不动了"。
+        _ups = [te for te in _all_ups
+                if not any(_r.collidepoint(te["pos"]) for _r in _dd_ov)]
         _dd_ups = _all_ups
-        if getattr(g, 'room_dropdown', None):
-            _ups = []
         _mv = [te for te in getattr(g, 'touch_events', [])
                if te.get("type") == "move" and te.get("pos") is not None]
         _dn = [te for te in getattr(g, 'touch_events', [])
@@ -3379,7 +3395,7 @@ class UiMixin:
             if _dd == key:
                 _dd_pending.append((key, rect, options, setter, current))
                 return True
-            if any(rect.collidepoint(te["pos"]) for te in _ups):
+            if any(rect.collidepoint(te["pos"]) for te in _all_ups):
                 g.room_dropdown = key if _dd != key else None
                 return True
             return False
@@ -3699,17 +3715,25 @@ class UiMixin:
                     pygame.draw.rect(self.screen, (70, 78, 96), (_bar_x, _drect.bottom, _bar_w, _list_h), border_radius=4)
                     pygame.draw.rect(self.screen, (150, 170, 200), (_bar_x, _bar_y, _bar_w, _bar_h), border_radius=4)
                 _sc[_dkey] = int(_sval)
-        # v2.9.15：展开态下点击下拉行/选项以外的地方 → 只关闭下拉，
-        # 不触发后面任何按钮（页面按钮的 _ups 已在函数开头清空）
-        if getattr(g, 'room_dropdown', None) and _dd_ups:
-            _row = None
-            for _k, _br, _o, _st in _dd_pending:
-                if _k == g.room_dropdown:
-                    _row = _br
-                    break
-            if _row is None or not any(_row.collidepoint(te["pos"]) for te in _dd_ups):
-                g.room_dropdown = None
-                g.dd_drag = None
+        # v2.9.16：缓存下拉覆盖区域供下一帧精确排除；点区域外才关闭下拉
+        if _dd_pending:
+            _ov = []
+            for _dk, _dr, _dop, _dst, _dc in _dd_pending:   # 5 元组！
+                _ov.append(_dr)
+                _maxr = max(1, int((sh - _dr.bottom - int(20 * scale)) //
+                                   max(1, int(42 * scale) + int(3 * scale))))
+                _ov.append(pygame.Rect(_dr.x, _dr.bottom, _dr.width,
+                                       min(_maxr, len(_dop)) *
+                                       (int(42 * scale) + int(3 * scale))))
+            g._dd_overlay_rects = _ov
+            if _all_ups and getattr(g, 'room_dropdown', None):
+                if not any(_r.collidepoint(te["pos"])
+                           for te in _all_ups for _r in _ov):
+                    g.room_dropdown = None
+                    g.dd_drag = None
+                    g._dd_overlay_rects = []
+        else:
+            g._dd_overlay_rects = []
 
     def _set_room_mode(self, g, idx):
         try:
@@ -4049,7 +4073,9 @@ class UiMixin:
         self.screen.blit(bt, bt.get_rect(center=back_r.center))
 
         # ---- 展开的下拉选项：页面末尾统一渲染（位于一切元素之上）----
+        _net_overlay = []
         for _key, _brect, _options, _setter in _opt_pending:
+            _net_overlay.append(_brect)
             _ox = _brect.x
             _oy = _brect.bottom + int(2 * scale)
             _ow = _brect.w
@@ -4057,6 +4083,7 @@ class UiMixin:
             _maxi = max(0, min(_total - 1, int(_dd_scroll)))
             _vis = min(_dd_visible, _total - _maxi)
             _box_h = _vis * _dd_opt_h
+            _net_overlay.append(pygame.Rect(_ox, _oy, _ow, _box_h + int(6 * scale)))
             _overlay = pygame.Surface((_ow, _box_h + int(6 * scale)), pygame.SRCALPHA)
             _overlay.fill((20, 24, 34, 245))
             self.screen.blit(_overlay, (_ox, _oy))
@@ -4111,9 +4138,17 @@ class UiMixin:
                 g.net_dd_drag = False
                 g.net_dd_drag_moved = False
 
-        # v2.9.15：网络页下拉展开时屏蔽页面其它按钮，防误触
-        if getattr(g, 'net_dd_key', None):
-            _clk = None
+        g._net_dd_overlay_rects = _net_overlay
+        # v2.9.16：网络页下拉展开时只屏蔽"落在下拉区域上"的点击，
+        # 其余按钮（返回、复制、输入框）仍可正常操作，不再一刀切。
+        if getattr(g, 'net_dd_key', None) and _clk is not None:
+            _net_ov = [r for r in getattr(g, '_net_dd_overlay_rects', []) or []
+                       if hasattr(r, 'collidepoint')]
+            if any(_r.collidepoint(_clk) for _r in _net_ov):
+                _clk = None
+            else:
+                g.net_dd_key = None       # 点空白处先收起下拉
+                _clk = None
         # 交互（输入框/按钮；下拉行已处理）
         if _clk:
             if copy_r.collidepoint(_clk):
@@ -4463,11 +4498,29 @@ class UiMixin:
         except Exception:
             pass
         # 客户端输入控件（触控模式）
+        # v2.9.16：控件按"加入房间成功"时才懒初始化；状态被直接切到
+        # NET_CLIENT_PLAY（回放/断线重连/测试）时会缺失 → AttributeError
+        # 打断整页绘制。这里做懒创建兜底。
         if g.config.control_mode == ControlMode.TOUCH:
-            g.client_joystick.draw(self.screen, scale)
-            g.client_aim.draw(self.screen, g.font, scale)
-            g.client_shoot.draw(self.screen, g.font, scale)
-            g.client_skill.draw(self.screen, g.font, scale)
+            if not hasattr(g, 'client_joystick'):
+                try:
+                    g._setup_client_controls()
+                except Exception:
+                    pass
+            for _cn, _cfont in (("client_joystick", None),
+                                ("client_aim", g.font),
+                                ("client_shoot", g.font),
+                                ("client_skill", g.font)):
+                _c = getattr(g, _cn, None)
+                if _c is None:
+                    continue
+                try:
+                    if _cn == "client_joystick":
+                        _c.draw(self.screen, scale)
+                    else:
+                        _c.draw(self.screen, _cfont, scale)
+                except Exception:
+                    pass
 
     def _draw_tutorial(self):
         self.screen.fill(VOID_BLACK)

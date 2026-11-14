@@ -209,6 +209,13 @@ class MultiplayerMixin:
         self.skill_caster = SkillCaster(590, BASE_HEIGHT - 100, 52)
         self.throwable_switch_btn = TouchButton(370, BASE_HEIGHT - 340, 42, "投掷", ORANGE)
         self.throwable_caster = SkillCaster(415, BASE_HEIGHT - 120, 48)
+        # v2.9.16：P1 格挡摇杆（左半屏内），复用 VirtualJoystick
+        from ui_pkg import BlockStick
+        from zombie_pkg.mix_block import BLOCK_STICK_R
+        # v2.9.16：旧默认 (500, 455) 与射击按钮 (500,570) / 技能切换
+        # (490,380) 重叠，手指按下去先被射击抢走 → "有格挡却用不了"。
+        # 移到半屏内完全空闲的中左区（HUD 编辑器仍可自由拖动）。
+        self.block_stick = BlockStick(330, BASE_HEIGHT - 250, BLOCK_STICK_R)
         # 注意：双人模式禁用已保存的全屏 HUD 布局（会覆盖 P1 控件回右半屏与 P2 重叠）
         # P2 控件（右半屏 640-1280 逻辑坐标）
         self.p2_controls = {
@@ -221,6 +228,8 @@ class MultiplayerMixin:
             "skill_caster": SkillCaster(640 + 580, BASE_HEIGHT - 100, 52),
             "throwable_switch": TouchButton(640 + 370, BASE_HEIGHT - 340, 42, "投掷", ORANGE),
             "throwable_caster": SkillCaster(640 + 415, BASE_HEIGHT - 120, 48),
+            # v2.9.16：P2 格挡摇杆（右半屏内），与 P1 完全对称
+            "block": BlockStick(640 + 330, BASE_HEIGHT - 250, BLOCK_STICK_R),
         }
         # v2.2.7：P2 默认技能按实际解锁列表初始化（不再硬编码手雷——
         # 手雷需技能树解锁，与 P1 一致；未解锁任何技能则置空）
@@ -259,6 +268,15 @@ class MultiplayerMixin:
             _set2(c2["skill_caster"], "skill_caster")
             _set2(c2["throwable_switch"], "throwable_switch")
             _set2(c2["throwable_caster"], "throwable_caster")
+            _set2(c2.get("block"), "block")
+            for _k, _c in (("block", c2.get("block")),):
+                if _c is not None and _k in lay2 and len(lay2[_k]) >= 3:
+                    try:
+                        _c.size_scale = max(0.5, min(2.0, float(lay2[_k][2])))
+                        if len(lay2[_k]) >= 4:
+                            _c.alpha = max(40, min(255, int(lay2[_k][3])))
+                    except (TypeError, ValueError):
+                        pass
         logger.info("同屏双人控件初始化完成")
 
     def _update_player2(self, dt):
