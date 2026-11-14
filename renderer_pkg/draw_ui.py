@@ -4071,8 +4071,9 @@ class UiMixin:
                     pygame.draw.rect(self.screen, (88, 104, 132), _or, 1, border_radius=8)
                     _t = self.game.font.render(str(_o[0]), True, WHITE)
                     self.screen.blit(_t, _t.get_rect(midleft=(_or.x + P(14), _or.centery)))
-                txt("点选项确认 · 点面板外收起", 640, (_panel.bottom + 24) / s,
-                    self.game.font_small, (145, 160, 185))
+                # v2.9.19：提示放进面板内底部留白，避免压住右栏「加入房间」按钮
+                txt("点选项确认 · 点其它处收起", 640, (_panel.bottom - 18) / s,
+                    self.game.font_small, (150, 168, 195))
                 for _ci, _c in enumerate(_clk_all):
                     if _ci in _consumed:
                         continue
