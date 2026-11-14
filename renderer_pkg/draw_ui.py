@@ -5578,5 +5578,7 @@ class UiMixin:
         _info = g.font_small.render(
             "已上场 %d / 9 名 AI · 超难 = 透视 + 精确提前量 + 强锁 + 全机制" % _cnt,
             True, (205, 190, 135))
-        self.screen.blit(_info, _info.get_rect(center=(P(BASE_WIDTH / 2), P(606))))
+        # v2.9.18 收尾：说明文字放到最底部留白（按钮底 678，屏幕 720），
+        # 旧位置 y=606 正好压在第三张卡片（470~618）的下边框上。
+        self.screen.blit(_info, _info.get_rect(center=(P(BASE_WIDTH / 2), P(696))))
 
