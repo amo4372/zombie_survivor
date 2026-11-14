@@ -264,40 +264,112 @@ class BlockMixin:
     # ------------------------------------------------------------ 渲染：世界层
     def draw_block_fx(self, screen, player, cam_x, cam_y, scale,
                       viewport_x=0, font=None):
-        """玩家身前的格挡弧 / 完美窗口 / 格挡成功闪光"""
-        blk = getattr(player, "block", None)
-        if blk is None:
-            return
-        px = int((player.x - cam_x) * scale) + viewport_x
-        py = int((player.y - cam_y) * scale)
-        r = max(18, int((getattr(player, "size", 16) + 26) * scale))
-        if blk.active:
-            a = math.radians(blk.angle)
-            half = math.radians(ARC_DEG)
-            pts = [(px, py)]
-            for i in range(13):
-                aa = a - half + (2 * half) * i / 12
-                pts.append((px + math.cos(aa) * r, py + math.sin(aa) * r))
-            perfect = blk.active_time <= PERFECT_WINDOW
-            col = (255, 245, 170) if perfect else (120, 200, 255)
-            pygame.draw.polygon(screen, (36, 52, 70), pts)
-            pygame.draw.polygon(screen, col, pts, max(1, int(3 * scale)))
-            # 蓄力小星
-            if blk.charge > 0.02:
-                pygame.draw.circle(screen, (255, 205, 90),
-                                   (int(px + math.cos(a) * r), int(py + math.sin(a) * r)),
-                                   max(2, int(2 + 6 * blk.charge)))
-        # v2.9.17：删除用户反馈的"神秘蓝色圆形（文字为格挡）"。
-        # 旧实现在这里画一个淡蓝扩散圆环 +「格挡」浮字，格挡反馈和
-        # HUD 上的 CD 圆环重复，多人分屏下更显得突兀。
-        # 现在只保留一层极淡的金色弧闪（完美格挡时），不画圆、不写字。
-        if blk.fx_timer > 0 and blk.fx_perfect:
-            k = max(0.0, min(1.0, blk.fx_timer / 0.45))
-            _r2 = int(r * (1.0 + (1.0 - k) * 0.35))
-            _a0 = math.radians(float(getattr(blk, "angle", 0.0) or 0.0) - 40)
-            pygame.draw.arc(screen, (255, 235, 150),
-                            pygame.Rect(px - _r2, py - _r2, _r2 * 2, _r2 * 2),
-                            _a0, _a0 + math.radians(80), max(2, int(3 * scale)))
+        """v2.9.18 玩家身前的格挡表现（常驻标记 + 醒目护盾 + 成功反馈）。
+
+        旧版只在 blk.active 的 0.36s 内画一层淡蓝多边形描边，颜色
+        (120,200,255) 在暗色地表上几乎看不见，短按更是一闪而过 ——
+        这就是"格挡还是看不见"的原因。现在：
+          ① 常驻：玩家身侧一枚小盾牌标记，可格挡=亮蓝 / 冷却=暗红带秒数
+          ② 举盾：半透明蓝填充 + 双层亮边 + 外圈光晕，完美窗口改金色
+          ③ 命中：0.45s 金色扩散弧 + 文字，不再只认完美格挡
+        """
+        try:
+            blk = getattr(player, "block", None)
+            px = int((float(getattr(player, 'x', 0)) - cam_x) * scale) + viewport_x
+            py = int((float(getattr(player, 'y', 0)) - cam_y) * scale)
+            _sc = max(0.6, float(scale or 1.0))
+            r = max(22, int((float(getattr(player, "size", 16) or 16) + 34) * _sc))
+
+            # ---- ① 常驻状态标记（画在玩家右上角，绝不遮挡身体）----
+            _bx = px + int(20 * _sc)
+            _by = py - int(30 * _sc)
+            _br = max(7, int(10 * _sc))
+            if blk is not None:
+                _cd = float(getattr(blk, "cooldown", 0.0) or 0.0)
+                _active = bool(getattr(blk, "active", False))
+                if _cd > 0:
+                    _c, _edge = (70, 34, 38), (190, 95, 95)
+                elif _active:
+                    _c, _edge = (235, 215, 110), (255, 245, 180)
+                else:
+                    _c, _edge = (34, 62, 92), (120, 200, 255)
+            else:
+                _cd, _active = 0.0, False
+                _c, _edge = (40, 46, 58), (110, 125, 145)
+            pygame.draw.polygon(screen, _c, [
+                (_bx, _by - _br), (_bx + _br, _by - _br // 2),
+                (_bx + _br, _by + _br // 3), (_bx, _by + _br),
+                (_bx - _br, _by + _br // 3), (_bx - _br, _by - _br // 2)])
+            pygame.draw.polygon(screen, _edge, [
+                (_bx, _by - _br), (_bx + _br, _by - _br // 2),
+                (_bx + _br, _by + _br // 3), (_bx, _by + _br),
+                (_bx - _br, _by + _br // 3), (_bx - _br, _by - _br // 2)],
+                max(1, int(2 * _sc)))
+            if font is not None and _cd > 0:
+                _t = font.render("%.1f" % _cd, True, (235, 170, 165))
+                screen.blit(_t, (_bx - _t.get_width() // 2, _by + _br + 1))
+
+            if blk is None:
+                return
+
+            # ---- ② 举盾中的护盾扇形 ----
+            if _active:
+                a = math.radians(float(getattr(blk, "angle", 0.0) or 0.0))
+                half = math.radians(ARC_DEG)
+                pts = [(px, py)]
+                for i in range(19):
+                    aa = a - half + (2 * half) * i / 18
+                    pts.append((px + math.cos(aa) * r, py + math.sin(aa) * r))
+                perfect = float(getattr(blk, "active_time", 9.0) or 9.0) <= PERFECT_WINDOW
+                col = (255, 235, 130) if perfect else (150, 220, 255)
+                fill = (70, 58, 26) if perfect else (26, 58, 84)
+                # 半透明填充（局部 Surface，尺寸小、不整屏）
+                try:
+                    _x0 = min(p[0] for p in pts); _y0 = min(p[1] for p in pts)
+                    _w = max(2, int(max(p[0] for p in pts) - _x0) + 4)
+                    _h = max(2, int(max(p[1] for p in pts) - _y0) + 4)
+                    if 0 < _w < 1400 and 0 < _h < 1400:
+                        _surf = pygame.Surface((_w, _h), pygame.SRCALPHA)
+                        _loc = [(int(p[0] - _x0 + 2), int(p[1] - _y0 + 2)) for p in pts]
+                        pygame.draw.polygon(_surf, (*fill, 150), _loc)
+                        pygame.draw.polygon(_surf, (*col, 235), _loc, max(2, int(3 * _sc)))
+                        screen.blit(_surf, (int(_x0 - 2), int(_y0 - 2)))
+                except Exception:
+                    pass
+                # 外圈光晕弧（双层）
+                pygame.draw.arc(screen, col,
+                                pygame.Rect(px - r, py - r, r * 2, r * 2),
+                                a - half, a + half, max(2, int(5 * _sc)))
+                pygame.draw.arc(screen, (255, 255, 235),
+                                pygame.Rect(px - r - 5, py - r - 5,
+                                            (r + 5) * 2, (r + 5) * 2),
+                                a - half * 0.7, a + half * 0.7, max(1, int(2 * _sc)))
+                # 蓄力小星
+                if float(getattr(blk, "charge", 0.0) or 0.0) > 0.02:
+                    pygame.draw.circle(screen, (255, 215, 100),
+                                       (int(px + math.cos(a) * r), int(py + math.sin(a) * r)),
+                                       max(2, int(3 + 7 * float(blk.charge) * _sc)))
+                if font is not None and perfect:
+                    _pt = font.render("完美窗口", True, (255, 240, 160))
+                    screen.blit(_pt, (px - _pt.get_width() // 2,
+                                      py - r - int(20 * _sc)))
+
+            # ---- ③ 成功格挡反馈（普通/完美都给，0.45s）----
+            _fx = float(getattr(blk, "fx_timer", 0.0) or 0.0)
+            if _fx > 0:
+                k = max(0.0, min(1.0, _fx / 0.45))
+                _is_perfect = bool(getattr(blk, "fx_perfect", False))
+                _col = (255, 235, 150) if _is_perfect else (150, 220, 255)
+                _r2 = int(r * (1.0 + (1.0 - k) * 0.55))
+                _a0 = math.radians(float(getattr(blk, "angle", 0.0) or 0.0) - ARC_DEG / 2)
+                pygame.draw.arc(screen, _col,
+                                pygame.Rect(px - _r2, py - _r2, _r2 * 2, _r2 * 2),
+                                _a0, _a0 + math.radians(ARC_DEG), max(2, int(6 * _sc * k)))
+                if font is not None:
+                    _t = font.render("完美格挡!" if _is_perfect else "格挡!", True, _col)
+                    screen.blit(_t, (px - _t.get_width() // 2, py - _r2 - int(18 * _sc)))
+        except Exception:
+            pass
 
     # ------------------------------------------------------------ 渲染：状态图标
     def draw_status_icons(self, screen, x, y, entity, font, scale=1.0):

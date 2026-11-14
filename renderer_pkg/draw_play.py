@@ -39,69 +39,6 @@ def is_frozen_entity(ent):
     return False
 
 
-# v2.9.17 程序化僵尸贴图（tools/gen_zombie_sprites.py 生成，与 _enemy_style 同配色）
-_ZOMBIE_SPRITE_KEYS = {
-    'FROST': 'frost', 'ICE': 'frost', 'FREEZE': 'frost',
-    'ELECTRIC': 'electric', 'SHOCK': 'electric', 'TESLA': 'electric',
-    'POISON': 'poison', 'TOXIC': 'poison', 'GAS': 'poison',
-    'PHANTOM': 'phantom', 'GHOST': 'phantom', 'SHADOW': 'phantom',
-    'SHIELD': 'shield', 'ARMOR': 'shield',
-    'HEALER': 'healer', 'HEAL': 'healer', 'MEDIC': 'healer',
-    'EXPLODER': 'exploder', 'BOMBER': 'exploder', 'BLAST': 'exploder',
-    'SPLITTER': 'splitter', 'SPAWNER': 'splitter',
-}
-_SPRITE_CACHE = {}
-
-
-def _zombie_sprite(enemy, scale):
-    try:
-        _n = str(getattr(getattr(enemy, 'enemy_type', None), 'name',
-                         getattr(enemy, 'enemy_type', '')) or '').upper()
-        if getattr(enemy, 'is_boss', False):
-            return None
-        _key = None
-        for _k, _v in _ZOMBIE_SPRITE_KEYS.items():
-            if _k in _n:
-                _key = _v
-                break
-        if _key is None:
-            return None
-        if _key not in _SPRITE_CACHE:
-            import os as _os
-            _path = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
-                                  'assets', 'images', 'zombies', 'zombie_%s.png' % _key)
-            _SPRITE_CACHE[_key] = (pygame.image.load(_path).convert_alpha()
-                                   if _os.path.exists(_path) else None)
-        _img = _SPRITE_CACHE[_key]
-        if _img is None:
-            return None
-        _sz = max(24, int(float(getattr(enemy, 'size', 20) or 20) * 2.8 * scale))
-        return pygame.transform.smoothscale(_img, (_sz, _sz))
-    except Exception:
-        return None
-
-
-def draw_zombie_sprite(screen, enemy, cam_x, cam_y, scale):
-    """若该类型有程序化贴图则绘制贴图 + 血条，返回 True；否则交给原绘制。"""
-    _img = _zombie_sprite(enemy, scale)
-    if _img is None:
-        return False
-    try:
-        _x = int((getattr(enemy, 'x', 0) - cam_x) * scale)
-        _y = int((getattr(enemy, 'y', 0) - cam_y) * scale)
-        screen.blit(_img, (_x - _img.get_width() // 2, _y - _img.get_height() // 2))
-        _hp = float(getattr(enemy, 'hp', 0) or 0)
-        _mx = float(getattr(enemy, 'max_hp', 0) or 0)
-        if _mx > 0 and _hp < _mx * 0.999:
-            _bw = max(12, int(_img.get_width() * 0.7))
-            pygame.draw.rect(screen, (30, 12, 12), (_x - _bw // 2, _y - _img.get_height() // 2 - 7, _bw, 3))
-            pygame.draw.rect(screen, (215, 60, 55), (_x - _bw // 2, _y - _img.get_height() // 2 - 7,
-                                                     int(_bw * max(0, _hp / _mx)), 3))
-        return True
-    except Exception:
-        return False
-
-
 def draw_frozen_overlay(screen, ent, camera_x, camera_y, scale, size=None):
     """玩家 / 丧尸统一「冰块状被冻住」：淡蓝六边冰晶 + 高光 + 十字霜纹"""
     try:
@@ -543,6 +480,7 @@ class PlayMixin:
             return
 
         scale = self.game.scale
+        _ui_scale = scale          # v2.9.18：HUD/触控控件永远用原始缩放
         shake_x = camera.shake_x
         shake_y = camera.shake_y
         cam_x = camera.x - shake_x
@@ -745,9 +683,10 @@ class PlayMixin:
                     pygame.draw.circle(_zs, (220, 40, 40, 28), (_er, _er), _er, max(2, int(3 * scale)))
                     pygame.draw.circle(_zs, (220, 60, 60, 40), (_er, _er), _er, 1)
                     self.screen.blit(_zs, (_ex - _er, _ey - _er))
-            if not draw_zombie_sprite(self.screen, enemy, cam_x, cam_y, scale):
-                enemy.draw(self.screen, cam_x, cam_y, self.game.font, scale, self.game.assets,
-                           getattr(player, 'x', None), getattr(player, 'y', None))
+            # v2.9.18：统一走 Enemy.draw 的原生贴图分支（assets 已注册
+            # 全部图鉴条目），不再叠加第二套画风不符的程序化贴图。
+            enemy.draw(self.screen, cam_x, cam_y, self.game.font, scale, self.game.assets,
+                       getattr(player, 'x', None), getattr(player, 'y', None))
             # 技能前摇预警：释放带前摇的技能时显示警示（红色闪烁圈+危险标记）
             if (getattr(enemy, 'boss_is_executing', False)
                     or getattr(enemy, 'skill_windup', 0) > 0
@@ -952,12 +891,9 @@ class PlayMixin:
             else:
                 player.draw(self.screen, cam_x, cam_y, self.game.font, scale)
                 draw_frozen_overlay(self.screen, player, cam_x, cam_y, scale)
-                # v2.9.12：主动格挡弧 / 完美格挡闪光
-                try:
-                    self.game.draw_block_fx(self.screen, player, cam_x, cam_y,
-                                            scale, viewport_x, self.game.font_small)
-                except Exception:
-                    pass
+                # v2.9.18：格挡特效统一在函数末尾按「本视口主人」画一次。
+                # 旧版在遍历所有玩家的循环里对每个人都画，循环变量还
+                # 覆盖了函数参数 player → 自己的弧漏画、别人的弧串屏。
 
         # v2.9.17：格挡世界层特效在多人分屏下只画本视口主人。
         # 旧版在"遍历所有玩家"的循环里对每个人都调 draw_block_fx，
@@ -1124,14 +1060,6 @@ class PlayMixin:
                     and getattr(player, '_charge_spread', None) is not None
                     and getattr(player, 'downed', False) is False):
                 draw_charge_spread_fan(self, player, cam_x, cam_y, scale)
-                draw_aim_follow_line(self, player, cam_x, cam_y, scale)
-        except Exception:
-            pass
-        # v2.9.17：技能预瞄 / 普通武器瞄准时的跟随预瞄线（与镜头偏移同步）
-        try:
-            if not (getattr(player, '_charge_spread', None) is not None
-                    and getattr(player, '_awm_saved', None) is not None):
-                draw_aim_follow_line(self, player, cam_x, cam_y, scale)
         except Exception:
             pass
         # v2.8.8 子弹破空曳光（高速弹丸/轨道炮）
@@ -1249,7 +1177,7 @@ class PlayMixin:
                 _light_players = [p for p in (self.game.player, getattr(self.game, 'player2', None))
                                   if p is not None]
             self.game.lighting.render(
-                self.screen, camera.x, camera.y, self.game.scale,
+                self.screen, cam_x, cam_y, scale,
                 player=player if not _light_players else None,
                 players=_light_players,
                 enemies=self.game.enemies,
@@ -1257,6 +1185,12 @@ class PlayMixin:
                 viewport_x=viewport_x,
                 is_multiplayer=bool(_light_players),
             )
+
+        # v2.9.18 关键修复：zoom 拉远时上面把局部 scale 改成了
+        # scale*zoom（用于世界绘制）。若继续用这个值画 HUD，按钮、摇杆、
+        # 文字会跟着一起缩小 —— 这正是"拉远视角 UI 也缩小"的根因。
+        # 从这里开始全部是 HUD/触控控件，恢复原始 UI 缩放。
+        scale = _ui_scale
 
         # 绘制触控控件（v2.1.3 修复：同屏双人分屏由 _draw_hud_split/_draw_touch_controls_split
         # 按各自半屏绘制，此处只画单机全屏控件，避免 P1 控件串染进 P2 半屏造成按钮重合）
@@ -2636,42 +2570,6 @@ class PlayMixin:
 # ======================================================================
 # v2.8.8 蓄力武器的散布扇形 + 弹道破空特效
 # ======================================================================
-
-def draw_aim_follow_line(self, player, cam_x, cam_y, scale):
-    """v2.9.17：镜头跟随预瞄线时，每帧绘制从玩家到弹道终点的瞄准线。
-
-    与 Camera.aim_offset_x/y 同步：镜头往哪移，线就指向哪。松开射击 /
-    技能释放后 _aim_follow_active 置 False，线消失、镜头平滑归位。
-    """
-    try:
-        if not getattr(player, '_aim_follow_active', False):
-            return
-        _dist = float(getattr(player, '_aim_follow_dist', 0.0) or 0.0)
-        if _dist <= 0:
-            return
-        _a = math.radians(float(getattr(player, '_aim_follow_angle', 0.0) or 0.0))
-        _px = int((getattr(player, 'x', 0) - cam_x) * scale)
-        _py = int((getattr(player, 'y', 0) - cam_y) * scale)
-        _ex = int(_px + math.cos(_a) * _dist * scale)
-        _ey = int(_py + math.sin(_a) * _dist * scale)
-        _col = (255, 225, 140)
-        # 虚线：避免整条实线盖住画面
-        _n = max(8, int(_dist * scale / 22))
-        for _i in range(0, _n, 2):
-            _t0 = _i / _n
-            _t1 = min(1.0, (_i + 1) / _n)
-            pygame.draw.line(self.screen, _col,
-                             (int(_px + (_ex - _px) * _t0), int(_py + (_ey - _py) * _t0)),
-                             (int(_px + (_ex - _px) * _t1), int(_py + (_ey - _py) * _t1)),
-                             max(1, int(2 * scale)))
-        # 终点标记（弹道极限射程）
-        pygame.draw.circle(self.screen, _col, (_ex, _ey), max(4, int(9 * scale)),
-                           max(1, int(2 * scale)))
-        pygame.draw.circle(self.screen, (60, 40, 20), (_ex, _ey),
-                           max(2, int(3 * scale)))
-    except Exception:
-        pass
-
 
 def draw_charge_spread_fan(self, player, cam_x, cam_y, scale):
     """蓄力时绘制"子弹散布扇形"

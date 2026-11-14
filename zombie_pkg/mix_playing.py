@@ -1399,32 +1399,10 @@ class PlayingMixin:
                 self.player._charge_ratio = _charge_ratio
             except Exception:
                 pass
-            # 2) 视野拉远：随蓄力把摄像机 zoom 拉低（拉远）到能覆盖射程
-            try:
-                _cam = getattr(self, "camera", None)
-                if _cam is not None and hasattr(_cam, "zoom"):
-                    _z0 = float(getattr(_cam, "_zoom_base", 0.0) or 0.0)
-                    if _z0 <= 0.0:
-                        _cam._zoom_base = float(getattr(_cam, "zoom", 1.0) or 1.0)
-                        _z0 = _cam._zoom_base
-                    _z_min = float(getattr(_charge_w, "charge_zoom_min", 0.5) or 0.5)
-                    _cam.zoom = _z0 + (_z_min - _z0) * _charge_ratio
-                    self.player._charge_zoom_active = True
-                    # v2.9.3：记录目标，供渲染/其他模块读取
-                    self.player._charge_zoom_target = _cam.zoom
-            except Exception:
-                pass
+            # v2.9.18：视野拉远统一由 update_dynamic_zoom 处理。
+            # 旧版这里另写一套 zoom，与通用 zoom 同帧抢写 camera.zoom，
+            # 导致"蓄力能拉远、松开回不去"以及全模式不一致。已删除。
         elif getattr(self.player, "_charge_zoom_active", False):
-            # 松开 / 切换武器：恢复原视野
-            try:
-                _cam = getattr(self, "camera", None)
-                if _cam is not None and hasattr(_cam, "zoom"):
-                    _z0 = float(getattr(_cam, "_zoom_base", 0.0) or 0.0)
-                    if _z0 > 0.0:
-                        _cam.zoom = _z0
-                    _cam._zoom_base = 0.0
-            except Exception:
-                pass
             self.player._charge_zoom_active = False
             self.player._charge_spread = None
             self.player._charge_ratio = 0.0

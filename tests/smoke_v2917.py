@@ -54,22 +54,29 @@ if _p2:
     _gm._update_p2_grapple_lock(_p2, False)
     check(_p2.riot_gear.grapple_locked_target is not None, "P2 释放帧锁定目标保留")
 
-print("[C] 视野：镜头跟随预瞄线 + 预瞄线绘制")
-check("aim_offset_x" in src("renderer_pkg/camera.py"), "Camera 有 aim_offset")
-check("cam.zoom = cam._zoom_base" in src("zombie_pkg/mix_players.py"),
-      "不再用缩放拉远，改用镜头位移")
-check("def draw_aim_follow_line" in src("renderer_pkg/draw_play.py"), "跟随预瞄线绘制函数")
-_gm.player._awm_saved = 90.0; _gm.player._charge_active = True
-_gm.player._charge_ratio = 0.8; _gm.player._skill_aim_dist = 0.0
-_gm.update_dynamic_zoom(0.5)
-_cam = _gm.camera
-check(abs(getattr(_cam, 'aim_offset_y', 0)) > 0.1, "向上瞄准时镜头沿瞄准方向偏移")
+print("[C] 视野：v2.9.18 起恢复 zoom 拉远（镜头位移方案已废弃）")
+check(hasattr(_gm.camera, 'zoom'), "Camera 有 zoom")
+check("cam.zoom = _cur + (_target - _cur) * _k" in src("zombie_pkg/mix_players.py"),
+      "update_dynamic_zoom 用 zoom 拉远")
+check("scale = _ui_scale" in src("renderer_pkg/draw_play.py"),
+      "HUD 层恢复原始缩放（拉远时按钮不缩小）")
+_gm.player._awm_saved = 90.0
+_gm.player._charge_active = True
+_gm.player._charge_ratio = 1.0
 try:
-    from renderer_pkg.draw_play import draw_aim_follow_line
-    draw_aim_follow_line(_gm.renderer, _gm.player, 0, 0, 1.0)
-    check(True, "跟随预瞄线绘制无异常")
+    _w = _gm.player.get_current_weapon()
+    if _w is not None:
+        _w.hold_charge = True
+        _w.range = 1400
+except Exception:
+    pass
+_gm.update_dynamic_zoom(0.5)
+check(float(_gm.camera.zoom) < 0.99, "长按瞄准时 zoom 拉远")
+try:
+    _gm.renderer._draw_playing_core(_gm.player, _gm.camera)
+    check(True, "zoom 拉远后世界+HUD 绘制无异常")
 except Exception as ex:
-    check(False, "预瞄线绘制异常 %r" % ex)
+    check(False, "绘制异常 %r" % ex)
 
 print("[D] 回放：可保存 + 帧画面数据 + 加载")
 import replay as _rp, time
@@ -103,9 +110,12 @@ except Exception as ex:
     check(False, "回放渲染异常 %r" % ex)
 
 print("[E] 程序化僵尸贴图 + 冰霜冷罐")
-_zdir = os.path.join(ROOT, "assets", "images", "zombies")
-check(len([f for f in os.listdir(_zdir) if f.endswith(".png")]) >= 8, "8 张程序化贴图已生成")
-check("def draw_zombie_sprite" in src("renderer_pkg/draw_play.py"), "敌人绘制优先使用贴图")
+# v2.9.18：贴图改为按项目原画风生成并注册到 assets（不再用独立子目录）
+_keys = ["zombie_hunter", "zombie_bomber", "zombie_frost", "zombie_venom",
+         "zombie_berserker", "zombie_ghoul", "zombie_shaman", "zombie_juggernaut"]
+check(all(os.path.exists(os.path.join(ROOT, "assets", "images", k + ".png"))
+          for k in _keys), "8 张同画风程序化贴图已生成")
+check('"zombie_frost":' in src("assets.py"), "敌人绘制走 assets 原生贴图分支")
 check('"新增"' not in src("codex.py"), "图鉴「新增」类别已并入既有类别")
 _g3 = Game(); _g3.config.game_mode = GameMode.ENDLESS; _g3.start_game(); _g3.state = GameState.PLAYING
 class _Frost:

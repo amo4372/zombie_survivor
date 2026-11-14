@@ -1,116 +1,103 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""v2.9.17 程序化生成图鉴新增类别僵尸贴图。
+"""v2.9.18 按**项目原有画风**生成图鉴新增类别僵尸贴图。
 
-画风与游戏内 `_enemy_style` 一致：暗色破损剪影 + 类型色幽光 +
-高光边缘 + 冰晶/电弧/毒雾等类型装饰。生成 96x96 透明 PNG，
-运行时由 assets.get_image 缓存加载；无贴图时回退原有程序化圆体绘制。
+原画风（对照 assets/images/zombie_normal.png 等 17 张）特征：
+  - 64×64 透明 PNG，纯色平涂、无渐变、无躯干/手臂
+  - 一个半径 ~26 的实心圆头，居中
+  - 两只极简眼睛（白/红/粉），一个几何类型标识
+  - 无幽光大圆盘、无阴影、无描边渐隐
+
+v2.9.17 版画成了「不规则多边形躯干 + 头 + 手臂 + 冰晶装饰 + 渐变幽光」，
+与原素材完全不符，本版全部废弃重做。
 """
-import os, math, random
+import os
+import math
 import pygame
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-OUT = os.path.join(ROOT, "assets", "images", "zombies")
+OUT = os.path.join(ROOT, "assets", "images")
+SIZE = 64
+CX = CY = 32
+R = 26
 
-# key -> (主体色, 幽光色, 边缘色, 装饰)
+# key -> (主体色, 深色描边, 眼睛色, 装饰类型)
 STYLES = {
-    "frost":    ((74, 104, 128), (150, 215, 255), (205, 240, 255), "ice"),
-    "electric": ((72, 80, 104), (140, 200, 255), (220, 235, 255), "bolt"),
-    "poison":   ((58, 92, 52),  (120, 220, 90),  (190, 245, 150), "bubble"),
-    "phantom":  ((66, 58, 92),  (180, 140, 240), (220, 200, 255), "wisp"),
-    "shield":   ((84, 84, 92),  (200, 205, 215), (235, 238, 245), "shield"),
-    "healer":   ((86, 66, 76),  (255, 150, 170), (255, 210, 220), "cross"),
-    "exploder": ((104, 62, 44), (255, 140, 60),  (255, 205, 140), "flame"),
-    "splitter": ((78, 72, 58),  (220, 200, 120), (245, 235, 180), "crack"),
+    # 图鉴里原本标「新增」、且仓库确实缺 PNG 的 8 类
+    "zombie_hunter":     ((28, 118, 108), (16, 72, 66),  (255, 240, 240), "fang"),
+    "zombie_bomber":     ((238, 138, 42), (150, 78, 20), (255, 250, 230), "warn"),
+    "zombie_frost":      ((108, 186, 226), (54, 118, 160), (255, 255, 255), "snow"),
+    "zombie_venom":      ((92, 168, 62),  (48, 104, 34), (240, 255, 225), "bubble"),
+    "zombie_berserker":  ((198, 52, 52),  (120, 26, 26), (255, 235, 220), "crack"),
+    "zombie_ghoul":      ((96, 116, 94),  (52, 70, 54),  (245, 245, 235), "hollow"),
+    "zombie_shaman":     ((148, 92, 202), (88, 48, 130), (245, 235, 255), "rune"),
+    "zombie_juggernaut": ((74, 82, 94),   (38, 44, 54),  (235, 120, 110), "visor"),
 }
-SIZE = 96
 
 
-def build(key, body, glow, edge, deco, seed):
-    random.seed(seed)
+def build(body, edge, eye, deco):
     s = pygame.Surface((SIZE, SIZE), pygame.SRCALPHA)
-    cx, cy = SIZE // 2, SIZE // 2
-    # 幽光（局部小 Surface，不产生整屏开销）
-    gs = pygame.Surface((SIZE, SIZE), pygame.SRCALPHA)
-    for r, a in ((40, 20), (30, 30), (20, 42)):
-        pygame.draw.circle(gs, (*glow, a), (cx, cy), r)
-    s.blit(gs, (0, 0))
-    # 躯干：不规则多边形（破损剪影）
-    pts = []
-    for i in range(11):
-        a = i / 11 * math.pi * 2
-        rr = 23 + random.uniform(-4, 5)
-        pts.append((cx + math.cos(a) * rr * 0.82,
-                    cy + math.sin(a) * rr * 1.08 + 4))
-    pygame.draw.polygon(s, body, pts)
-    pygame.draw.polygon(s, (*edge, 150), pts, 2)
-    # 头部
-    pygame.draw.ellipse(s, tuple(min(255, c + 18) for c in body),
-                        (cx - 12, cy - 30, 24, 21))
-    pygame.draw.ellipse(s, (*edge, 120), (cx - 12, cy - 30, 24, 21), 2)
-    # 眼睛（两点类型色）
-    pygame.draw.circle(s, glow, (cx - 5, cy - 21), 2)
-    pygame.draw.circle(s, glow, (cx + 5, cy - 21), 2)
-    # 手臂
-    pygame.draw.line(s, body, (cx - 16, cy - 2), (cx - 30, cy + 14), 6)
-    pygame.draw.line(s, body, (cx + 16, cy - 2), (cx + 30, cy + 12), 6)
-    # 类型装饰
-    if deco == "ice":
-        for i in range(6):
-            a = i / 6 * math.pi * 2
-            x, y = cx + math.cos(a) * 30, cy + math.sin(a) * 32
-            pygame.draw.line(s, (*glow, 190), (x, y),
-                             (x + math.cos(a) * 8, y + math.sin(a) * 8), 2)
-        pygame.draw.polygon(s, (*glow, 90),
-                            [(cx - 8, cy - 8), (cx, cy - 18), (cx + 8, cy - 8), (cx, cy + 2)])
-    elif deco == "bolt":
+    # 圆形主体（原素材就是纯色圆 + 一圈深色细边）
+    pygame.draw.circle(s, body, (CX, CY), R)
+    pygame.draw.circle(s, edge, (CX, CY), R, 2)
+
+    # 眼睛：白/亮色小圆 + 深色瞳（与 z_normal / z_phantom 一致）
+    for ex in (CX - 9, CX + 9):
+        pygame.draw.circle(s, eye, (ex, CY - 4), 5)
+        pygame.draw.circle(s, (35, 25, 30), (ex, CY - 4), 2)
+
+    if deco == "fang":
+        # 猎手：两颗下獠牙
+        pygame.draw.polygon(s, (250, 250, 240),
+                            [(CX - 8, CY + 8), (CX - 4, CY + 8), (CX - 6, CY + 15)])
+        pygame.draw.polygon(s, (250, 250, 240),
+                            [(CX + 4, CY + 8), (CX + 8, CY + 8), (CX + 6, CY + 15)])
+    elif deco == "warn":
+        # 爆破：黄色三角警告（复刻 z_exploder）
+        pygame.draw.polygon(s, (255, 225, 70),
+                            [(CX, CY + 5), (CX - 9, CY + 19), (CX + 9, CY + 19)])
+        pygame.draw.line(s, (120, 60, 20), (CX, CY + 9), (CX, CY + 15), 2)
+        pygame.draw.circle(s, (120, 60, 20), (CX, CY + 17), 1)
+    elif deco == "snow":
+        # 冰霜：六角雪花（极简几何，不加渐变）
         for i in range(3):
-            x = cx - 24 + i * 22
-            pygame.draw.lines(s, (*glow, 210), False,
-                              [(x, cy - 34), (x + 8, cy - 20), (x + 2, cy - 18),
-                               (x + 12, cy - 4)], 2)
+            a = math.radians(i * 60)
+            pygame.draw.line(s, (235, 250, 255),
+                             (CX - math.cos(a) * 9, CY + 9 - math.sin(a) * 9),
+                             (CX + math.cos(a) * 9, CY + 9 + math.sin(a) * 9), 2)
     elif deco == "bubble":
-        for i in range(7):
-            x = cx + random.randint(-32, 32)
-            y = cy + random.randint(-30, 30)
-            pygame.draw.circle(s, (*glow, 110), (x, y), random.randint(2, 6), 1)
-    elif deco == "wisp":
-        for i in range(4):
-            pygame.draw.arc(s, (*glow, 90),
-                           (cx - 34 + i * 4, cy - 34 + i * 4, 68 - i * 8, 68 - i * 8),
-                           0.3, 2.4, 2)
-    elif deco == "shield":
-        pygame.draw.arc(s, (*edge, 210), (cx - 34, cy - 32, 26, 60),
-                        -math.pi / 2, math.pi / 2, 5)
-    elif deco == "cross":
-        pygame.draw.line(s, glow, (cx, cy - 8), (cx, cy + 8), 4)
-        pygame.draw.line(s, glow, (cx - 8, cy), (cx + 8, cy), 4)
-    elif deco == "flame":
-        for i in range(5):
-            x = cx + random.randint(-22, 22)
-            pygame.draw.polygon(s, (*glow, 150),
-                                [(x, cy + 20), (x - 4, cy + 6), (x, cy - 2), (x + 4, cy + 6)])
+        for bx, by, br in ((CX - 8, CY + 12, 3), (CX, CY + 8, 4), (CX + 8, CY + 13, 2)):
+            pygame.draw.circle(s, (210, 255, 190), (bx, by), br, 1)
     elif deco == "crack":
-        pygame.draw.lines(s, (*edge, 170), False,
-                          [(cx - 2, cy - 28), (cx + 3, cy - 10), (cx - 4, cy + 4),
-                           (cx + 2, cy + 22)], 2)
-    # 边缘破损高光
-    for _ in range(5):
-        a = random.uniform(0, math.pi * 2)
-        x, y = cx + math.cos(a) * 24, cy + math.sin(a) * 26
-        pygame.draw.line(s, (*edge, 130), (x, y),
-                         (x + math.cos(a) * 4, y + math.sin(a) * 4), 1)
+        pygame.draw.lines(s, (255, 190, 180), False,
+                          [(CX - 2, CY - 20), (CX + 3, CY - 8),
+                           (CX - 3, CY + 2), (CX + 2, CY + 14)], 2)
+    elif deco == "hollow":
+        # 食尸鬼：空洞嘴
+        pygame.draw.ellipse(s, (30, 40, 34), (CX - 7, CY + 7, 14, 8))
+    elif deco == "rune":
+        # 萨满：头顶菱形符文
+        pygame.draw.polygon(s, (235, 210, 255),
+                            [(CX, CY - 28), (CX + 6, CY - 22),
+                             (CX, CY - 16), (CX - 6, CY - 22)], 2)
+        pygame.draw.arc(s, (220, 190, 255),
+                        (CX - 12, CY + 4, 24, 18), 0.2, 2.9, 2)
+    elif deco == "visor":
+        # 重装：横条护目镜（复刻 z_tank）
+        pygame.draw.rect(s, edge, (CX - 16, CY - 9, 32, 11), border_radius=2)
+        pygame.draw.rect(s, (220, 90, 80), (CX - 11, CY - 6, 5, 4))
+        pygame.draw.rect(s, (220, 90, 80), (CX + 6, CY - 6, 5, 4))
     return s
 
 
 def main():
-    os.makedirs(OUT, exist_ok=True)
     pygame.init()
-    for i, (key, (b, g, e, d)) in enumerate(STYLES.items()):
-        surf = build(key, b, g, e, d, seed=1000 + i)
-        path = os.path.join(OUT, "zombie_%s.png" % key)
-        pygame.image.save(surf, path)
-        print("[生成]", path)
+    pygame.display.set_mode((1, 1))
+    os.makedirs(OUT, exist_ok=True)
+    for key, (b, e, y, d) in STYLES.items():
+        surf = build(b, e, y, d)
+        pygame.image.save(surf, os.path.join(OUT, key + ".png"))
+        print("[生成]", key + ".png")
     pygame.quit()
 
 

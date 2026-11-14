@@ -3753,12 +3753,13 @@ class UiMixin:
         else:
             g._dd_overlay_rects = []
 
-        # v2.9.17：进入玩家 AI 配置页（最多 9 个 AI）
-        _bot_r = pygame.Rect(int(sw * 0.5 - 150 * scale), int(sh - 62 * scale),
-                             int(300 * scale), int(46 * scale))
-        pygame.draw.rect(self.screen, (40, 70, 95), _bot_r, border_radius=10)
-        pygame.draw.rect(self.screen, (110, 180, 235), _bot_r, 2, border_radius=10)
-        _bt = self.game.font.render("设置 AI 玩家", True, WHITE)
+        # v2.9.18：AI 入口移到右上角（旧位置 sh-62 正好压住
+        # 「开始游戏 / 返回」650*scale 那排按钮，造成重合误触）。
+        _bot_r = pygame.Rect(int(sw - 236 * scale), int(22 * scale),
+                             int(210 * scale), int(44 * scale))
+        pygame.draw.rect(self.screen, (36, 58, 80), _bot_r, border_radius=10)
+        pygame.draw.rect(self.screen, (105, 175, 230), _bot_r, 2, border_radius=10)
+        _bt = self.game.font_small.render("AI 玩家设置", True, (225, 240, 255))
         self.screen.blit(_bt, _bt.get_rect(center=_bot_r.center))
         if any(_bot_r.collidepoint(te["pos"]) for te in _all_ups):
             g.state = GameState.BOT_CONFIG
@@ -5417,26 +5418,28 @@ class UiMixin:
             )
 
     # ==================================================================
-    # v2.9.17 玩家 AI 配置页（最多 9 个；与单人/分屏/联机全兼容）
+    # v2.9.18 玩家 AI 配置页：分页卡片式，触控友好、不与任何按钮重叠
     # ==================================================================
     def _draw_bot_config(self):
-        """每个 AI 一行：启用 / 阵营 / 难度 / 策略 / 武器 / 角色，点按循环。
+        """每页 3 个 AI，每个 AI 一张卡片；字段按「两行网格」排布。
 
-        复用主菜单同款持久化 Button（渲染层 update 直接处理触控），
-        不依赖输入层白名单，手机上保证点得动。
+        注意坐标体系：Button 内部会把 base_x/base_y 再乘 scale，所以
+        **按钮传逻辑坐标**；pygame 自绘（卡片/文字）用像素坐标 = 逻辑×scale。
+        v2.9.17 版把 9 行 × 6 列按钮硬塞一屏、底部按钮与末行重合，
+        且给按钮写了不存在的 .label 属性导致文字全空，本版全部重做。
         """
         g = self.game
         scale = g.scale
-        sw, sh = g.scaled_width, g.scaled_height
-        self.screen.fill((12, 14, 20))
-        _t = g.font_title.render("玩家 AI 配置", True, WHITE)
-        self.screen.blit(_t, _t.get_rect(center=(sw // 2, int(42 * scale))))
-        _sub = g.font_small.render("最多 9 个 AI · 人类 1 人=单机全屏 / 2 人=同屏分屏 / 联机每人单机视角",
-                                   True, (165, 180, 200))
-        self.screen.blit(_sub, _sub.get_rect(center=(sw // 2, int(80 * scale))))
-
+        from config import BASE_WIDTH, BASE_HEIGHT
         from ui import Button as _B
-        from ai_pkg.player_bots import BotDifficulty, BotTactic, BotManager
+        from ai_pkg.player_bots import BotDifficulty, BotTactic
+
+        def P(v):
+            return int(v * scale)
+
+        _mgr = g._bots() if hasattr(g, '_bots') else None
+        if _mgr is None:
+            return
         try:
             from config import WeaponType
             _wlist = [w for w in WeaponType
@@ -5448,87 +5451,132 @@ class UiMixin:
             _clist = list(CHARACTERS.keys())
         except Exception:
             _clist = []
-        _mgr = g._bots() if hasattr(g, '_bots') else None
-        if _mgr is None:
-            return
+
+        self.screen.fill((14, 16, 24))
+        _t = g.font_large.render("玩家 AI", True, (235, 225, 195))
+        self.screen.blit(_t, _t.get_rect(center=(P(BASE_WIDTH / 2), P(34))))
+        _sub = g.font_small.render(
+            "最多 9 名 · 人类 1 人走单机全屏，2 人走同屏分屏；联机时各自仍是单机视角",
+            True, (155, 172, 195))
+        self.screen.blit(_sub, _sub.get_rect(center=(P(BASE_WIDTH / 2), P(70))))
+
         _btns = getattr(g, 'bot_cfg_btns', None)
         if _btns is None:
             _btns = {}
             g.bot_cfg_btns = _btns
-        _cols = [40, 200, 350, 500, 660, 830]
-        _widths = [150, 140, 140, 150, 160, 160]
         _touch = getattr(g, 'touch_events', []) or []
         _mp = pygame.mouse.get_pos()
         _mpr = pygame.mouse.get_pressed()
-        _y0 = int(112 * scale)
-        _rowh = int(52 * scale)
-        for _i, _prof in enumerate(_mgr.profiles):
-            _y = _y0 + _i * _rowh
-            _labels = [
-                ("启用" if _prof.enabled else "关闭"),
-                ("敌方AI" if _prof.hostile else "友方AI"),
-                _prof.difficulty.value,
-                _prof.tactic.value,
-                str(getattr(_prof.weapon, 'name', '跟随') if _prof.weapon else '跟随'),
-                (_prof.character or '默认角色'),
-            ]
-            _keys = ('on', 'side', 'diff', 'tactic', 'weapon', 'char')
-            for _ci, _k in enumerate(_keys):
-                _bk = "%d_%s" % (_i, _k)
-                if _bk not in _btns:
-                    _btns[_bk] = _B(_cols[_ci], _y + 90, _widths[_ci],
-                                    int(40 * scale), "", color=(42, 52, 70),
-                                    hover_color=(62, 78, 105))
-                _b = _btns[_bk]
-                _b.label = _labels[_ci]
-                _color = (40, 95, 60) if (_k == 'on' and _prof.enabled) else                          ((110, 45, 50) if _k == 'side' and _prof.hostile else (42, 52, 70))
-                _b.color = _color
-                if _b.update(_mp, _mpr, _touch, scale):
-                    if _k == 'on':
-                        _prof.enabled = not _prof.enabled
-                    elif _k == 'side':
-                        _prof.hostile = not _prof.hostile
-                        _prof.team = 1 if _prof.hostile else 0
-                    elif _k == 'diff':
-                        _prof.difficulty = BotDifficulty.cycle(_prof.difficulty)
-                    elif _k == 'tactic':
-                        _prof.tactic = BotTactic.cycle(_prof.tactic)
-                    elif _k == 'weapon' and _wlist:
-                        _cur = _wlist.index(_prof.weapon) if _prof.weapon in _wlist else -1
-                        _prof.weapon = _wlist[(_cur + 1) % len(_wlist)]
-                    elif _k == 'char' and _clist:
-                        _cur = _clist.index(_prof.character) if _prof.character in _clist else -1
-                        _prof.character = _clist[(_cur + 1) % len(_clist)]
-            # 槽位标签
-            _lab = g.font_small.render("P%d" % (_i + 2), True, (150, 165, 185))
-            self.screen.blit(_lab, (int(8 * scale), _y + int(98 * scale)))
-        for _b in _btns.values():
-            _b.draw(self.screen, g.font_small, scale)
+        _page = max(0, min(2, int(getattr(g, 'bot_cfg_page', 0) or 0)))
+        g.bot_cfg_page = _page
+        _slice = _mgr.profiles[_page * 3:_page * 3 + 3]
 
-        # 人类玩家数 + 返回
-        _hk = 'human'
-        if _hk not in _btns:
-            _btns[_hk] = _B(40, 660, 300, 46, "", color=(55, 75, 100),
-                            hover_color=(80, 105, 140))
-        _hb = _btns[_hk]
-        _hb.label = "人类玩家：%s" % ("同屏双人" if getattr(g, 'human_player_count', 1) >= 2 else "仅 1 人")
-        if _hb.update(_mp, _mpr, _touch, scale):
-            if getattr(g, 'human_player_count', 1) >= 2:
+        def _btn(key, lx, ly, lw, lh, label, color):
+            """lx/ly/lw/lh 为逻辑坐标（Button 内部乘 scale）"""
+            if key not in _btns:
+                _btns[key] = _B(lx, ly, lw, lh, "", color=color,
+                                hover_color=tuple(min(255, c + 30) for c in color))
+            b = _btns[key]
+            b.text = label                      # 不是 .label
+            b.color = color
+            b.base_x, b.base_y = int(lx), int(ly)
+            b.base_w, b.base_h = int(lw), int(lh)
+            hit = b.update(_mp, _mpr, _touch, scale)
+            b.draw(self.screen, g.font_small, scale)
+            return hit
+
+        # ---------- 翻页条 ----------
+        if _btn('pg_prev', 450, 96, 80, 40, "上一页", (55, 70, 95)):
+            g.bot_cfg_page = (_page - 1) % 3
+        _pt = g.font_small.render("第 %d / 3 页" % (_page + 1), True, (215, 220, 235))
+        self.screen.blit(_pt, _pt.get_rect(center=(P(BASE_WIDTH / 2), P(116))))
+        if _btn('pg_next', 750, 96, 80, 40, "下一页", (55, 70, 95)):
+            g.bot_cfg_page = (_page + 1) % 3
+
+        # ---------- 卡片（逻辑坐标：x=50, w=1180, h=148, y0=150, gap=12）----------
+        CX, CW, CH, Y0, GAP = 50, BASE_WIDTH - 100, 148, 150, 12
+        for _i, _prof in enumerate(_slice):
+            _cy = Y0 + _i * (CH + GAP)
+            _enabled = bool(_prof.enabled)
+            _bg = (28, 38, 52) if _enabled else (24, 26, 32)
+            _border = (85, 150, 205) if _enabled else (58, 62, 72)
+            pygame.draw.rect(self.screen, _bg,
+                             (P(CX), P(_cy), P(CW), P(CH)), border_radius=12)
+            pygame.draw.rect(self.screen, _border,
+                             (P(CX), P(_cy), P(CW), P(CH)), 2, border_radius=12)
+
+            _slot = _prof.slot
+            _lab = g.font_large.render("P%d" % _slot, True,
+                                       (225, 235, 250) if _enabled else (110, 118, 130))
+            self.screen.blit(_lab, (P(CX + 20), P(_cy + 12)))
+            if _btn('on_%d' % _slot, CX + 20, _cy + 58, 160, 52,
+                    "● 已启用" if _enabled else "○ 未启用",
+                    (40, 110, 70) if _enabled else (58, 62, 74)):
+                _prof.enabled = not _prof.enabled
+            _st = g.font_small.render("敌方 AI" if _prof.hostile else "友方 AI", True,
+                                      (235, 130, 130) if _prof.hostile else (140, 215, 165))
+            self.screen.blit(_st, (P(CX + 20), P(_cy + 118)))
+
+            # 右侧字段两行
+            FX, FW, FS = CX + 200, 190, 12
+            _rows = [
+                ('side', FX, _cy + 14, FW, "阵营：" + ("敌方" if _prof.hostile else "友方"),
+                 (110, 55, 60) if _prof.hostile else (40, 90, 65)),
+                ('diff', FX + FW + FS, _cy + 14, FW, "难度：" + _prof.difficulty.value,
+                 (95, 65, 125) if _prof.difficulty is BotDifficulty.NIGHTMARE else (48, 62, 88)),
+                ('tactic', FX + 2 * (FW + FS), _cy + 14, FW,
+                 "策略：" + _prof.tactic.value, (48, 62, 88)),
+                ('weapon', FX, _cy + 74, 286,
+                 "武器：" + str(getattr(_prof.weapon, 'name', '跟随') if _prof.weapon else '跟随'),
+                 (48, 62, 88)),
+                ('char', FX + 298, _cy + 74, 286,
+                 "角色：" + (_prof.character or '默认'), (48, 62, 88)),
+            ]
+            for _k, _x, _y, _w, _label, _col in _rows:
+                if not _btn('%s_%d' % (_k, _slot), _x, _y, _w, 44, _label, _col):
+                    continue
+                if _k == 'side':
+                    _prof.hostile = not _prof.hostile
+                    _prof.team = 1 if _prof.hostile else 0
+                elif _k == 'diff':
+                    _prof.difficulty = BotDifficulty.cycle(_prof.difficulty)
+                elif _k == 'tactic':
+                    _prof.tactic = BotTactic.cycle(_prof.tactic)
+                elif _k == 'weapon' and _wlist:
+                    _cur = _wlist.index(_prof.weapon) if _prof.weapon in _wlist else -1
+                    _prof.weapon = _wlist[(_cur + 1) % len(_wlist)]
+                elif _k == 'char' and _clist:
+                    _cur = _clist.index(_prof.character) if _prof.character in _clist else -1
+                    _prof.character = _clist[(_cur + 1) % len(_clist)]
+            _sm = g.font_small.render(
+                "%s · %s · %s" % (_prof.difficulty.value, _prof.tactic.value,
+                                  "已上场" if _enabled else "未上场"),
+                True, (140, 155, 175))
+            self.screen.blit(_sm, (P(FX), P(_cy + 124)))
+
+        # ---------- 底部全局操作（y=632，独立留白）----------
+        BW, BS, BY, BH = 240, 16, 632, 46
+        BX0 = int(BASE_WIDTH / 2 - (3 * BW + 2 * BS) / 2)
+        _human = int(getattr(g, 'human_player_count', 1) or 1)
+        if _btn('human', BX0, BY, BW, BH,
+                "人类：" + ("同屏双人" if _human >= 2 else "仅 1 人"), (55, 80, 110)):
+            if _human >= 2:
                 g.human_player_count = 1
                 g.multiplayer_mode = None
             else:
                 g.human_player_count = 2
                 g.multiplayer_mode = "same_screen"
-        _hb.draw(self.screen, g.font_small, scale)
-        _rk = 'back'
-        if _rk not in _btns:
-            _btns[_rk] = _B(1000, 660, 220, 46, "返回房间", color=(90, 50, 50),
-                            hover_color=(130, 70, 70))
-        _rb = _btns[_rk]
-        if _rb.update(_mp, _mpr, _touch, scale):
+        if _btn('toggle_all', BX0 + BW + BS, BY, BW, BH,
+                "全部启用 / 关闭", (70, 70, 95)):
+            _any = any(p.enabled for p in _mgr.profiles)
+            for _p in _mgr.profiles:
+                _p.enabled = not _any
+        if _btn('back', BX0 + 2 * (BW + BS), BY, BW, BH,
+                "返回房间", (100, 55, 55)):
             g.state = GameState.MULTI_ROOM_CONFIG
-        _rb.draw(self.screen, g.font_small, scale)
         _cnt = len(_mgr.enabled_profiles())
-        _info = g.font_small.render("已启用 %d / 9 个 AI（超难：透视 + 精确计算 + 强锁 + 全机制）" % _cnt,
-                                    True, (210, 190, 130))
-        self.screen.blit(_info, _info.get_rect(center=(sw // 2, int(632 * scale))))
+        _info = g.font_small.render(
+            "已上场 %d / 9 名 AI · 超难 = 透视 + 精确提前量 + 强锁 + 全机制" % _cnt,
+            True, (205, 190, 135))
+        self.screen.blit(_info, _info.get_rect(center=(P(BASE_WIDTH / 2), P(606))))
+

@@ -1604,6 +1604,16 @@ class Enemy:
                 EnemyType.ELITE_SORCERER: "elite_sorcerer",
                 EnemyType.ELITE_GUARDIAN: "elite_guardian",
             }
+            # 枚举项可能在某些版本里不存在 → 用名字安全追加，避免 AttributeError
+            try:
+                for _nm in ("ZOMBIE_FROST", "ZOMBIE_VENOM", "ZOMBIE_HUNTER",
+                            "ZOMBIE_BOMBER", "ZOMBIE_BERSERKER", "ZOMBIE_GHOUL",
+                            "ZOMBIE_SHAMAN", "ZOMBIE_JUGGERNAUT"):
+                    _et = getattr(EnemyType, _nm, None)
+                    if _et is not None:
+                        type_map[_et] = "zombie_" + _nm[7:].lower()
+            except Exception:
+                pass
             img_key = type_map.get(et)
 
         use_image = assets is not None and img_key is not None and assets.has_image(img_key)

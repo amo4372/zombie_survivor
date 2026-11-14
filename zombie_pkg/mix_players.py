@@ -271,86 +271,56 @@ class PlayerRegistryMixin:
         _z = _halfw / _d
         return max(self.ZOOM_MIN, min(1.0, _z))
 
-    def _aim_follow_angle_deg(self, player):
-        """当前瞄准方向（度）：技能预瞄 > 蓄力武器拖拽 > 玩家朝向"""
-        try:
-            _a = getattr(player, '_aim_follow_angle', None)
-            if _a is not None:
-                return float(_a)
-            _a = getattr(player, '_awm_saved', None)
-            if _a is not None:
-                return float(_a)
-            _a = getattr(player, '_skill_aim_angle_deg', None)
-            if _a is not None:
-                return float(_a)
-            return float(getattr(player, 'facing_angle', 0.0) or 0.0)
-        except Exception:
-            return 0.0
-
     def update_dynamic_zoom_for(self, cam, player, dt):
-        """v2.9.17：**跟随预瞄线移动相机**，不再靠缩放拉远视野。
+        """v2.9.18：为**任意**摄像机/玩家对计算动态 zoom（分屏各自独立）。
 
-        按住蓄力武器（AWM/轨道炮）或技能预瞄时，镜头沿瞄准方向平滑
-        前移，直到看得见弹道终点；射击/松开后平滑归位。预瞄线由
-        draw_aim_follow_line 每帧绘制，与镜头同步。
-        全模式（单人/分屏/联机）、全武器、全技能共用这一份实现。
+        全模式统一：武器射程 / 蓄力收敛 / 技能预瞄距离取最大值，
+        超出当前视口可见范围时平滑拉远（zoom<1），松开后恢复基准。
         """
         try:
             if cam is None or player is None:
                 return
+            if not hasattr(cam, "zoom"):
+                cam.zoom = 1.0
             if getattr(cam, "_zoom_base", 0.0) <= 0.0:
                 cam._zoom_base = float(getattr(cam, "zoom", 1.0) or 1.0)
-            # 缩放保持基准：视野扩展改由镜头位移完成（用户明确要求）
-            cam.zoom = cam._zoom_base
+            _base = cam._zoom_base
             try:
                 _w = player.get_current_weapon()
             except Exception:
                 _w = None
             _ratio = float(getattr(player, "_charge_ratio", 0.0) or 0.0)
-            _wr = float(getattr(_w, "range", 0) or 0) if _w is not None else 0.0
+            try:
+                _wr = float(getattr(_w, "range", 0) or 0)
+            except Exception:
+                _wr = 0.0
             _charge = bool(_w is not None and getattr(_w, "hold_charge", False)
                            and (getattr(player, "_awm_saved", None) is not None
                                 or getattr(player, "_charge_active", False)))
-            _skill = float(getattr(player, "_skill_aim_dist", 0.0) or 0.0)
-            if getattr(self, "skill_caster", None) is not None \
-                    and getattr(self.skill_caster, "is_aiming", False) \
-                    and (player is getattr(self, "player", None)):
-                _skill = max(_skill, float(getattr(self.skill_caster,
-                                                   "max_skill_distance", 500) or 500)
-                             * float(getattr(self.skill_caster, "distance_ratio", 1.0) or 1.0))
-            _want = max(_wr * 0.5, _skill,
-                        float(getattr(player, "_aim_dist", 0.0) or 0.0))
+            _want = max(float(getattr(player, "_aim_dist", 0.0) or 0.0), _wr * 0.5)
             if _charge:
                 _want = max(_want, _wr * (0.35 + 0.65 * _ratio))
-            _active = bool(_charge or _skill > 0
-                           or getattr(player, "_awm_saved", None) is not None
-                           or getattr(player, "_aim_follow_active", False))
-            _deg = self._aim_follow_angle_deg(player)
-            _rad = math.radians(_deg)
-            _half = 0.5 * min(float(getattr(cam, "width", 1280) or 1280),
-                              float(getattr(cam, "height", 720) or 720))
-            _maxoff = min(_want * 0.62, _half * 0.85) if _active else 0.0
-            if _charge:
-                _maxoff *= (0.35 + 0.65 * _ratio)
-            _tx = math.cos(_rad) * _maxoff
-            _ty = math.sin(_rad) * _maxoff
-            _k = min(1.0, 5.0 * max(0.0, float(dt)))
-            cam.aim_offset_x = float(getattr(cam, "aim_offset_x", 0.0)) + \
-                (_tx - float(getattr(cam, "aim_offset_x", 0.0))) * _k
-            cam.aim_offset_y = float(getattr(cam, "aim_offset_y", 0.0)) + \
-                (_ty - float(getattr(cam, "aim_offset_y", 0.0))) * _k
-            # 供渲染层画"一直跟随的预瞄线"
             try:
-                player._aim_follow_active = _active
-                player._aim_follow_angle = _deg
-                player._aim_follow_dist = _want if _active else 0.0
+                _want = max(_want, float(getattr(player, "_skill_aim_dist", 0.0) or 0.0))
             except Exception:
                 pass
+            if _want <= 0:
+                _target = _base
+            else:
+                _vis = 0.5 * min(float(getattr(self, "scaled_width", 1280) or 1280),
+                                 float(getattr(self, "scaled_height", 720) or 720))
+                _z = _vis / max(1.0, float(_want))
+                _target = max(0.45, min(_base, _z))
+            _cur = float(getattr(cam, "zoom", 1.0) or 1.0)
+            _k = 1.0 - pow(0.001, max(0.0, float(dt)))
+            cam.zoom = _cur + (_target - _cur) * _k
+            if abs(cam.zoom - _base) < 0.002:
+                cam.zoom = _base
         except Exception:
             pass
 
     def update_dynamic_zoom(self, dt, players=None):
-        """每帧调用：所有玩家（含分屏各视口）统一走镜头偏移逻辑"""
+        """每帧调用：所有玩家（含分屏各视口）统一走 zoom 拉远逻辑。"""
         try:
             try:
                 _regs = list((self.registered_players() if hasattr(self, "registered_players") else []) or [])
