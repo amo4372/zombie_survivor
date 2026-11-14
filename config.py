@@ -222,6 +222,7 @@ class GameState(Enum):
     REPLAY_LIST = auto()   # v2.9.1：主菜单回放列表（已保存的死亡/通关录像）
     GACHA = auto()         # v2.8.9：军械库补给（武器抽取，米哈游式保底）
     SLOT_MACHINE = auto()  # v2.8.9：老虎机
+    BOT_CONFIG = auto()    # v2.9.17：多人模式玩家 AI 配置（最多 9 个）
 
 
 class ControlMode(Enum):

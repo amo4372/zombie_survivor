@@ -287,18 +287,17 @@ class BlockMixin:
                 pygame.draw.circle(screen, (255, 205, 90),
                                    (int(px + math.cos(a) * r), int(py + math.sin(a) * r)),
                                    max(2, int(2 + 6 * blk.charge)))
-        if blk.fx_timer > 0:
-            k = blk.fx_timer / 0.45
-            col = (255, 240, 150) if blk.fx_perfect else (130, 210, 255)
-            pygame.draw.circle(screen, col, (px, py),
-                               int(r * (1.0 + (1.0 - k) * 0.9)),
-                               max(2, int(4 * scale)))
-            if font and blk.fx_perfect:
-                t = font.render("完美格挡!", True, col)
-                screen.blit(t, (int(px - t.get_width() / 2), int(py - r - 28)))
-            elif font:
-                t = font.render("格挡", True, col)
-                screen.blit(t, (int(px - t.get_width() / 2), int(py - r - 24)))
+        # v2.9.17：删除用户反馈的"神秘蓝色圆形（文字为格挡）"。
+        # 旧实现在这里画一个淡蓝扩散圆环 +「格挡」浮字，格挡反馈和
+        # HUD 上的 CD 圆环重复，多人分屏下更显得突兀。
+        # 现在只保留一层极淡的金色弧闪（完美格挡时），不画圆、不写字。
+        if blk.fx_timer > 0 and blk.fx_perfect:
+            k = max(0.0, min(1.0, blk.fx_timer / 0.45))
+            _r2 = int(r * (1.0 + (1.0 - k) * 0.35))
+            _a0 = math.radians(float(getattr(blk, "angle", 0.0) or 0.0) - 40)
+            pygame.draw.arc(screen, (255, 235, 150),
+                            pygame.Rect(px - _r2, py - _r2, _r2 * 2, _r2 * 2),
+                            _a0, _a0 + math.radians(80), max(2, int(3 * scale)))
 
     # ------------------------------------------------------------ 渲染：状态图标
     def draw_status_icons(self, screen, x, y, entity, font, scale=1.0):

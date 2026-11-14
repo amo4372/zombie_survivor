@@ -502,6 +502,9 @@ class GameCore:
         self.p2_input = {"mx": 0.0, "my": 0.0, "shoot": False, "skill": False,
                          "throw": False, "sprint": False}
         self.p2_controls = None
+        # v2.9.17 玩家 AI 管理器 / 人类玩家数（1 → 单机全屏，2 → 同屏分屏）
+        self.bot_manager = None
+        self.human_player_count = 1
         self._p2_finger_ids = set()
         self.hud_edit_target = "P1"  # HUD布局编辑对象（双人模式 P1/P2）
 
@@ -920,20 +923,28 @@ class GameCore:
         return self.skill_card_selector
 
     def player_for_tag(self, tag):
-        return self.player2 if tag == "P2" else self.player
+        # v2.9.17：支持 P1..P10（AI 玩家也走同一套升级/注册表）
+        try:
+            _i = int(str(tag).lstrip('P')) - 1
+            if 0 <= _i < len(self.PLAYER_ATTRS):
+                return getattr(self, self.PLAYER_ATTRS[_i], None)
+        except Exception:
+            pass
+        return self.player
 
     def tag_for_player(self, player):
         if player is None:
             return "P1"
-        for _t, _a in (("P2", "player2"), ("P3", "player3"), ("P4", "player4")):
+        for _i, _a in enumerate(self.PLAYER_ATTRS):
             if player is getattr(self, _a, None):
-                return _t
+                return "P%d" % (_i + 1)
         return "P1"
 
     def active_upgrade_tags(self):
-        """当前正在选卡的玩家列表（权威依据 = 每个玩家自己的 upgrade_paused）"""
+        """当前正在选卡的玩家列表（含 AI 玩家，P1..P10）"""
         _out = []
-        for _t in ("P1", "P2"):
+        for _i in range(len(self.PLAYER_ATTRS)):
+            _t = "P%d" % (_i + 1)
             _p = self.player_for_tag(_t)
             if (_p is not None and getattr(_p, 'upgrade_paused', False)
                     and (getattr(_p, 'pending_level_up', False)
@@ -1415,6 +1426,11 @@ class GameCore:
             self.grapple_aiming = False
 
             self.state = GameState.PLAYING
+            # v2.9.17：按房间配置创建玩家 AI（人类数决定渲染方式）
+            try:
+                self.setup_bots(2 if self.multiplayer_mode == "same_screen" else 1)
+            except Exception:
+                pass
             # v2.5.2 敌方位置揭示：新局重置周期（防旧局残留导致开局即处于闪烁窗口"一直显示"）
             self._pvp_reveal_cycle = 0.0
             self.pvp_reveal_active = False

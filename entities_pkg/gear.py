@@ -503,12 +503,14 @@ class RiotGear:
                     best = _pe
         if best is None and players_down:
             for _pd in players_down:
-                if not getattr(_pd, 'alive', True):
-                    continue
+                # v2.9.17：倒地队友 alive=False 但 downed=True。
+                # 旧写法 `if not alive: continue` 直接把它们全跳过，
+                # 这正是"P1 钩爪无法自动锁定倒地队友"的根因。
                 if not getattr(_pd, 'downed', False):
                     continue
                 d = math.hypot(_pd.x - _ax, _pd.y - _ay)
-                if d < best_d:
+                # 救援是紧急操作：用满锁定半径判定，不受蓄力圈成长限制
+                if d < self.grapple_lock_radius * 1.6 and (best is None or d < best_d):
                     best_d = d
                     best = _pd
         # v2.5.8 3) 同阵营存活玩家（可勾取救援/自拉）
@@ -546,6 +548,24 @@ class RiotGear:
         # （"直至极点自动锁定"——满蓄力即锁定最近的可锁定对象，无需手动对准）
         if best is None and self._grapple_aim_charge >= 0.95:
             full_r = self.grapple_lock_radius
+            # v2.9.17：极点自动锁定必须对所有对象一视同仁（敌人玩家、
+            # 倒地队友、道具、僵尸、存活队友），而不是只搜队友/道具/僵尸。
+            for _pool in (players_enemy, players_down, items,
+                          players_teammate, enemies):
+                for _o in _pool or []:
+                    if _o is None:
+                        continue
+                    if not getattr(_o, 'alive', True) and not getattr(_o, 'downed', False):
+                        continue
+                    if getattr(_o, 'is_boss', False):
+                        continue
+                    _d = math.hypot(getattr(_o, 'x', 0) - _ax, getattr(_o, 'y', 0) - _ay)
+                    if _d < full_r:
+                        full_r = _d
+                        best = _o
+            if best is not None:
+                self.grapple_locked_target = best
+                return best
             # v2.5.8: 极点也搜索存活队友
             if players_teammate:
                 for _pt in players_teammate:
@@ -598,7 +618,13 @@ class RiotGear:
         self.self_pull_immune = False
         self.grapple_locked_target = None
         self.grapple_aiming = False
-        self._grapple_aim_charge = None
+        # v2.9.17：第一次发射后锁定圈一直最大的根因 —— _grapple_aim_prev
+        # 只在 update_grapple_lock 的"非瞄准"分支里复位，而发射走的是
+        # _reset_grapple，prev 残留 True → 下次瞄准不重置起始时间 →
+        # charge 立刻 1.0。这里一并清干净。
+        self._grapple_aim_prev = False
+        self._grapple_aim_start = None
+        self._grapple_aim_charge = 0.0
         self.grapple_direct_pull = False
         self.grapple_pull_impact_hit = set()
 

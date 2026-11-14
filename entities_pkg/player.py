@@ -259,6 +259,16 @@ class Player:
         return False
 
     def update(self, dt, move_x, move_y, mouse_angle, world=None, sprinting=False):
+        # v2.9.17 冰霜冷罐：冻结期间移动降到 35%（与冰块覆盖同步）
+        try:
+            _fz = float(getattr(self, 'frozen_timer', 0) or 0)
+            if _fz > 0:
+                self.frozen_timer = max(0.0, _fz - float(dt))
+                move_x *= 0.35
+                move_y *= 0.35
+                sprinting = False
+        except Exception:
+            pass
         # 倒地状态处理（单人模式倒地即死亡）
         if self.downed:
             self.hp = 0

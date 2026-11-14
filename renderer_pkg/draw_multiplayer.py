@@ -173,6 +173,8 @@ def draw_enemy_player_indicators(renderer, game, viewports, vp):
 
 
 def build_split_viewports(game):
+    # v2.9.17：AI 玩家不占视口，视口数 = 人类玩家数（1/2）
+
     """由游戏状态推导同屏视口列表（数据驱动，N 人扩展点）"""
     sw = game.scaled_width
     sh = game.scaled_height

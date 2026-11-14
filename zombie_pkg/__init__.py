@@ -20,6 +20,7 @@ from .mix_shop import ShopMixin
 from .mix_story import StoryMixin
 from .mix_block import BlockMixin
 from .mix_targets import TargetMixin
+from .mix_bots import BotMixin
 # v2.9.3：双子 Boss 暂时移除（表现异常且卡顿），代码保留待重构
 # from .mix_twinboss import TwinBossMixin
 
@@ -27,7 +28,7 @@ from .mix_targets import TargetMixin
 class Game(GameCore, PlayerRegistryMixin, ReplayMixin, FeedbackMixin, MenuMixin, HudMixin,
            InputMixin, SkillsMixin, CombatMixin, EffectsMixin, PlayingMixin,
            MultiplayerMixin, NetMixin, RecordsMixin, ShopMixin, StoryMixin,
-           BlockMixin, TargetMixin,
+           BlockMixin, TargetMixin, BotMixin,
            ):
     """完整游戏类（聚合拆分后的全部功能 Mixin，逻辑与拆分前等价）
 

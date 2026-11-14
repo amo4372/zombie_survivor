@@ -15,6 +15,13 @@ from replay import ReplayRecorder, load_replay, ReplayData, FreeCamera
 REPLAY_DIR = "replays"
 
 
+def _to_byte(v):
+    try:
+        return max(0, min(255, int(v)))
+    except Exception:
+        return 255
+
+
 def _enemy_flag(e, bit):
     """敌人帧标志位读取（兼容 v1/v2 布局，类型安全）"""
     try:
@@ -77,9 +84,56 @@ class ReplayMixin:
         try:
             if getattr(self, 'replay_recorder', None) is None or not self.replay_recorder.recording:
                 return
-            self.replay_recorder.tick(dt, self.registered_players(), getattr(self, 'enemies', []))
+            self.replay_recorder.tick(dt, self.registered_players(),
+                                      getattr(self, 'enemies', []),
+                                      extra=self._replay_frame_extra())
         except Exception:
             pass
+
+    def _replay_frame_extra(self):
+        """v2.9.17：采集本帧的"画面层"数据，让回放还原子弹/技能特效/区域。
+
+        只存轻量数值（坐标/颜色索引/尺寸），不存 pygame 对象，序列化后
+        由 zlib 压缩。数量设上限，避免 30Hz 下文件膨胀。
+        """
+        _ex = {"bullets": [], "fx": [], "zones": []}
+        try:
+            for _p in (getattr(self, 'projectiles', []) or [])[:90]:
+                if not getattr(_p, 'alive', True):
+                    continue
+                _c = getattr(_p, 'color', (255, 220, 140)) or (255, 220, 140)
+                try:
+                    _col = [_to_byte(v) for v in tuple(_c)[:3]]
+                except Exception:
+                    _col = [255, 220, 140]
+                _ex["bullets"].append([
+                    round(float(getattr(_p, 'x', 0)), 1), round(float(getattr(_p, 'y', 0)), 1),
+                    round(float(getattr(_p, 'vx', 0)), 1), round(float(getattr(_p, 'vy', 0)), 1),
+                    _col, round(float(getattr(_p, 'size', 4) or 4), 1),
+                    1 if getattr(_p, 'is_laser', False) else 0,
+                    round(float(getattr(_p, 'laser_angle', 0) or 0), 3),
+                    int(getattr(_p, 'laser_width', 0) or 0)])
+        except Exception:
+            pass
+        try:
+            for _zn in ('fire_zones', 'smoke_zones', 'frost_zones', 'poison_zones'):
+                for _z in (getattr(self, _zn, []) or [])[:12]:
+                    if not isinstance(_z, dict):
+                        continue
+                    _ex["zones"].append([round(float(_z.get('x', 0)), 1),
+                                         round(float(_z.get('y', 0)), 1),
+                                         round(float(_z.get('radius', 60) or 60), 1), _zn])
+        except Exception:
+            pass
+        try:
+            for _pt in (getattr(self, 'particles', None).particles[:40]
+                        if getattr(self, 'particles', None) is not None else [])[:40]:
+                _ex["fx"].append([round(float(getattr(_pt, 'x', 0)), 1),
+                                  round(float(getattr(_pt, 'y', 0)), 1),
+                                  round(float(getattr(_pt, 'size', 2) or 2), 1)])
+        except Exception:
+            pass
+        return _ex
 
     def replay_event(self, kind, text="", x=0.0, y=0.0, value=0.0, tag=None):
         """记录一条回放事件（击杀/受伤/技能/Boss/升级）"""
@@ -128,7 +182,8 @@ class ReplayMixin:
                     return getattr(self, 'replay_last_saved', None)
                 _r = getattr(self, 'replay_recorder', None)
                 if _r is not None and _r.frames:
-                    _r.force_capture(self.registered_players(), getattr(self, 'enemies', []))
+                    _r.force_capture(self.registered_players(), getattr(self, 'enemies', []),
+                                     extra=self._replay_frame_extra())
                     self.replay_event("death", "本局结束", 0, 0, 0, tag=tag)
                     _saved = self.save_replay(tag=tag)
                     self.death_replay_saved = bool(_saved)
@@ -297,14 +352,27 @@ class ReplayMixin:
         之后可在主菜单「回放列表」里反复观看（不止死亡回放，通关录像同样可存）。
         """
         try:
-            _d = getattr(self, 'replay_data', None)
-            if _d is None:
-                return False
             import os
             import shutil as _sh
-            _dir = os.path.join(os.path.dirname(os.path.abspath('.')), 'replays', 'saved')
-            _dir = 'replays/saved'
+            _d = getattr(self, 'replay_data', None)
+            # v2.9.17：旧实现只认 replay_data，且 ReplayData 没有
+            # save()/path 时直接 return False —— 这就是"回放无法保存"。
+            # 现在支持：① 已加载文件 ② 内存回放(to_bytes) ③ 录制器直出。
+            _dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                'replays', 'saved')
             os.makedirs(_dir, exist_ok=True)
+            if _d is None:
+                _r = getattr(self, 'replay_recorder', None)
+                if _r is None or not getattr(_r, 'frames', None):
+                    return False
+                _nm0 = str(name or 'replay_%s' % int(__import__('time').time()))
+                _dst0 = os.path.join(_dir, _nm0 + '.zsr')
+                try:
+                    _r.save(_dst0)
+                except Exception:
+                    return False
+                self._register_saved_replay(_dst0, 'manual', 0.0)
+                return True
             _src = getattr(_d, 'path', None)
             _kind = str(getattr(_d, 'kind', '') or getattr(self, 'replay_kind', '') or 'death')
             _t = getattr(_d, 'duration', 0.0) or 0.0
@@ -316,25 +384,35 @@ class ReplayMixin:
                 _i += 1
             if _src and os.path.exists(_src):
                 _sh.copy2(_src, _dst)
+            elif hasattr(_d, 'to_bytes'):
+                with open(_dst, 'wb') as _f:
+                    _f.write(_d.to_bytes())
+            elif hasattr(_d, 'save'):
+                _d.save(_dst)
             else:
-                # 没有源文件（内存中的回放）→ 直接写盘
-                if hasattr(_d, 'save'):
-                    _d.save(_dst)
-                else:
-                    return False
-            # 登记到 records
-            try:
-                _lst = self.records.data.setdefault('saved_replays', [])
-                _lst.append({"name": os.path.basename(_dst), "path": _dst,
-                             "kind": _kind, "duration": round(float(_t), 1),
-                             "time": __import__('time').strftime("%Y-%m-%d %H:%M")})
-                if hasattr(self.records, 'save'):
-                    self.records.save()
-            except Exception:
-                pass
+                return False
+            self._register_saved_replay(_dst, _kind, _t)
             return True
         except Exception:
             return False
+
+    def _register_saved_replay(self, path, kind, duration):
+        """把保存的回放登记进 records（失败不影响文件本身已存盘）"""
+        try:
+            _r = getattr(self, 'records', None)
+            if _r is None:
+                return
+            _data = getattr(_r, 'data', None)
+            if not isinstance(_data, dict):
+                return
+            _lst = _data.setdefault('saved_replays', [])
+            _lst.append({"name": os.path.basename(path), "path": path,
+                         "kind": str(kind), "duration": round(float(duration or 0), 1),
+                         "time": time.strftime("%Y-%m-%d %H:%M")})
+            if hasattr(_r, 'save'):
+                _r.save()
+        except Exception:
+            pass
 
     def load_saved_replay(self, path):
         """从回放列表打开一个已保存的录像"""

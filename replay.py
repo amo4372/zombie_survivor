@@ -58,12 +58,15 @@ MAX_ENEMIES_PER_FRAME = 220      # 单帧敌人上限（超出的按距离玩家
 class ReplayFrame:
     """一帧世界快照（内存态）"""
 
-    __slots__ = ("t", "players", "enemies")
+    __slots__ = ("t", "players", "enemies", "extra")
 
-    def __init__(self, t, players=None, enemies=None):
+    def __init__(self, t, players=None, enemies=None, extra=None):
         self.t = t
         self.players = players or []   # [(x, y, hp, angle, flags)]
-        self.enemies = enemies or []   # [(id, type_idx, x, y, hp, angle, flags)]
+        self.enemies = enemies or []
+        # v2.9.17：帧外画面数据（子弹/技能特效/区域/粒子），
+        # 让回放尽量还原真实游戏画面而不只是态势图。
+        self.extra = extra or {}   # [(id, type_idx, x, y, hp, angle, flags)]
 
     def __repr__(self):
         return f"<ReplayFrame t={self.t:.2f} p={len(self.players)} e={len(self.enemies)}>"
@@ -98,6 +101,8 @@ class ReplayRecorder:
         self.elapsed = 0.0
         self._event_seq = 0
         self.meta = dict(meta or {})
+        self.frame_extras = []      # v2.9.17：与 frames 一一对应
+        self._pending_extra = {}
         self.recording = True
 
     def stop(self):
@@ -106,10 +111,15 @@ class ReplayRecorder:
     # ------------------------------------------------------------------
     # 采样
     # ------------------------------------------------------------------
-    def tick(self, dt, players, enemies):
-        """每逻辑帧调用；内部按采样率决定是否落一帧"""
+    def tick(self, dt, players, enemies, extra=None):
+        """每逻辑帧调用；内部按采样率决定是否落一帧
+
+        extra: 本帧的额外画面数据（子弹/特效/区域），由游戏侧构造。
+        """
         if not self.recording:
             return
+        if extra is not None:
+            self._pending_extra = extra
         self.elapsed += dt
         self._acc += dt
         if self._acc < self._interval:
@@ -117,10 +127,12 @@ class ReplayRecorder:
         self._acc = 0.0
         self._capture(players, enemies)
 
-    def force_capture(self, players, enemies):
+    def force_capture(self, players, enemies, extra=None):
         """立即落一帧（死亡瞬间等关键节点）"""
         if not self.recording:
             return
+        if extra is not None:
+            self._pending_extra = extra
         self._capture(players, enemies)
 
     def _type_idx(self, name):
@@ -178,6 +190,8 @@ class ReplayRecorder:
             _es = _es[:MAX_ENEMIES_PER_FRAME]
 
         self.frames.append(ReplayFrame(self.elapsed, _ps, _es))
+        self.frame_extras.append(dict(self._pending_extra or {}))
+        self._pending_extra = {}
         if len(self.frames) > self.max_frames:
             del self.frames[:len(self.frames) - self.max_frames]
 
@@ -213,6 +227,10 @@ class ReplayRecorder:
         _meta["duration"] = round(self.elapsed, 3)
         _meta["sample_hz"] = self.sample_hz
         _meta["saved_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        # v2.9.17：画面增强数据（每帧子弹/技能特效），随 meta 一起压缩。
+        # 不改二进制帧布局 → v1/v2 回放文件仍可正常读取。
+        _meta["frame_extras"] = self.frame_extras[:len(self.frames)]
+        _meta["fmt"] = 3
         _meta_bytes = json.dumps(_meta, ensure_ascii=False).encode("utf-8")
 
         _buf = bytearray()
@@ -286,7 +304,15 @@ def load_replay(path):
             _el.append(_v if _ver == VERSION else (_v[0], _v[1], _v[2], _v[3], _v[4], 0.0, _v[5], 12.0, _v[6]))
             _p += _pe
         _frames.append(ReplayFrame(_t, _pl, _el))
-    return ReplayData(_meta, _frames, _events, os.path.basename(path))
+    _d = ReplayData(_meta, _frames, _events, os.path.basename(path))
+    _extras = _meta.get("frame_extras") or []
+    try:
+        for _i, _f in enumerate(_frames):
+            _f.extra = _extras[_i] if _i < len(_extras) and isinstance(_extras[_i], dict) else {}
+    except Exception:
+        pass
+    _d.path = path
+    return _d
 
 
 class ReplayData:

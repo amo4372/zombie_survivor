@@ -16,7 +16,12 @@ _HUD_BAR_ALPHA = 255
 
 
 def is_frozen_entity(ent):
-    """v2.9.14：同时兼容旧 BuffManager 与新结构化 EntityStatus 的冰冻。"""
+    """v2.9.14：同时兼容旧 BuffManager / EntityStatus / v2.9.17 冰霜冷罐。"""
+    try:
+        if float(getattr(ent, 'frozen_timer', 0) or 0) > 0:
+            return True
+    except Exception:
+        pass
     try:
         bm = getattr(ent, "buff_manager", None)
         if bm is not None and bm.is_frozen():
@@ -32,6 +37,69 @@ def is_frozen_entity(ent):
     except Exception:
         pass
     return False
+
+
+# v2.9.17 程序化僵尸贴图（tools/gen_zombie_sprites.py 生成，与 _enemy_style 同配色）
+_ZOMBIE_SPRITE_KEYS = {
+    'FROST': 'frost', 'ICE': 'frost', 'FREEZE': 'frost',
+    'ELECTRIC': 'electric', 'SHOCK': 'electric', 'TESLA': 'electric',
+    'POISON': 'poison', 'TOXIC': 'poison', 'GAS': 'poison',
+    'PHANTOM': 'phantom', 'GHOST': 'phantom', 'SHADOW': 'phantom',
+    'SHIELD': 'shield', 'ARMOR': 'shield',
+    'HEALER': 'healer', 'HEAL': 'healer', 'MEDIC': 'healer',
+    'EXPLODER': 'exploder', 'BOMBER': 'exploder', 'BLAST': 'exploder',
+    'SPLITTER': 'splitter', 'SPAWNER': 'splitter',
+}
+_SPRITE_CACHE = {}
+
+
+def _zombie_sprite(enemy, scale):
+    try:
+        _n = str(getattr(getattr(enemy, 'enemy_type', None), 'name',
+                         getattr(enemy, 'enemy_type', '')) or '').upper()
+        if getattr(enemy, 'is_boss', False):
+            return None
+        _key = None
+        for _k, _v in _ZOMBIE_SPRITE_KEYS.items():
+            if _k in _n:
+                _key = _v
+                break
+        if _key is None:
+            return None
+        if _key not in _SPRITE_CACHE:
+            import os as _os
+            _path = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
+                                  'assets', 'images', 'zombies', 'zombie_%s.png' % _key)
+            _SPRITE_CACHE[_key] = (pygame.image.load(_path).convert_alpha()
+                                   if _os.path.exists(_path) else None)
+        _img = _SPRITE_CACHE[_key]
+        if _img is None:
+            return None
+        _sz = max(24, int(float(getattr(enemy, 'size', 20) or 20) * 2.8 * scale))
+        return pygame.transform.smoothscale(_img, (_sz, _sz))
+    except Exception:
+        return None
+
+
+def draw_zombie_sprite(screen, enemy, cam_x, cam_y, scale):
+    """若该类型有程序化贴图则绘制贴图 + 血条，返回 True；否则交给原绘制。"""
+    _img = _zombie_sprite(enemy, scale)
+    if _img is None:
+        return False
+    try:
+        _x = int((getattr(enemy, 'x', 0) - cam_x) * scale)
+        _y = int((getattr(enemy, 'y', 0) - cam_y) * scale)
+        screen.blit(_img, (_x - _img.get_width() // 2, _y - _img.get_height() // 2))
+        _hp = float(getattr(enemy, 'hp', 0) or 0)
+        _mx = float(getattr(enemy, 'max_hp', 0) or 0)
+        if _mx > 0 and _hp < _mx * 0.999:
+            _bw = max(12, int(_img.get_width() * 0.7))
+            pygame.draw.rect(screen, (30, 12, 12), (_x - _bw // 2, _y - _img.get_height() // 2 - 7, _bw, 3))
+            pygame.draw.rect(screen, (215, 60, 55), (_x - _bw // 2, _y - _img.get_height() // 2 - 7,
+                                                     int(_bw * max(0, _hp / _mx)), 3))
+        return True
+    except Exception:
+        return False
 
 
 def draw_frozen_overlay(screen, ent, camera_x, camera_y, scale, size=None):
@@ -88,7 +156,10 @@ class PlayMixin:
     def _draw_playing(self):
         if not self.game.world or not self.game.player:
             return
-        if self.game.is_multiplayer_active():
+        # v2.9.17：只有「人类玩家 ≥ 2」才分屏；只有 1 个人类（哪怕
+        # 场上有 9 个 AI）也用单机全屏渲染，AI 只是世界里的实体。
+        _humans = max(1, int(getattr(self.game, 'human_player_count', 1) or 1))
+        if self.game.is_multiplayer_active() and _humans >= 2:
             self._draw_playing_split()
             # v2.9.11：两个玩家各自的选卡面板都画。
             # 旧版只画 selector(P1)，P2 即使 upgrade_paused=True 也永远
@@ -467,6 +538,7 @@ class PlayMixin:
                 self.screen.blit(_bt, (int(_bx + _br - _bt.get_width()), int(_by - _br + 4)))
 
     def _draw_playing_core(self, player, camera, viewport_x=0, aim_owner="P1"):
+        self._view_owner = player   # v2.9.17：循环变量覆盖前的真实视口主人
         if not self.game.world or not player:
             return
 
@@ -673,8 +745,9 @@ class PlayMixin:
                     pygame.draw.circle(_zs, (220, 40, 40, 28), (_er, _er), _er, max(2, int(3 * scale)))
                     pygame.draw.circle(_zs, (220, 60, 60, 40), (_er, _er), _er, 1)
                     self.screen.blit(_zs, (_ex - _er, _ey - _er))
-            enemy.draw(self.screen, cam_x, cam_y, self.game.font, scale, self.game.assets,
-                       getattr(player, 'x', None), getattr(player, 'y', None))
+            if not draw_zombie_sprite(self.screen, enemy, cam_x, cam_y, scale):
+                enemy.draw(self.screen, cam_x, cam_y, self.game.font, scale, self.game.assets,
+                           getattr(player, 'x', None), getattr(player, 'y', None))
             # 技能前摇预警：释放带前摇的技能时显示警示（红色闪烁圈+危险标记）
             if (getattr(enemy, 'boss_is_executing', False)
                     or getattr(enemy, 'skill_windup', 0) > 0
@@ -886,6 +959,17 @@ class PlayMixin:
                 except Exception:
                     pass
 
+        # v2.9.17：格挡世界层特效在多人分屏下只画本视口主人。
+        # 旧版在"遍历所有玩家"的循环里对每个人都调 draw_block_fx，
+        # 且循环变量覆盖了函数参数 player，导致 P2 的格挡弧画到 P1 视口、
+        # 自己的弧反而看不见（"有格挡效果但没渲染"）。
+        try:
+            _own = self._view_owner if hasattr(self, '_view_owner') else player
+            self.game.draw_block_fx(self.screen, _own, cam_x, cam_y,
+                                    scale, viewport_x, self.game.font_small)
+        except Exception:
+            pass
+
         # v2.5.0/v2.5.4 玩家冰冻冰块渲染：冻结时覆盖淡蓝冰块（多人 N 人全覆盖）
         _ice_players = [player] if self.game.player2 is None else [p for p in (self.game.player, self.game.player2, getattr(self.game, 'player3', None), getattr(self.game, 'player4', None)) if p is not None]
         for player in _ice_players:
@@ -1031,10 +1115,23 @@ class PlayMixin:
         try:
             # v2.9.15：必须"正在按住蓄力"才画。旧版只看 _charge_spread，
             # 松开/开火后该字段残留就会永久显示，甚至下一次射击后仍卡住。
-            if (getattr(player, '_awm_saved', None) is not None
+            # v2.9.17：P1 在触控/键控下 _awm_saved 可能没被赋值，
+            # 但蓄力收敛已经在跑（_charge_spread 有值）→ 扇形不该消失。
+            # 只要"蓄力进行中"就画，松开后 _charge_spread 会被清空。
+            _charge_on = (getattr(player, '_awm_saved', None) is not None
+                          or getattr(player, '_charge_active', False))
+            if (_charge_on
                     and getattr(player, '_charge_spread', None) is not None
                     and getattr(player, 'downed', False) is False):
                 draw_charge_spread_fan(self, player, cam_x, cam_y, scale)
+                draw_aim_follow_line(self, player, cam_x, cam_y, scale)
+        except Exception:
+            pass
+        # v2.9.17：技能预瞄 / 普通武器瞄准时的跟随预瞄线（与镜头偏移同步）
+        try:
+            if not (getattr(player, '_charge_spread', None) is not None
+                    and getattr(player, '_awm_saved', None) is not None):
+                draw_aim_follow_line(self, player, cam_x, cam_y, scale)
         except Exception:
             pass
         # v2.8.8 子弹破空曳光（高速弹丸/轨道炮）
@@ -2539,6 +2636,42 @@ class PlayMixin:
 # ======================================================================
 # v2.8.8 蓄力武器的散布扇形 + 弹道破空特效
 # ======================================================================
+
+def draw_aim_follow_line(self, player, cam_x, cam_y, scale):
+    """v2.9.17：镜头跟随预瞄线时，每帧绘制从玩家到弹道终点的瞄准线。
+
+    与 Camera.aim_offset_x/y 同步：镜头往哪移，线就指向哪。松开射击 /
+    技能释放后 _aim_follow_active 置 False，线消失、镜头平滑归位。
+    """
+    try:
+        if not getattr(player, '_aim_follow_active', False):
+            return
+        _dist = float(getattr(player, '_aim_follow_dist', 0.0) or 0.0)
+        if _dist <= 0:
+            return
+        _a = math.radians(float(getattr(player, '_aim_follow_angle', 0.0) or 0.0))
+        _px = int((getattr(player, 'x', 0) - cam_x) * scale)
+        _py = int((getattr(player, 'y', 0) - cam_y) * scale)
+        _ex = int(_px + math.cos(_a) * _dist * scale)
+        _ey = int(_py + math.sin(_a) * _dist * scale)
+        _col = (255, 225, 140)
+        # 虚线：避免整条实线盖住画面
+        _n = max(8, int(_dist * scale / 22))
+        for _i in range(0, _n, 2):
+            _t0 = _i / _n
+            _t1 = min(1.0, (_i + 1) / _n)
+            pygame.draw.line(self.screen, _col,
+                             (int(_px + (_ex - _px) * _t0), int(_py + (_ey - _py) * _t0)),
+                             (int(_px + (_ex - _px) * _t1), int(_py + (_ey - _py) * _t1)),
+                             max(1, int(2 * scale)))
+        # 终点标记（弹道极限射程）
+        pygame.draw.circle(self.screen, _col, (_ex, _ey), max(4, int(9 * scale)),
+                           max(1, int(2 * scale)))
+        pygame.draw.circle(self.screen, (60, 40, 20), (_ex, _ey),
+                           max(2, int(3 * scale)))
+    except Exception:
+        pass
+
 
 def draw_charge_spread_fan(self, player, cam_x, cam_y, scale):
     """蓄力时绘制"子弹散布扇形"

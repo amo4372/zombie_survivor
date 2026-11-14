@@ -976,8 +976,21 @@ class MultiplayerMixin:
                                    players_teammate=self._alive_teammates_of(p2))
         else:
             rg.grapple_aiming = False
-            if not rg.grapple_active:
+            # v2.9.17：释放帧（is_aiming 已被 handle_touch 置 False）绝不
+            # 清 locked_target —— 旧版在这里清掉，P2 只能靠预瞄线精准
+            # 命中，锁定圈的自动锁定形同虚设。锁定态统一由发射后清理。
+            if not rg.grapple_active and not self._p2_casting_this_frame():
                 rg.grapple_locked_target = None
+
+    def _p2_casting_this_frame(self):
+        """本帧是否有 P2 技能释放（触控 just_released / 键控 skill 标志）"""
+        try:
+            _c2 = getattr(self, 'p2_controls', None) or {}
+            if getattr(_c2.get('skill_caster'), 'just_released', False):
+                return True
+        except Exception:
+            pass
+        return bool(getattr(self, '_p2_skill_pending', False))
 
     def _skill_p2_scythe_dance(self, p2):
         """P2 死神镰刀专属技能（等级随 P2 武器等级成长）"""

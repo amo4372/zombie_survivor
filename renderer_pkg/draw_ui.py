@@ -36,19 +36,37 @@ def _zs_lan_ip():
 
 
 def _zs_copy_text(text):
+    """v2.9.17：Android/Pydroid3 的 pygame 没有 scrap 模块。
+    旧写法直接访问 pygame.scrap 会打出 RuntimeWarning: use scrap:
+    No module named 'pygame.scrap'，且剪贴板永远不可用。
+    现在先用 find_spec 静默探测，再逐级降级到外部剪贴板命令/文件。"""
+    import importlib.util as _ilu
     try:
-        import pygame as _pg
-        if not _pg.scrap.get_init():
-            _pg.scrap.init()
-        _pg.scrap.put(_pg.SCRAP_TEXT, str(text).encode("utf-8"))
+        if _ilu.find_spec("pygame.scrap") is None:
+            raise ModuleNotFoundError("pygame.scrap")
+        import pygame.scrap as _scrap
+        _scrap.init()
+        _scrap.put(_scrap.SCRAP_TEXT, str(text).encode("utf-8"))
         return True
     except Exception:
+        pass
+    # Android 备用：外部剪贴板命令（Termux / adb 环境常见）
+    import subprocess as _sp, shutil as _sh
+    for _cmd in ("termux-clipboard-set", "xclip", "wl-copy"):
         try:
-            import pygame as _pg
-            _pg.scrap.put_text(str(text))
-            return True
+            if _sh.which(_cmd):
+                _sp.run([_cmd], input=str(text).encode("utf-8"), timeout=2,
+                        stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
+                return True
         except Exception:
-            return False
+            pass
+    # 最终降级：写入项目根目录的 clipboard.txt，供用户直接查看/复制
+    try:
+        with open("clipboard.txt", "w", encoding="utf-8") as _f:
+            _f.write(str(text))
+        return True
+    except Exception:
+        return False
 
 
 def _zs_host_addr(g):
@@ -3735,6 +3753,16 @@ class UiMixin:
         else:
             g._dd_overlay_rects = []
 
+        # v2.9.17：进入玩家 AI 配置页（最多 9 个 AI）
+        _bot_r = pygame.Rect(int(sw * 0.5 - 150 * scale), int(sh - 62 * scale),
+                             int(300 * scale), int(46 * scale))
+        pygame.draw.rect(self.screen, (40, 70, 95), _bot_r, border_radius=10)
+        pygame.draw.rect(self.screen, (110, 180, 235), _bot_r, 2, border_radius=10)
+        _bt = self.game.font.render("设置 AI 玩家", True, WHITE)
+        self.screen.blit(_bt, _bt.get_rect(center=_bot_r.center))
+        if any(_bot_r.collidepoint(te["pos"]) for te in _all_ups):
+            g.state = GameState.BOT_CONFIG
+
     def _set_room_mode(self, g, idx):
         try:
             from config import GameMode
@@ -3833,12 +3861,11 @@ class UiMixin:
         y = int(110 * scale)
         _ups_n = [te for te in getattr(g, 'touch_events', [])
                   if te.get("type") == "up" and te.get("pos") is not None]
-        _clk = None
-        for _te in _ups_n:
-            _clk = _te["pos"]
-            break
-        if _clk is None and mouse_pressed[0]:
-            _clk = mouse_pos
+        # v2.9.17：单一 _clk 只取"第一个 up"，多指/合成鼠标事件下
+        # 下拉行与选项经常收不到点击 → "网络联机下滑栏点不动"。
+        # 改用全量点击列表，下拉行/选项各自遍历；页面交互仍用主点击。
+        _clk_all = [te["pos"] for te in _ups_n if te.get("pos") is not None]
+        _clk = _clk_all[0] if _clk_all else (mouse_pos if mouse_pressed[0] else None)
 
         # ===== v2.9.11 局域网房间发现（覆盖式面板，任意分辨率可用）=====
         try:
@@ -3961,7 +3988,7 @@ class UiMixin:
             _cfg_box(rect, text + ("  ▼" if _ddk != key else "  ▲"))
             if _ddk == key:
                 _opt_pending.append((key, rect, options, setter))
-            if _clk is not None and rect.collidepoint(_clk):
+            if any(rect.collidepoint(_c) for _c in _clk_all):
                 g.net_dd_key = key if _ddk != key else None
                 g.net_dd_scroll = 0
                 return True
@@ -4091,7 +4118,7 @@ class UiMixin:
                 _o = _options[_maxi + _oi]
                 _or = pygame.Rect(_ox + int(2 * scale), _oy + int(3 * scale) + _oi * _dd_opt_h,
                                   _ow - int(4 * scale), _dd_opt_h - int(4 * scale))
-                _hover = _clk is not None and _or.collidepoint(_clk)
+                _hover = any(_or.collidepoint(_c) for _c in _clk_all)
                 pygame.draw.rect(self.screen, (40, 46, 62) if _hover else (30, 34, 46), _or, border_radius=6)
                 pygame.draw.rect(self.screen, (90, 100, 120), _or, 1, border_radius=6)
                 _ot = self.game.font_small.render(str(_o[0]), True, WHITE)
@@ -4127,7 +4154,7 @@ class UiMixin:
                     _o = _options[_maxi + _oi]
                     _or = pygame.Rect(_ox + int(2 * scale), _oy + int(3 * scale) + _oi * _dd_opt_h,
                                       _ow - int(4 * scale), _dd_opt_h - int(4 * scale))
-                    if _or.collidepoint(_clk):
+                    if any(_or.collidepoint(_c) for _c in _clk_all):
                         _setter(_o[1])
                         g.net_dd_key = None
                         _clk = None
@@ -4142,15 +4169,27 @@ class UiMixin:
         # v2.9.16：网络页下拉展开时只屏蔽"落在下拉区域上"的点击，
         # 其余按钮（返回、复制、输入框）仍可正常操作，不再一刀切。
         if getattr(g, 'net_dd_key', None) and _clk is not None:
+            # 只屏蔽"落在下拉区域"的点击（含下拉行与选项列表）；
+            # 这些已由 _dd_row / 选项循环消费，不再传给页面按钮。
             _net_ov = [r for r in getattr(g, '_net_dd_overlay_rects', []) or []
                        if hasattr(r, 'collidepoint')]
-            if any(_r.collidepoint(_clk) for _r in _net_ov):
+            if any(_r.collidepoint(_c) for _c in _clk_all for _r in _net_ov):
                 _clk = None
             else:
                 g.net_dd_key = None       # 点空白处先收起下拉
                 _clk = None
         # 交互（输入框/按钮；下拉行已处理）
         if _clk:
+            # v2.9.17：点击输入框以外的区域一律失焦并收起输入法；
+            # 再次点击输入框/端口框重新聚焦并唤起输入法。
+            _in_ip = ip_r.collidepoint(_clk)
+            _in_port = port_r.collidepoint(_clk)
+            if not _in_ip and not _in_port and not copy_r.collidepoint(_clk):
+                if getattr(g, 'net_ip_focused', False) or getattr(g, 'net_port_focused', False):
+                    g.net_ip_focused = False
+                    g.net_port_focused = False
+                    try: g.stop_text_input()
+                    except Exception: pass
             if copy_r.collidepoint(_clk):
                 if _zs_copy_text(_addr):
                     g.net_copy_hint = 2.5
@@ -4162,10 +4201,15 @@ class UiMixin:
                 g._net_start_host()
             elif port_r.collidepoint(_clk):
                 g.net_ip_focused = False
+                # 重新点击已聚焦的输入框也要重新唤起输入法（可能被系统收起）
+                try: g.stop_text_input()
+                except Exception: pass
                 g.net_port_focused = True
                 g.start_text_input()
             elif ip_r.collidepoint(_clk):
                 g.net_port_focused = False
+                try: g.stop_text_input()
+                except Exception: pass
                 g.net_ip_focused = True
                 g.start_text_input()
             elif join_r.collidepoint(_clk):
@@ -5371,3 +5415,120 @@ class UiMixin:
                 self.screen, self.game.font, self.game.font_large, self.game.font_title,
                 self.game.scale, player_skill_tree
             )
+
+    # ==================================================================
+    # v2.9.17 玩家 AI 配置页（最多 9 个；与单人/分屏/联机全兼容）
+    # ==================================================================
+    def _draw_bot_config(self):
+        """每个 AI 一行：启用 / 阵营 / 难度 / 策略 / 武器 / 角色，点按循环。
+
+        复用主菜单同款持久化 Button（渲染层 update 直接处理触控），
+        不依赖输入层白名单，手机上保证点得动。
+        """
+        g = self.game
+        scale = g.scale
+        sw, sh = g.scaled_width, g.scaled_height
+        self.screen.fill((12, 14, 20))
+        _t = g.font_title.render("玩家 AI 配置", True, WHITE)
+        self.screen.blit(_t, _t.get_rect(center=(sw // 2, int(42 * scale))))
+        _sub = g.font_small.render("最多 9 个 AI · 人类 1 人=单机全屏 / 2 人=同屏分屏 / 联机每人单机视角",
+                                   True, (165, 180, 200))
+        self.screen.blit(_sub, _sub.get_rect(center=(sw // 2, int(80 * scale))))
+
+        from ui import Button as _B
+        from ai_pkg.player_bots import BotDifficulty, BotTactic, BotManager
+        try:
+            from config import WeaponType
+            _wlist = [w for w in WeaponType
+                      if not any(k in w.name for k in ('GRENADE', 'MOLOTOV', 'SMOKE'))]
+        except Exception:
+            _wlist = []
+        try:
+            from config import CHARACTERS
+            _clist = list(CHARACTERS.keys())
+        except Exception:
+            _clist = []
+        _mgr = g._bots() if hasattr(g, '_bots') else None
+        if _mgr is None:
+            return
+        _btns = getattr(g, 'bot_cfg_btns', None)
+        if _btns is None:
+            _btns = {}
+            g.bot_cfg_btns = _btns
+        _cols = [40, 200, 350, 500, 660, 830]
+        _widths = [150, 140, 140, 150, 160, 160]
+        _touch = getattr(g, 'touch_events', []) or []
+        _mp = pygame.mouse.get_pos()
+        _mpr = pygame.mouse.get_pressed()
+        _y0 = int(112 * scale)
+        _rowh = int(52 * scale)
+        for _i, _prof in enumerate(_mgr.profiles):
+            _y = _y0 + _i * _rowh
+            _labels = [
+                ("启用" if _prof.enabled else "关闭"),
+                ("敌方AI" if _prof.hostile else "友方AI"),
+                _prof.difficulty.value,
+                _prof.tactic.value,
+                str(getattr(_prof.weapon, 'name', '跟随') if _prof.weapon else '跟随'),
+                (_prof.character or '默认角色'),
+            ]
+            _keys = ('on', 'side', 'diff', 'tactic', 'weapon', 'char')
+            for _ci, _k in enumerate(_keys):
+                _bk = "%d_%s" % (_i, _k)
+                if _bk not in _btns:
+                    _btns[_bk] = _B(_cols[_ci], _y + 90, _widths[_ci],
+                                    int(40 * scale), "", color=(42, 52, 70),
+                                    hover_color=(62, 78, 105))
+                _b = _btns[_bk]
+                _b.label = _labels[_ci]
+                _color = (40, 95, 60) if (_k == 'on' and _prof.enabled) else                          ((110, 45, 50) if _k == 'side' and _prof.hostile else (42, 52, 70))
+                _b.color = _color
+                if _b.update(_mp, _mpr, _touch, scale):
+                    if _k == 'on':
+                        _prof.enabled = not _prof.enabled
+                    elif _k == 'side':
+                        _prof.hostile = not _prof.hostile
+                        _prof.team = 1 if _prof.hostile else 0
+                    elif _k == 'diff':
+                        _prof.difficulty = BotDifficulty.cycle(_prof.difficulty)
+                    elif _k == 'tactic':
+                        _prof.tactic = BotTactic.cycle(_prof.tactic)
+                    elif _k == 'weapon' and _wlist:
+                        _cur = _wlist.index(_prof.weapon) if _prof.weapon in _wlist else -1
+                        _prof.weapon = _wlist[(_cur + 1) % len(_wlist)]
+                    elif _k == 'char' and _clist:
+                        _cur = _clist.index(_prof.character) if _prof.character in _clist else -1
+                        _prof.character = _clist[(_cur + 1) % len(_clist)]
+            # 槽位标签
+            _lab = g.font_small.render("P%d" % (_i + 2), True, (150, 165, 185))
+            self.screen.blit(_lab, (int(8 * scale), _y + int(98 * scale)))
+        for _b in _btns.values():
+            _b.draw(self.screen, g.font_small, scale)
+
+        # 人类玩家数 + 返回
+        _hk = 'human'
+        if _hk not in _btns:
+            _btns[_hk] = _B(40, 660, 300, 46, "", color=(55, 75, 100),
+                            hover_color=(80, 105, 140))
+        _hb = _btns[_hk]
+        _hb.label = "人类玩家：%s" % ("同屏双人" if getattr(g, 'human_player_count', 1) >= 2 else "仅 1 人")
+        if _hb.update(_mp, _mpr, _touch, scale):
+            if getattr(g, 'human_player_count', 1) >= 2:
+                g.human_player_count = 1
+                g.multiplayer_mode = None
+            else:
+                g.human_player_count = 2
+                g.multiplayer_mode = "same_screen"
+        _hb.draw(self.screen, g.font_small, scale)
+        _rk = 'back'
+        if _rk not in _btns:
+            _btns[_rk] = _B(1000, 660, 220, 46, "返回房间", color=(90, 50, 50),
+                            hover_color=(130, 70, 70))
+        _rb = _btns[_rk]
+        if _rb.update(_mp, _mpr, _touch, scale):
+            g.state = GameState.MULTI_ROOM_CONFIG
+        _rb.draw(self.screen, g.font_small, scale)
+        _cnt = len(_mgr.enabled_profiles())
+        _info = g.font_small.render("已启用 %d / 9 个 AI（超难：透视 + 精确计算 + 强锁 + 全机制）" % _cnt,
+                                    True, (210, 190, 130))
+        self.screen.blit(_info, _info.get_rect(center=(sw // 2, int(632 * scale))))

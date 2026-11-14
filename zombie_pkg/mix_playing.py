@@ -540,7 +540,61 @@ class PlayingMixin:
         if self.config.screen_shake and camera is not None:
             camera.shake(6, 0.4)
 
+    def _update_frost_throwers(self, dt):
+        """冰霜僵尸不再靠贴身减速，而是投掷『冷罐』到目标区域。"""
+        _players = [p for p in (self.registered_players() if hasattr(self, 'registered_players') else [])
+                    if getattr(p, 'alive', True)]
+        if not _players:
+            return
+        for _e in (getattr(self, 'enemies', []) or []):
+            try:
+                if not getattr(_e, 'alive', False) or getattr(_e, 'is_boss', False):
+                    continue
+                _nm = str(getattr(getattr(_e, 'enemy_type', None), 'name', '') or '').upper()
+                if 'FROST' not in _nm and 'ICE' not in _nm and 'FREEZE' not in _nm:
+                    continue
+                _cd = float(getattr(_e, '_frost_cd', 0.0) or 0.0) - dt
+                if _cd > 0:
+                    _e._frost_cd = _cd
+                    continue
+                _e._frost_cd = 5.2 + (hash(str(getattr(_e, 'id', id(_e)))) % 17) / 10.0
+                # 目标：最近玩家，带 0.35s 提前量
+                _tg = min(_players, key=lambda p: (p.x - _e.x) ** 2 + (p.y - _e.y) ** 2)
+                _tx = float(_tg.x) + float(getattr(_tg, 'vx', 0) or 0) * 0.35
+                _ty = float(_tg.y) + float(getattr(_tg, 'vy', 0) or 0) * 0.35
+                if not hasattr(self, 'frost_zones'):
+                    self.frost_zones = []
+                self.frost_zones.append({"x": _tx, "y": _ty, "radius": 92.0,
+                                         "duration": 4.6, "timer": 0.0})
+                try:
+                    self.replay_event("skill", "冰霜僵尸·冷罐", _tx, _ty, 0, tag="frost")
+                except Exception:
+                    pass
+            except Exception:
+                continue
+
+    def _update_frost_zones(self, dt):
+        """冷罐落地形成的圆形持续冰冻区：区域内玩家被冻结 + 减速。"""
+        _zs = getattr(self, 'frost_zones', None) or []
+        for _z in _zs[:]:
+            _z["timer"] = float(_z.get("timer", 0.0)) + dt
+            if _z["timer"] >= float(_z.get("duration", 4.6)):
+                _zs.remove(_z)
+                continue
+            for _p in (self.registered_players() if hasattr(self, 'registered_players') else []):
+                if not getattr(_p, 'alive', True):
+                    continue
+                _d = ((_p.x - _z["x"]) ** 2 + (_p.y - _z["y"]) ** 2) ** 0.5
+                if _d <= float(_z.get("radius", 92.0)):
+                    _p.frozen_timer = max(float(getattr(_p, 'frozen_timer', 0) or 0), 0.9)
+        self.frost_zones = _zs
+
     def _update_playing(self, dt):
+        # v2.9.17：玩家 AI 每帧决策（人类数决定渲染，不影响 AI 更新）
+        try:
+            self.update_bots(dt)
+        except Exception:
+            pass
         # v2.9.14：消费所有玩家的回复事件 → 世界坐标浮字/粒子（分屏可见）
         try:
             for _hp in self._all_players():
@@ -652,10 +706,20 @@ class PlayingMixin:
         except Exception:
             pass
 
-        # v2.8.9 通用动态视野：瞄准/射程超出屏幕时自动拉远（所有武器与技能）
+        # v2.8.9 通用动态视野（v2.9.17 起改为镜头跟随预瞄线移动）
         try:
             if hasattr(self, 'update_dynamic_zoom'):
                 self.update_dynamic_zoom(dt)
+        except Exception:
+            pass
+
+        # v2.9.17 冰霜僵尸：周期性投掷冷罐 → 圆形持续冰冻区域
+        try:
+            self._update_frost_throwers(dt)
+        except Exception:
+            pass
+        try:
+            self._update_frost_zones(dt)
         except Exception:
             pass
 
@@ -1254,6 +1318,22 @@ class PlayingMixin:
             _charge_weapon = None
         if _charge_weapon is not None and getattr(_charge_weapon, "hold_charge", False):
             _saved_aim = getattr(self.player, "_awm_saved", None)
+            # v2.9.17：P1 触控/键控下 auto_shoot 可能为 False（射击按钮
+            # 走的是另一条路径），但蓄力依旧应当进行。用"按住射击"通用
+            # 标志驱动扇形与散布收敛，避免 P1 完全没有扇形也没有散布。
+            try:
+                _holding = bool(auto_shoot or getattr(self.aim_button, 'is_shooting', False)
+                                or getattr(self.aim_button, 'is_aiming', False))
+                if _holding and not _p1_paused:
+                    if getattr(self.player, '_awm_saved', None) is None:
+                        self.player._awm_saved = float(getattr(self.player, 'facing_angle', 0.0) or 0.0)
+                    self.player._charge_active = True
+                    if getattr(self.player, '_charge_start_t', None) is None:
+                        self.player._charge_start_t = time.time()
+                else:
+                    self.player._charge_active = False
+            except Exception:
+                pass
             if auto_shoot and not _p1_paused:
                 # 按住：实时更新蓄力角（拖拽时预瞄线跟随摇杆），本帧不开火
                 self.player._awm_saved = mouse_angle
@@ -1302,7 +1382,8 @@ class PlayingMixin:
         _charge_ratio = 0.0
         _charge_w = _charge_weapon
         if _charge_w is not None and getattr(_charge_w, "hold_charge", False) \
-                and getattr(self.player, "_awm_saved", None) is not None:
+                and (getattr(self.player, "_awm_saved", None) is not None
+                     or getattr(self.player, "_charge_active", False)):
             _st = getattr(self.player, "_charge_start_t", None)
             if _st is not None:
                 _charge_t = max(0.0, time.time() - _st)

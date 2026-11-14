@@ -13,6 +13,10 @@ class Camera:
         self.shake_duration = 0
         self.shake_intensity = 0
         self.shake_enabled = True
+        # v2.9.17：瞄准时的镜头偏移（跟随预瞄线方向移动相机，
+        # 直到看见弹道终点或松开射击）。由 update_dynamic_zoom 写入。
+        self.aim_offset_x = 0.0
+        self.aim_offset_y = 0.0
 
     def shake(self, intensity=5, duration=0.3):
         if not self.shake_enabled:
@@ -21,8 +25,8 @@ class Camera:
         self.shake_duration = duration
 
     def follow(self, target_x, target_y, dt, smooth=0.1, bounds=None):
-        target_cam_x = target_x - self.width // 2
-        target_cam_y = target_y - self.height // 2
+        target_cam_x = target_x - self.width // 2 + float(getattr(self, 'aim_offset_x', 0.0) or 0.0)
+        target_cam_y = target_y - self.height // 2 + float(getattr(self, 'aim_offset_y', 0.0) or 0.0)
         # v2.5.0 摄像机钳制到地图界内（边界明显化：玩家到墙边时镜头停住露出边界墙）
         if bounds:
             try:

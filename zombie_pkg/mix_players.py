@@ -76,11 +76,11 @@ class PlayerRegistryMixin:
     # ==================================================================
     # 1) 玩家注册表
     # ==================================================================
-    PLAYER_ATTRS = ("player", "player2", "player3", "player4")
-    CAMERA_ATTRS = ("camera", "camera2", "camera3", "camera4")
-    CONTROLS_ATTRS = ("controls", "p2_controls", "p3_controls", "p4_controls")
-    SKILL_ATTRS = ("selected_skill", "p2_selected_skill",
-                   "p3_selected_skill", "p4_selected_skill")
+    # v2.9.17：扩展到 P1..P10（人类最多 2 人 + 最多 9 个 AI，总数 ≤ 10）
+    PLAYER_ATTRS = tuple(["player"] + ["player%d" % i for i in range(2, 11)])
+    CAMERA_ATTRS = tuple(["camera"] + ["camera%d" % i for i in range(2, 11)])
+    CONTROLS_ATTRS = tuple(["controls"] + ["p%d_controls" % i for i in range(2, 11)])
+    SKILL_ATTRS = tuple(["selected_skill"] + ["p%d_selected_skill" % i for i in range(2, 11)])
 
     # ------------------------------------------------------------------
     # 数据层平等：散落在 self 上的 P1..P4 属性 ↔ PlayerContext 双向同步
@@ -271,127 +271,100 @@ class PlayerRegistryMixin:
         _z = _halfw / _d
         return max(self.ZOOM_MIN, min(1.0, _z))
 
-    def update_dynamic_zoom_for(self, cam, player, dt):
-        """v2.9.2：为**任意**摄像机/玩家对计算动态 zoom（多人分屏各自独立）"""
+    def _aim_follow_angle_deg(self, player):
+        """当前瞄准方向（度）：技能预瞄 > 蓄力武器拖拽 > 玩家朝向"""
         try:
-            if cam is None or player is None or not hasattr(cam, "zoom"):
+            _a = getattr(player, '_aim_follow_angle', None)
+            if _a is not None:
+                return float(_a)
+            _a = getattr(player, '_awm_saved', None)
+            if _a is not None:
+                return float(_a)
+            _a = getattr(player, '_skill_aim_angle_deg', None)
+            if _a is not None:
+                return float(_a)
+            return float(getattr(player, 'facing_angle', 0.0) or 0.0)
+        except Exception:
+            return 0.0
+
+    def update_dynamic_zoom_for(self, cam, player, dt):
+        """v2.9.17：**跟随预瞄线移动相机**，不再靠缩放拉远视野。
+
+        按住蓄力武器（AWM/轨道炮）或技能预瞄时，镜头沿瞄准方向平滑
+        前移，直到看得见弹道终点；射击/松开后平滑归位。预瞄线由
+        draw_aim_follow_line 每帧绘制，与镜头同步。
+        全模式（单人/分屏/联机）、全武器、全技能共用这一份实现。
+        """
+        try:
+            if cam is None or player is None:
                 return
             if getattr(cam, "_zoom_base", 0.0) <= 0.0:
                 cam._zoom_base = float(getattr(cam, "zoom", 1.0) or 1.0)
-            _base = cam._zoom_base
-            _want = 0.0
+            # 缩放保持基准：视野扩展改由镜头位移完成（用户明确要求）
+            cam.zoom = cam._zoom_base
             try:
                 _w = player.get_current_weapon()
             except Exception:
                 _w = None
             _ratio = float(getattr(player, "_charge_ratio", 0.0) or 0.0)
-            try:
-                _wr = float(getattr(_w, "range", 0) or 0)
-            except Exception:
-                _wr = 0.0
-            # 基础：武器半射程 / 瞄准距离
-            _want = max(float(getattr(player, "_aim_dist", 0.0) or 0.0), _wr * 0.5)
-            # 蓄力武器：拉远到极限射程（全模式统一，不再另起一套）
-            if _w is not None and getattr(_w, "hold_charge", False) \
-                    and getattr(player, "_awm_saved", None) is not None:
+            _wr = float(getattr(_w, "range", 0) or 0) if _w is not None else 0.0
+            _charge = bool(_w is not None and getattr(_w, "hold_charge", False)
+                           and (getattr(player, "_awm_saved", None) is not None
+                                or getattr(player, "_charge_active", False)))
+            _skill = float(getattr(player, "_skill_aim_dist", 0.0) or 0.0)
+            if getattr(self, "skill_caster", None) is not None \
+                    and getattr(self.skill_caster, "is_aiming", False) \
+                    and (player is getattr(self, "player", None)):
+                _skill = max(_skill, float(getattr(self.skill_caster,
+                                                   "max_skill_distance", 500) or 500)
+                             * float(getattr(self.skill_caster, "distance_ratio", 1.0) or 1.0))
+            _want = max(_wr * 0.5, _skill,
+                        float(getattr(player, "_aim_dist", 0.0) or 0.0))
+            if _charge:
                 _want = max(_want, _wr * (0.35 + 0.65 * _ratio))
-            # 技能预瞄距离（由技能释放处写入 player._skill_aim_dist）
+            _active = bool(_charge or _skill > 0
+                           or getattr(player, "_awm_saved", None) is not None
+                           or getattr(player, "_aim_follow_active", False))
+            _deg = self._aim_follow_angle_deg(player)
+            _rad = math.radians(_deg)
+            _half = 0.5 * min(float(getattr(cam, "width", 1280) or 1280),
+                              float(getattr(cam, "height", 720) or 720))
+            _maxoff = min(_want * 0.62, _half * 0.85) if _active else 0.0
+            if _charge:
+                _maxoff *= (0.35 + 0.65 * _ratio)
+            _tx = math.cos(_rad) * _maxoff
+            _ty = math.sin(_rad) * _maxoff
+            _k = min(1.0, 5.0 * max(0.0, float(dt)))
+            cam.aim_offset_x = float(getattr(cam, "aim_offset_x", 0.0)) + \
+                (_tx - float(getattr(cam, "aim_offset_x", 0.0))) * _k
+            cam.aim_offset_y = float(getattr(cam, "aim_offset_y", 0.0)) + \
+                (_ty - float(getattr(cam, "aim_offset_y", 0.0))) * _k
+            # 供渲染层画"一直跟随的预瞄线"
             try:
-                _want = max(_want, float(getattr(player, "_skill_aim_dist", 0.0) or 0.0))
+                player._aim_follow_active = _active
+                player._aim_follow_angle = _deg
+                player._aim_follow_dist = _want if _active else 0.0
             except Exception:
                 pass
-            if _want <= 0:
-                _target = _base
-            else:
-                _vis = 0.5 * min(getattr(self, "scaled_width", 1280) or 1280,
-                                 getattr(self, "scaled_height", 720) or 720)
-                _z = _vis / max(1.0, float(_want))
-                _target = max(0.45, min(_base, _z))
-            _cur = float(getattr(cam, "zoom", 1.0) or 1.0)
-            _k = 1.0 - pow(0.001, max(0.0, float(dt)))
-            cam.zoom = _cur + (_target - _cur) * _k
         except Exception:
             pass
 
     def update_dynamic_zoom(self, dt, players=None):
-        """每帧调用：按每位玩家的"要看的距离"调整主摄像机
-
-        want_dist 优先取：蓄力武器的射程（随蓄力比例增长）
-        → 技能/武器瞄准距离 → 无则恢复基准。
-        仅单人/主视口生效（分屏各视口独立，由调用方分别传 cam）。
-        """
+        """每帧调用：所有玩家（含分屏各视口）统一走镜头偏移逻辑"""
         try:
-            _cam = getattr(self, "camera", None)
-            _p = getattr(self, "player", None)
-            if _cam is None or _p is None or not hasattr(_cam, "zoom"):
-                return
-            # v2.9.14：不再因蓄力而整体跳过。旧版这里 early return，
-            # 导致「技能瞄准距离超出视野」在蓄力武器持有者身上完全失效；
-            # 而 mix_playing 里另有一套蓄力 zoom 又与通用 zoom 抢写。
-            # 现在统一由 update_dynamic_zoom_for 计算最大 want_dist。
-            # v2.9.2：多人模式 —— 每个玩家的视口独立计算（此前只有 P1 生效）
             try:
                 _regs = list((self.registered_players() if hasattr(self, "registered_players") else []) or [])
             except Exception:
                 _regs = []
-            if len(_regs) > 1:
-                for _rp in _regs:
-                    try:
-                        _rc = self.camera_for(_rp) if hasattr(self, "camera_for") else None
-                    except Exception:
-                        _rc = None
-                    if _rc is not None and _rc is not _cam:
-                        self.update_dynamic_zoom_for(_rc, _rp, dt)
-                self.update_dynamic_zoom_for(_cam, _p, dt)
-                return
-            if getattr(_cam, "_zoom_base", 0.0) <= 0.0:
-                _cam._zoom_base = float(getattr(_cam, "zoom", 1.0) or 1.0)
-            _base = _cam._zoom_base
-            _want = 0.0
-
-            # 1) 蓄力武器：随蓄力比例拉远到极限射程
-            try:
-                _w = _p.get_current_weapon()
-            except Exception:
-                _w = None
-            _ratio = float(getattr(_p, "_charge_ratio", 0.0) or 0.0)
-            if _w is not None and getattr(_w, "hold_charge", False) \
-                    and getattr(_p, "_awm_saved", None) is not None:
-                _want = float(getattr(_w, "range", 0) or 0) * (0.35 + 0.65 * _ratio)
-            # v2.9.2：不再只认蓄力武器 —— 任何武器/技能只要"要看的距离"
-            # 超出当前视口，就平滑拉远（全模式、全武器、全技能通用）
-            else:
-                try:
-                    _wr = float(getattr(_w, "range", 0) or 0)
-                except Exception:
-                    _wr = 0.0
-                _want = max(_want, _wr * 0.5)
-                # 2) 瞄准距离（鼠标/摇杆方向上的瞄准点）
-                _aim = getattr(_p, "_aim_dist", 0.0)
-                try:
-                    _aim = float(_aim)
-                except Exception:
-                    _aim = 0.0
-                _want = _aim
-                # 3) 技能预瞄（G 长按瞄准）也纳入
-                _sk = getattr(self, "_skill_aim_dist", 0.0)
-                try:
-                    _sk = float(_sk)
-                except Exception:
-                    _sk = 0.0
-                _want = max(_want, _sk)
-
-            # 只有当"要看的距离"超出当前可见范围时才拉远
-            _cur_visible = (float(getattr(_cam, "width", 1280) or 1280)
-                            * self.ZOOM_MARGIN / 2.0) / max(0.01, _cam.zoom)
-            if _want > _cur_visible:
-                _target = self.desired_zoom_for(_cam, _want) or _base
-            else:
-                _target = _base
-            _k = min(1.0, self.ZOOM_LERP * dt)
-            _cam.zoom = _cam.zoom + (_target - _cam.zoom) * _k
-            if abs(_cam.zoom - _base) < 0.002:
-                _cam.zoom = _base
+            for _rp in _regs:
+                _rc = self.camera_for(_rp) if hasattr(self, "camera_for") else None
+                if _rc is None:
+                    _rc = getattr(self, "camera", None)
+                if _rc is not None:
+                    self.update_dynamic_zoom_for(_rc, _rp, dt)
+            if not _regs:
+                self.update_dynamic_zoom_for(getattr(self, "camera", None),
+                                             getattr(self, "player", None), dt)
         except Exception:
             pass
 

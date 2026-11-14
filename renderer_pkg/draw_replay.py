@@ -351,6 +351,29 @@ class ReplayRenderMixin:
 
         _f = _d.current
         _types = _d.types
+        _extra = getattr(_f, 'extra', None) or {}
+
+        # --- v2.9.17 画面还原：持续区域（燃烧/烟雾/冰冻/毒雾）---
+        try:
+            # 注意：循环变量不可叫 _z —— 外层 _z 是缩放系数，
+            # 覆盖后会出现 list * float 的 TypeError。
+            for _zone in (_extra.get('zones') or [])[:24]:
+                if len(_zone) < 4:
+                    continue
+                _zx, _zy, _zr, _zk = (float(_zone[0]), float(_zone[1]),
+                                      float(_zone[2]), str(_zone[3]))
+                _sx, _sy = w2s(_zx, _zy)
+                _rr = max(3, int(_zr * _z))
+                if _sx < -_rr or _sy < -_rr or _sx > sw + _rr or _sy > sh + _rr:
+                    continue
+                _col = {'frost_zones': (150, 215, 255), 'fire_zones': (255, 120, 50),
+                        'smoke_zones': (170, 175, 185), 'poison_zones': (120, 220, 90)}.get(
+                            _zk, (200, 200, 200))
+                pygame.draw.circle(self.screen, _col, (_sx, _sy), _rr, max(1, int(2 * _s)))
+                pygame.draw.circle(self.screen, tuple(max(0, c // 3) for c in _col),
+                                   (_sx, _sy), max(1, int(_rr * 0.7)), 1)
+        except Exception:
+            pass
 
         # --- 敌人（按类型着色 + 幽光 + 体型）---
         for _e in _f.enemies:
@@ -437,6 +460,115 @@ class ReplayRenderMixin:
             self.screen.blit(_vg, (0, 0))
         except Exception:
             pass
+        # --- v2.9.17 画面还原：技能释放光环（取当前帧 ±0.35s 内的事件）---
+        try:
+            _ct = float(getattr(_f, 't', 0.0) or 0.0)
+            for _ev in (_d.events or [])[-40:]:
+                if not isinstance(_ev, dict):
+                    continue
+                _et = float(_ev.get('t', _ev.get('time', -99)) or -99)
+                _dt = _ct - _et
+                if _dt < 0 or _dt > 0.35:
+                    continue
+                _kind = str(_ev.get('kind', ''))
+                if _kind not in ('skill', 'boss_skill', 'upgrade', 'explosion'):
+                    continue
+                _ex, _ey = w2s(float(_ev.get('x', 0)), float(_ev.get('y', 0)))
+                _prog = min(1.0, _dt / 0.35)
+                _rr = int((30 + 150 * _prog) * _z)
+                _col = (255, 200, 110) if _kind == 'upgrade' else (170, 140, 255)
+                pygame.draw.circle(self.screen, _col, (_ex, _ey), _rr,
+                                   max(1, int(3 * _s * (1.0 - _prog))))
+                pygame.draw.circle(self.screen, tuple(c // 2 for c in _col),
+                                   (_ex, _ey), max(1, int(_rr * 0.55)), 1)
+        except Exception:
+            pass
+
+        # --- v2.9.17 画面还原：技能释放光环（取当前帧 ±0.35s 内的事件）---
+        try:
+            _ct = float(getattr(_f, 't', 0.0) or 0.0)
+            for _ev in (_d.events or [])[-40:]:
+                if not isinstance(_ev, dict):
+                    continue
+                _et = float(_ev.get('t', _ev.get('time', -99)) or -99)
+                _dt = _ct - _et
+                if _dt < 0 or _dt > 0.35:
+                    continue
+                _kind = str(_ev.get('kind', ''))
+                if _kind not in ('skill', 'boss_skill', 'upgrade', 'explosion'):
+                    continue
+                _ex, _ey = w2s(float(_ev.get('x', 0)), float(_ev.get('y', 0)))
+                _prog = min(1.0, _dt / 0.35)
+                _rr = int((30 + 150 * _prog) * _z)
+                _col = (255, 200, 110) if _kind == 'upgrade' else (170, 140, 255)
+                pygame.draw.circle(self.screen, _col, (_ex, _ey), _rr,
+                                   max(1, int(3 * _s * (1.0 - _prog))))
+                pygame.draw.circle(self.screen, tuple(c // 2 for c in _col),
+                                   (_ex, _ey), max(1, int(_rr * 0.55)), 1)
+        except Exception:
+            pass
+
+        # --- v2.9.17 画面还原：技能释放光环（当前帧 ±0.35s 内的事件）---
+        try:
+            _ct = float(getattr(_f, 't', 0.0) or 0.0)
+            for _ev in (_d.events or [])[-40:]:
+                if not isinstance(_ev, dict):
+                    continue
+                _et = float(_ev.get('t', _ev.get('time', -99)) or -99)
+                _dt = _ct - _et
+                if _dt < 0 or _dt > 0.35:
+                    continue
+                _kind = str(_ev.get('kind', ''))
+                if _kind not in ('skill', 'boss_skill', 'upgrade', 'explosion'):
+                    continue
+                _ex, _ey = w2s(float(_ev.get('x', 0)), float(_ev.get('y', 0)))
+                _prog = min(1.0, _dt / 0.35)
+                _rr = int((30 + 150 * _prog) * _z)
+                _col = (255, 200, 110) if _kind == 'upgrade' else (170, 140, 255)
+                pygame.draw.circle(self.screen, _col, (_ex, _ey), _rr,
+                                   max(1, int(3 * _s * (1.0 - _prog))))
+                pygame.draw.circle(self.screen, tuple(c // 2 for c in _col),
+                                   (_ex, _ey), max(1, int(_rr * 0.55)), 1)
+        except Exception:
+            pass
+
+        # --- v2.9.17 画面还原：子弹、激光弹道、破空粒子、技能特效 ---
+        try:
+            for _b in (_extra.get('bullets') or [])[:90]:
+                if len(_b) < 6:
+                    continue
+                _bx, _by = w2s(float(_b[0]), float(_b[1]))
+                _vx, _vy = float(_b[2]), float(_b[3])
+                _col = tuple(max(0, min(255, int(v))) for v in (_b[4] or [255, 220, 140])[:3])
+                _sz = max(1, int(float(_b[5]) * _z))
+                if len(_b) >= 9 and int(_b[6]) == 1:
+                    # 激光：按游戏内同款"白色破空线段"
+                    _ang = float(_b[7])
+                    _ln = max(60, int(320 * _z))
+                    _ex2 = int(_bx + math.cos(_ang) * _ln)
+                    _ey2 = int(_by + math.sin(_ang) * _ln)
+                    pygame.draw.line(self.screen, (150, 150, 158), (_bx, _by), (_ex2, _ey2),
+                                     max(2, int(max(2, float(len(_b) > 8 and _b[8] or 6)) * _z * 0.4)))
+                    pygame.draw.line(self.screen, (245, 245, 255), (_bx, _by), (_ex2, _ey2),
+                                     max(1, int(2 * _s)))
+                else:
+                    # 普通弹丸 + 拖尾
+                    _tl = max(4, int(18 * _z))
+                    _vn = math.hypot(_vx, _vy) or 1.0
+                    pygame.draw.line(self.screen, tuple(c // 2 for c in _col),
+                                     (_bx, _by),
+                                     (int(_bx - _vx / _vn * _tl), int(_by - _vy / _vn * _tl)),
+                                     max(1, _sz))
+                    pygame.draw.circle(self.screen, _col, (_bx, _by), max(1, _sz))
+            for _pt in (_extra.get('fx') or [])[:40]:
+                if len(_pt) < 3:
+                    continue
+                _px, _py = w2s(float(_pt[0]), float(_pt[1]))
+                pygame.draw.circle(self.screen, (255, 210, 150), (_px, _py),
+                                   max(1, int(float(_pt[2]) * _z)))
+        except Exception:
+            pass
+
         _bar = max(6, int(sh * 0.055))
         pygame.draw.rect(self.screen, (0, 0, 0), (0, 0, sw, _bar))
         pygame.draw.rect(self.screen, (0, 0, 0), (0, sh - _bar, sw, _bar))

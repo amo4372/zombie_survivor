@@ -149,7 +149,7 @@ MONSTER_CODEX = {
     # === 新增僵尸 ===
     "ZOMBIE_BOMBER": {
         "name": "爆破手",
-        "category": "新增",
+        "category": "特殊",
         "description": "能够投掷炸弹的感染者，擅长范围攻击和区域封锁。",
         "stats": {"hp": "40", "speed": "中", "damage": "20", "exp": "28"},
         "threat": "高",
@@ -158,7 +158,7 @@ MONSTER_CODEX = {
     },
     "ZOMBIE_FROST": {
         "name": "冰霜僵尸",
-        "category": "新增",
+        "category": "特殊",
         "description": "体内温度极低的感染者，攻击会附带减速效果。",
         "stats": {"hp": "45", "speed": "慢", "damage": "12", "exp": "25"},
         "threat": "中",
@@ -167,7 +167,7 @@ MONSTER_CODEX = {
     },
     "ZOMBIE_VENOM": {
         "name": "剧毒僵尸",
-        "category": "新增",
+        "category": "特殊",
         "description": "携带剧毒的感染者，攻击会造成持续中毒伤害。",
         "stats": {"hp": "30", "speed": "快", "damage": "8", "exp": "26"},
         "threat": "高",
@@ -176,7 +176,7 @@ MONSTER_CODEX = {
     },
     "ZOMBIE_BERSERKER": {
         "name": "狂暴僵尸",
-        "category": "新增",
+        "category": "精英",
         "description": "血量越低越狂暴的感染者，低血量时速度和伤害大幅提升。",
         "stats": {"hp": "80", "speed": "中", "damage": "18", "exp": "35"},
         "threat": "极高",
@@ -185,7 +185,7 @@ MONSTER_CODEX = {
     },
     "ZOMBIE_GHOUL": {
         "name": "食尸鬼",
-        "category": "新增",
+        "category": "特殊",
         "description": "嗜血的感染者，攻击有概率造成流血效果。",
         "stats": {"hp": "50", "speed": "中", "damage": "10", "exp": "28"},
         "threat": "中",
@@ -194,7 +194,7 @@ MONSTER_CODEX = {
     },
     "ZOMBIE_SHAMAN": {
         "name": "萨满僵尸",
-        "category": "新增",
+        "category": "特殊",
         "description": "能够为周围僵尸提供增益的感染者，是僵尸群中的核心支援。",
         "stats": {"hp": "35", "speed": "慢", "damage": "8", "exp": "32"},
         "threat": "高",
@@ -203,7 +203,7 @@ MONSTER_CODEX = {
     },
     "ZOMBIE_JUGGERNAUT": {
         "name": "重甲僵尸",
-        "category": "新增",
+        "category": "特殊",
         "description": "身披重甲的感染者，拥有极高的护甲和生命值。",
         "stats": {"hp": "200", "speed": "极慢", "damage": "30", "exp": "50"},
         "threat": "极高",
@@ -582,7 +582,7 @@ WEAPON_CODEX = {
 # ============================================================
 # 图鉴分类
 # ============================================================
-MONSTER_CATEGORIES = ["全部", "基础", "远程", "特殊", "新增", "精英", "Boss"]
+MONSTER_CATEGORIES = ["全部", "基础", "远程", "特殊", "精英", "Boss"]  # v2.9.17：取消「新增」，按剧情并入既有类别
 WEAPON_CATEGORIES = ["全部", "近战", "手枪", "冲锋枪", "步枪", "狙击枪", "霰弹枪", "重武器", "特殊", "投掷物"]
 
 # 稀有度颜色

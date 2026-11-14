@@ -1550,7 +1550,9 @@ class SkillsMixin:
         scythe = self._is_wielding_scythe(_p)
         rg = _p.riot_gear
         locked = getattr(rg, "grapple_locked_target", None)
-        if locked is not None and getattr(locked, "alive", False) and not getattr(locked, "is_boss", False):
+        if (locked is not None
+                and (getattr(locked, "alive", False) or getattr(locked, "downed", False))
+                and not getattr(locked, "is_boss", False)):
             success = rg.use_grapple(locked.x, locked.y, _p.x, _p.y, locked, scythe=scythe)
             _locked_name = "锁定直飞"
         elif force_self_pull or getattr(rg, 'grapple_direct_pull', False):
