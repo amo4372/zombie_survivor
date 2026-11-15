@@ -964,6 +964,10 @@ class MultiplayerMixin:
                     _a_dist = getattr(caster, 'max_skill_distance', 500) * getattr(caster, 'distance_ratio', 1.0)
                     try:
                         p2._skill_aim_dist = float(_a_dist)
+                        try:
+                            p2.riot_gear.grapple_max_dist = float(_a_dist)
+                        except Exception:
+                            pass
                     except Exception:
                         pass
                 except Exception:

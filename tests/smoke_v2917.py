@@ -123,11 +123,17 @@ class _Frost:
     alive = True; is_boss = False; x = 100; y = 100; id = 7
 _g3.enemies.append(_Frost())
 _g3._update_frost_throwers(0.016)
-check(len(getattr(_g3, 'frost_zones', [])) >= 1, "冰霜僵尸投掷冷罐生成冰冻区")
+# v2.9.20 口径同步：冷罐现在是**有飞行过程的投掷物**（像燃烧弹），
+# 落地后才生成淡蓝冰冻区；不再是瞬间凭空出现一个圈。
+check(len(getattr(_g3, 'frost_cans', [])) >= 1, "冰霜僵尸投出可见的冷罐投掷物")
+_g3._update_frost_cans(1.0)
+check(len(getattr(_g3, 'frost_zones', [])) >= 1, "冷罐落地生成淡蓝冰冻区")
 _z0 = _g3.frost_zones[0]
 _g3.player.x, _g3.player.y = _z0["x"], _z0["y"]
 _g3._update_frost_zones(0.016)
 check(float(getattr(_g3.player, 'frozen_timer', 0)) > 0, "区域内玩家被冻结")
+check(_g3.player.status is not None and _g3.player.status.has('freeze'),
+      "冰冻以 debuff 形式挂进 EntityStatus（免疫抗性可生效）")
 
 print("[F] 玩家 AI：创建 / 配置 / 战斗 / 升级 / 渲染")
 from ai_pkg.player_bots import BotManager, BotDifficulty, BotTactic, BotProfile

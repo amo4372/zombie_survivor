@@ -73,11 +73,13 @@ class BotDifficulty(Enum):
     def params(self):
         # (反应间隔, 瞄准误差弧度, 提前量系数, 技能频率, 透视, 强锁, 全机制)
         return {
-            "简单":   (0.55, 0.26, 0.0, 0.18, False, False, False),
-            "普通":   (0.35, 0.14, 0.4, 0.35, False, False, False),
-            "困难":   (0.22, 0.07, 0.8, 0.55, False, False, True),
-            "地狱":   (0.13, 0.03, 1.0, 0.75, True,  False, True),
-            "超难":   (0.06, 0.0,  1.2, 0.95, True,  True,  True),
+            # v2.9.20：误差改为「每发抖动」而非固定角偏置，且整体下调。
+            # 旧版 0.26rad≈15° 的固定偏差让简单 AI 几乎永远打不中。
+            "简单":   (0.45, 0.11, 0.2, 0.18, False, False, False),
+            "普通":   (0.30, 0.055, 0.6, 0.35, False, False, False),
+            "困难":   (0.18, 0.025, 1.0, 0.55, False, False, True),
+            "地狱":   (0.10, 0.008, 1.2, 0.75, True,  False, True),
+            "超难":   (0.05, 0.0,  1.4, 0.95, True,  True,  True),
         }[self.value]
 
 
@@ -144,6 +146,12 @@ class PlayerBot:
         self._move_y = 0.0
         self._angle = 0.0
         self._target = None
+        self._target_kind = "idle"
+        self._target_hold = 0.0        # v2.9.20 目标保持时间（防抖动）
+        self._last_tpos = None         # 上一帧目标位置（做速度差分）
+        self._tvel = (0.0, 0.0)        # 目标速度，像素/秒
+        self._aim_angle = 0.0          # 每帧重算的瞄准角
+        self._aim_point = None         # 预测命中点（供强锁使用）
         self._strafe = random.choice((-1, 1))
 
     # ------------------------------------------------------------ 感知
@@ -155,11 +163,31 @@ class PlayerBot:
                 _out.append(e)
         return _out
 
-    def _other_players(self):
+    def _other_players(self, include_downed=False):
+        """v2.9.20：默认只返回活着且可见的玩家；救援时把倒地队友也算进来。
+
+        旧版一律过滤 `alive=True`，而倒地玩家 alive=False —— 于是 AI
+        永远"看不到"倒地队友，救援目标从来选不中，这就是「不怎么会救队友」。
+        """
         g = self.game
-        return [p for p in (g.registered_players() if hasattr(g, 'registered_players') else [])
-                if p is not self.player and getattr(p, 'alive', True)
-                and self.perception.visible(p)]
+        try:
+            _all = list(g.registered_players())
+        except Exception:
+            _all = []
+        out = []
+        for p in _all:
+            if p is self.player:
+                continue
+            _down = bool(getattr(p, 'downed', False))
+            if not _down and not getattr(p, 'alive', True):
+                continue
+            if _down and not include_downed:
+                continue
+            if getattr(p, 'permanently_dead', False):
+                continue
+            if self.perception.visible(p):
+                out.append(p)
+        return out
 
     def _team_of(self, p):
         # v2.9.19：优先 team_id（现有 PvP/救援/伤害链路都读它）
@@ -185,47 +213,164 @@ class PlayerBot:
             or bool(getattr(p, 'bot_hostile', False)) or bool(getattr(_me, 'bot_hostile', False))
 
     # ------------------------------------------------------------ 决策
-    def _pick_target(self):
-        """v2.9.19：目标优先级 敌方玩家 > 倒地队友(救援) > 僵尸 > 经验球。
+    # ------------------------------------------------------------ 目标
+    def _target_alive(self, t):
+        if t is None:
+            return False
+        if getattr(t, 'downed', False):          # 救援目标：倒地即有效
+            return not getattr(t, 'permanently_dead', False)
+        return bool(getattr(t, 'alive', True))
 
-        旧版没有经验球，无敌人时 _decide_move 用 `cos(_angle*0.7)` 原地
-        绕圈（"一直转，也不吃经验"），而且 `_angle` 在无目标时从不更新。
+    def _target_score(self, t, kind):
+        """v2.9.20：评分越小越优先，取代「永远选最近的」造成的来回抖动。"""
+        _p = self.player
+        d = math.hypot(t.x - _p.x, t.y - _p.y)
+        w = {
+            'rescue': -900.0,     # 队友倒地绝对优先
+            'foe_player': -420.0,  # 敌方玩家优先于僵尸
+            'enemy': 0.0,
+            'pickup': 260.0,      # 没威胁才去捡东西
+        }.get(kind, 0.0)
+        # 低血目标 / 近目标加权；敌方玩家额外按血量压制
+        if kind == 'foe_player':
+            try:
+                w -= (1.0 - float(t.hp) / max(1.0, float(t.max_hp))) * 260.0
+            except Exception:
+                pass
+        elif kind == 'enemy':
+            try:
+                w -= (1.0 - float(t.hp) / max(1.0, float(getattr(t, 'max_hp', 100)))) * 90.0
+            except Exception:
+                pass
+        return d + w
+
+    def _pick_target(self):
+        """v2.9.20：明确的目标优先级 + 目标粘性。
+
+        优先级：倒地队友(救援) > 敌方玩家 > 僵尸 > 经验球/道具。
+        旧版每次反应都重新选「最近的」，两个目标交替靠近时 AI 会来回
+        横跳，看起来就是「没有明确目标」。现在目标一旦锁定至少保持
+        0.8s（或直到死亡/跑出感知），且切换需要新目标明显更优。
         """
         g = self.game
         _p = self.player
-        self._target_kind = "foe"
-        _foes = [p for p in self._other_players() if self._is_foe_player(p)]
-        _z = self._candidates()
-        _hp_ratio = float(getattr(_p, 'hp', 1)) / max(1.0, float(getattr(_p, 'max_hp', 100)))
+        _old = self._target
+        _old_kind = getattr(self, '_target_kind', 'idle')
 
-        # 友方 AI（含非激进策略）看到倒地队友 → 过去救援
+        # 候选池
+        _all_players = self._other_players(include_downed=True)
+        _down = [p for p in _all_players
+                 if getattr(p, 'downed', False) and not self._is_foe_player(p)]
+        _foes = [p for p in _all_players
+                 if not getattr(p, 'downed', False) and self._is_foe_player(p)]
+        _z = self._candidates()
+
+        _cands = []
+        # 1) 救援：友方 AI 看到倒地队友立即前往（不再被 alive=False 过滤）
         if not getattr(_p, 'bot_hostile', False):
-            _down = [p for p in self._other_players()
-                     if getattr(p, 'downed', False) and not self._is_foe_player(p)]
-            if _down:
-                self._target_kind = "rescue"
-                return min(_down, key=lambda o: (o.x - _p.x) ** 2 + (o.y - _p.y) ** 2)
-        if self.tactic is BotTactic.AGGRESSIVE and _foes:
-            return min(_foes, key=lambda o: (o.x - _p.x) ** 2 + (o.y - _p.y) ** 2)
-        if self.tactic is BotTactic.SURVIVAL and _hp_ratio < 0.35 and _z:
-            return min(_z, key=lambda o: (o.x - _p.x) ** 2 + (o.y - _p.y) ** 2)
-        if _z:
-            return min(_z, key=lambda o: (o.x - _p.x) ** 2 + (o.y - _p.y) ** 2)
-        if _foes:
-            return min(_foes, key=lambda o: (o.x - _p.x) ** 2 + (o.y - _p.y) ** 2)
-        # 没有敌人：去捡最近的经验球 / 世界道具
-        _orbs = [o for o in (getattr(g, 'exp_orbs', []) or [])
-                 if getattr(o, 'alive', True) and self.perception.visible(o, 900.0)]
-        if _orbs:
-            self._target_kind = "pickup"
-            return min(_orbs, key=lambda o: (o.x - _p.x) ** 2 + (o.y - _p.y) ** 2)
-        _items = [o for o in (getattr(getattr(g, 'world', None), 'items', []) or [])
-                  if getattr(o, 'alive', True) and self.perception.visible(o, 700.0)]
-        if _items:
-            self._target_kind = "pickup"
-            return min(_items, key=lambda o: (o.x - _p.x) ** 2 + (o.y - _p.y) ** 2)
-        self._target_kind = "idle"
-        return None
+            _cands += [(p, 'rescue') for p in _down]
+        # 2) 敌方玩家 / 僵尸
+        _cands += [(p, 'foe_player') for p in _foes]
+        _cands += [(e, 'enemy') for e in _z]
+        # 3) 只有完全没有威胁时才捡经验 / 道具
+        if not _cands:
+            _orbs = [o for o in (getattr(g, 'exp_orbs', []) or [])
+                     if getattr(o, 'alive', True) and self.perception.visible(o, 900.0)]
+            _items = [o for o in (getattr(getattr(g, 'world', None), 'items', []) or [])
+                      if getattr(o, 'alive', True) and self.perception.visible(o, 700.0)]
+            _cands += [(o, 'pickup') for o in (_orbs + _items)]
+
+        # 超难透视由 BotPerception.visible() 在候选收集阶段处理（不限制距离）
+        if not _cands:
+            self._target_kind = 'idle'
+            self._target_hold = 0.0
+            self._last_tpos = None
+            return None
+
+        # 策略修正：求生低血时不追敌方玩家，激进则更贴脸
+        _hp_ratio = float(getattr(_p, 'hp', 1)) / max(1.0, float(getattr(_p, 'max_hp', 100)))
+        if self.tactic is BotTactic.SURVIVAL and _hp_ratio < 0.35:
+            _cands = [(t, k) for t, k in _cands if k != 'foe_player'] or _cands
+
+        # 目标粘性：旧目标仍有效且保持时间未到 → 不换
+        if _old is not None and self._target_hold > 0 and self._target_alive(_old):
+            _still = any(t is _old for t, _k in _cands)
+            if _still:
+                return _old
+        _best, _best_kind = min(_cands, key=lambda tk: self._target_score(tk[0], tk[1]))
+        self._target_kind = _best_kind
+        self._target_hold = 0.85 if _best_kind != 'rescue' else 1.4
+        if _best is not _old:
+            self._last_tpos = None
+            self._tvel = (0.0, 0.0)
+        return _best
+
+    def _track_target_velocity(self, t, dt):
+        """用位置差分估算目标速度（实体普遍没有 vx/vy 字段）。"""
+        if t is None or dt <= 0:
+            return
+        _now = (float(t.x), float(t.y))
+        _prev = getattr(self, '_last_tpos', None)
+        if _prev is not None:
+            _vx = (_now[0] - _prev[0]) / dt
+            _vy = (_now[1] - _prev[1]) / dt
+            # 平滑，避免单帧噪声
+            _ovx, _ovy = getattr(self, '_tvel', (0.0, 0.0))
+            self._tvel = (_ovx * 0.65 + _vx * 0.35,
+                          _ovy * 0.65 + _vy * 0.35)
+            # 明显不合理的速度（传送/重置）直接丢弃
+            if math.hypot(*self._tvel) > 900.0:
+                self._tvel = (0.0, 0.0)
+        self._last_tpos = _now
+
+    def _aim_accuracy(self):
+        """v2.9.20：AI 的瞄准精度决定它能抵消多少武器基础散布。
+
+        **打不准的真根因**：`Weapon.fire` 在 `_fire_spread is None` 时会用
+        `max(spread, charge_spread_max*0.45)` 的大散布（AWM 平射可达 0.44rad
+        ≈25°）。AI 不会像玩家那样长按蓄力收敛，开火时又把 `_fire_spread`
+        置成 None，于是每发都吃满大散布 —— 比远程投掷僵尸还瞎。
+        现在按难度把散布收敛掉，超难/强锁完全归零。
+        """
+        return {
+            "简单": 0.30, "普通": 0.55, "困难": 0.80,
+            "地狱": 0.92, "超难": 1.0,
+        }.get(getattr(self.diff, 'value', ''), 0.55)
+
+    def _aim_now(self):
+        """v2.9.20：每帧重算瞄准角，含**弹速飞行时间**提前量。
+
+        旧版只在 reaction 间隔（0.06~0.55s）更新一次角度，目标一动就
+        整段打空；而且提前量读 `vx/vy`，绝大多数实体根本没有这两个
+        字段，等于没有提前量 —— 所以「还没远程投掷僵尸打得准」。
+        """
+        _p = self.player
+        _t = self._target
+        if _t is None:
+            self._aim_angle = getattr(self, '_angle', 0.0)
+            self._aim_point = None
+            return
+        _react, _err, _lead, _skill, _xray, _lock, _allmech = self.diff.params
+        try:
+            _w = _p.get_current_weapon()
+            _bspeed = max(2.0, float(getattr(_w, 'speed', 14) or 14))
+        except Exception:
+            _bspeed = 14.0
+        _dx = float(_t.x) - float(_p.x)
+        _dy = float(_t.y) - float(_p.y)
+        _dist = math.hypot(_dx, _dy)
+        # speed 是「像素/帧」，60fps → 飞行秒数
+        _flight = min(1.2, _dist / max(1.0, _bspeed) / 60.0)
+        _vx, _vy = getattr(self, '_tvel', (0.0, 0.0))
+        _tx = float(_t.x) + _vx * _flight * _lead
+        _ty = float(_t.y) + _vy * _flight * _lead
+        self._aim_point = (_tx, _ty)
+        _ang = math.degrees(math.atan2(_ty - _p.y, _tx - _p.x))
+        # 误差改成「每发独立抖动」，不是固定偏置
+        if _err:
+            _ang += random.uniform(-_err, _err) * 57.2958
+        self._aim_angle = _ang
+        self._angle = _ang
 
     def _decide_move(self, target, dt):
         _p = self.player
@@ -269,12 +414,8 @@ class PlayerBot:
         _sx, _sy = -uy * 0.45 * self._strafe, ux * 0.45 * self._strafe
         self._move_x = max(-1.0, min(1.0, ux * _k + _sx))
         self._move_y = max(-1.0, min(1.0, uy * _k + _sy))
-        # 朝向（含提前量）
-        _react, _err, _lead, _skill, _xray, _lock, _allmech = self.diff.params
-        _tx = float(getattr(target, 'x', 0)) + float(getattr(target, 'vx', 0) or 0) * _lead * 0.25
-        _ty = float(getattr(target, 'y', 0)) + float(getattr(target, 'vy', 0) or 0) * _lead * 0.25
-        self._angle = math.degrees(math.atan2(_ty - _p.y, _tx - _p.x)) + \
-            (random.uniform(-_err, _err) if _err else 0.0)
+        # v2.9.20：朝向不再在这里算（旧版每 reaction 才更新一次且读不到
+        # vx/vy）。统一由 update() 每帧调用 _aim_now() 处理。
 
     # ------------------------------------------------------------ 执行
     def _try_block(self):
@@ -334,24 +475,31 @@ class PlayerBot:
             pass
 
     def _try_rescue(self):
-        """v2.9.19：靠近倒地队友即由通用救援系统累计进度；这里只负责
-        把 AI 停在救援半径内并保持朝向，避免出现"跑过头"导致进度反复清零。"""
+        """v2.9.20：救援时停在 70~100 距离带内，不再冲过队友导致
+        `rescue_progress` 反复清零；同时把朝向对准队友，符合直觉。"""
         if getattr(self, '_target_kind', '') != 'rescue':
             return
         _mate = self._target
         if _mate is None:
             return
         _d = math.hypot(_mate.x - self.player.x, _mate.y - self.player.y)
-        if _d < 100:
-            self._move_x *= 0.25
-            self._move_y *= 0.25
+        if _d < 95:
+            self._move_x *= 0.08
+            self._move_y *= 0.08
+        elif _d < 150:
+            self._move_x *= 0.4
+            self._move_y *= 0.4
+        self._angle = math.degrees(math.atan2(_mate.y - self.player.y,
+                                              _mate.x - self.player.x))
 
     def update(self, dt):
+        """v2.9.20：决策低频、**瞄准与开火每帧**，这是命中率的关键。"""
         _p = self.player
         if not getattr(_p, 'alive', True) or getattr(_p, 'downed', False):
             return
-        _react = self.diff.params[0]
+        _react, _err, _lead, _skill, _xray, _lock, _allmech = self.diff.params
         self._react_t -= dt
+        self._target_hold = max(0.0, float(getattr(self, '_target_hold', 0.0)) - dt)
         if self._react_t <= 0:
             self._react_t = _react
             self._target = self._pick_target()
@@ -359,18 +507,28 @@ class PlayerBot:
             if random.random() < 0.25:
                 self._strafe *= -1
         # 移动 / 朝向：走 Player 原生 update，与其它玩家完全一致
+        self._track_target_velocity(self._target, dt)
+        self._aim_now()
         try:
-            _p.update(dt, self._move_x, self._move_y, self._angle,
+            # v2.9.20 **单位修正**：Player.update 的 mouse_angle 期望**弧度**
+            # （内部 `facing_angle = math.degrees(mouse_angle)`），而 AI 全程
+            # 用度数。旧版直接传度数 → facing_angle 被二次 degrees() 放大
+            # 57 倍，AI 的朝向/绘制完全乱转，这也是"一直转"的根因之一。
+            _p.update(dt, self._move_x, self._move_y, math.radians(self._aim_angle),
                       getattr(self.game, 'world', None), sprinting=False)
         except Exception:
             pass
-        # 开火（超难强锁：命中率 100%）；拾取物 / 倒地队友不是射击目标
-        if self._target is not None and getattr(self, '_target_kind', 'foe') == 'foe':
+        # 开火：拾取物 / 倒地队友不是射击目标；把预测点交给强锁
+        _kind = getattr(self, '_target_kind', 'idle')
+        if self._target is not None and _kind in ('foe_player', 'enemy'):
             try:
-                self.game._bot_fire(_p, self._angle,
-                                    locked=bool(self.diff.params[5]))
+                _p._bot_aim_point = self._aim_point
+                self.game._bot_fire(_p, self._aim_angle, locked=bool(_lock),
+                                    accuracy=self._aim_accuracy())
             except Exception:
                 pass
+            finally:
+                _p._bot_aim_point = None
         self._try_rescue()
         self._try_block()
         self._try_skill(dt)
@@ -398,10 +556,15 @@ class BotManager:
         # v2.9.19：只要存在敌方 AI，就开启 PvP 结算链路并给人类分队，
         # 否则敌方 AI 的攻击/胜负判定会被"合作模式同阵营"整个吞掉。
         _has_hostile = any(p.hostile for p in self.enabled_profiles())
-        if _has_hostile:
+        # v2.9.20：允许把 AI 分配到 2~4 个阵营（不再只有"敌/友"两队）。
+        # 阵营数取配置值与实际 AI 里最大 team+1 的较大者。
+        _max_team = max([0] + [max(0, int(p.team or 0)) for p in self.enabled_profiles()])
+        _nteams = max(2, int(getattr(g.config, 'pvp_teams', 2) or 2), _max_team + 1)
+        _nteams = min(6, _nteams)
+        if _has_hostile or _max_team > 0:
             try:
                 g.config.pvp_enabled = True
-                g.config.pvp_teams = max(2, int(getattr(g.config, 'pvp_teams', 2) or 2))
+                g.config.pvp_teams = _nteams
             except Exception:
                 pass
             try:
@@ -432,10 +595,17 @@ class BotManager:
                 _pl.is_bot = True
                 _pl.bot_profile = prof
                 _pl.bot_hostile = bool(prof.hostile)
-                # v2.9.19：team_id 才是现有伤害/救援/胜负链路读的字段（旧版只写 .team）
-                _pl.team = 1 if prof.hostile else 0
-                _pl.team_id = 1 if prof.hostile else 0
-                prof.team = _pl.team_id
+                # v2.9.20：按配置分配到 0..N-1 阵营；hostile 只表示"与人类敌对"。
+                # team_id 才是现有伤害/救援/胜负链路读的字段。
+                # v2.9.20：只勾「敌方」而没手动选阵营时，自动进敌方阵营 1，
+                # 避免敌对 AI 与人类同 team_id 让伤害/胜负链路判成队友。
+                # 显式设了 team>=2 的多阵营配置则原样保留。
+                if prof.hostile and int(getattr(prof, 'team', 0) or 0) == 0:
+                    prof.team = 1
+                _tid = max(0, min(_nteams - 1, int(getattr(prof, 'team', 0) or 0)))
+                _pl.team = _tid
+                _pl.team_id = _tid
+                prof.team = _tid
                 try:
                     if prof.character:
                         from gamedata.models import CharacterData

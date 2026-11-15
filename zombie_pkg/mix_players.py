@@ -272,6 +272,20 @@ class PlayerRegistryMixin:
         _z = _halfw / _d
         return max(self.ZOOM_MIN, min(1.0, _z))
 
+    def _caster_for_player(self, player):
+        """返回该玩家对应的技能预瞄控制器（分屏 P2 用 p2_controls）。"""
+        try:
+            if player is getattr(self, "player2", None):
+                _c = getattr(self, "p2_controls", None) or {}
+                return _c.get("skill_caster")
+            if player is not getattr(self, "player", None):
+                _tag = self.tag_of(player) if hasattr(self, "tag_of") else ""
+                _c = getattr(self, "%s_controls" % str(_tag).lower(), None) or {}
+                return _c.get("skill_caster")
+        except Exception:
+            pass
+        return getattr(self, "skill_caster", None)
+
     def update_dynamic_zoom_for(self, cam, player, dt):
         """v2.9.19：只在「主动瞄准」时拉远，其余时刻必定回弹到 1.0。
 
@@ -302,11 +316,31 @@ class PlayerRegistryMixin:
             _charge = bool(_w is not None and getattr(_w, "hold_charge", False)
                            and (getattr(player, "_awm_saved", None) is not None
                                 or getattr(player, "_charge_active", False)))
-            # 技能预瞄只在 caster 确实处于瞄准态时算数，避免残留值卡住视野
-            _caster = getattr(self, "skill_caster", None)
+            # v2.9.20：必须用**该玩家自己**的 caster。旧版一律读
+            # self.skill_caster（P1 的），于是 P2/P3 视口的 zoom 永远不变，
+            # 表现就是「P1/P2 渲染不同步」「大范围技能没有扩大视野」。
+            _caster = self._caster_for_player(player)
             _casting = bool(_caster is not None and (
-                getattr(_caster, "active", False) or getattr(_caster, "aiming", False)))
-            _skill_d = float(getattr(player, "_skill_aim_dist", 0.0) or 0.0) if _casting else 0.0
+                getattr(_caster, "is_aiming", False)
+                or getattr(_caster, "aiming", False)
+                or getattr(_caster, "active", False)))
+            # 钩爪等大范围技能：瞄准距离统一写在玩家对象上（含 P2）
+            _skill_d = 0.0
+            if _casting:
+                _skill_d = float(getattr(player, "_skill_aim_dist", 0.0) or 0.0)
+                if _skill_d <= 0:
+                    _skill_d = float(getattr(_caster, "max_skill_distance", 0) or 0) * \
+                        float(getattr(_caster, "distance_ratio", 1.0) or 1.0)
+            # 钩爪瞄准由 riot_gear.grapple_aiming 驱动，不走 skill_caster
+            try:
+                _rg = getattr(player, "riot_gear", None)
+                if _rg is not None and getattr(_rg, "grapple_aiming", False):
+                    _skill_d = max(_skill_d,
+                                   float(getattr(_rg, "grapple_max_dist", 0) or 0),
+                                   float(getattr(_rg, "grapple_range", 0) or 0),
+                                   520.0)
+            except Exception:
+                pass
             _aiming = bool(_charge or _skill_d > 0.0)
             if not _aiming:
                 _target = _base

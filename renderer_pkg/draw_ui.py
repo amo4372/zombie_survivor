@@ -5442,14 +5442,18 @@ class UiMixin:
                     "● 已启用" if _enabled else "○ 未启用",
                     (40, 110, 70) if _enabled else (58, 62, 74)):
                 _prof.enabled = not _prof.enabled
-            _st = g.font_small.render("敌方 AI" if _prof.hostile else "友方 AI", True,
-                                      (235, 130, 130) if _prof.hostile else (140, 215, 165))
+            _st = g.font_small.render(
+                ("敌方 AI·阵营 %s" % "ABCD"[min(3, int(_prof.team or 0))])
+                if _prof.hostile else "友方 AI·阵营 A", True,
+                (235, 130, 130) if _prof.hostile else (140, 215, 165))
             self.screen.blit(_st, (P(CX + 20), P(_cy + 118)))
 
             # 右侧字段两行
             FX, FW, FS = CX + 200, 190, 12
             _rows = [
-                ('side', FX, _cy + 14, FW, "阵营：" + ("敌方" if _prof.hostile else "友方"),
+                ('side', FX, _cy + 14, FW,
+                 "阵营 %s·%s" % ("ABCD"[min(3, int(_prof.team or 0))],
+                                 "敌" if _prof.hostile else "友"),
                  (110, 55, 60) if _prof.hostile else (40, 90, 65)),
                 ('diff', FX + FW + FS, _cy + 14, FW, "难度：" + _prof.difficulty.value,
                  (95, 65, 125) if _prof.difficulty is BotDifficulty.NIGHTMARE else (48, 62, 88)),
@@ -5465,8 +5469,9 @@ class UiMixin:
                 if not _btn('%s_%d' % (_k, _slot), _x, _y, _w, 44, _label, _col):
                     continue
                 if _k == 'side':
-                    _prof.hostile = not _prof.hostile
-                    _prof.team = 1 if _prof.hostile else 0
+                    # v2.9.20：循环 4 个阵营；A 为玩家所在友方阵营，其余为敌方
+                    _prof.team = (int(_prof.team or 0) + 1) % 4
+                    _prof.hostile = (_prof.team != 0)
                 elif _k == 'diff':
                     _prof.difficulty = BotDifficulty.cycle(_prof.difficulty)
                 elif _k == 'tactic':

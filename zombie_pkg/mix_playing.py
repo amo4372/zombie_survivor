@@ -299,6 +299,12 @@ class PlayingMixin:
                 p.permanently_dead = False
                 p._rescue_cd_hint = 0.0
                 p.hp = int(p.max_hp * 0.5)
+                # v2.9.20：毒圈可能已收缩，倒地位置在圈外 → 复活瞬间又死。
+                # 统一把复活点拉回当前圈内安全区。
+                try:
+                    p.x, p.y = self._zone_safe_point(p.x, p.y, pad=0.68)
+                except Exception:
+                    pass
                 p.rescue_progress = 0.0
                 p.last_rescue_time = _now
                 try:
@@ -527,11 +533,17 @@ class PlayingMixin:
             camera.shake(6, 0.4)
 
     def _update_frost_throwers(self, dt):
-        """冰霜僵尸不再靠贴身减速，而是投掷『冷罐』到目标区域。"""
-        _players = [p for p in (self.registered_players() if hasattr(self, 'registered_players') else [])
-                    if getattr(p, 'alive', True)]
+        """冰霜僵尸投掷『冷罐』：像燃烧弹一样有可见飞行物，落地才成区。
+
+        v2.9.20：旧版直接 append frost_zones，没有投掷过程，看上去像
+        "凭空冒出一个圈"。现在先生成飞行中的冷罐，飞到预测落点再爆开。
+        """
+        _players = [q for q in (self.registered_players() if hasattr(self, 'registered_players') else [])
+                    if getattr(q, 'alive', True)]
         if not _players:
             return
+        if not hasattr(self, 'frost_cans'):
+            self.frost_cans = []
         for _e in (getattr(self, 'enemies', []) or []):
             try:
                 if not getattr(_e, 'alive', False) or getattr(_e, 'is_boss', False):
@@ -544,14 +556,19 @@ class PlayingMixin:
                     _e._frost_cd = _cd
                     continue
                 _e._frost_cd = 5.2 + (hash(str(getattr(_e, 'id', id(_e)))) % 17) / 10.0
-                # 目标：最近玩家，带 0.35s 提前量
-                _tg = min(_players, key=lambda p: (p.x - _e.x) ** 2 + (p.y - _e.y) ** 2)
-                _tx = float(_tg.x) + float(getattr(_tg, 'vx', 0) or 0) * 0.35
-                _ty = float(_tg.y) + float(getattr(_tg, 'vy', 0) or 0) * 0.35
-                if not hasattr(self, 'frost_zones'):
-                    self.frost_zones = []
-                self.frost_zones.append({"x": _tx, "y": _ty, "radius": 92.0,
-                                         "duration": 4.6, "timer": 0.0})
+                # 目标：最近玩家，带 0.35s 提前量（用位置差分更稳）
+                _tg = min(_players, key=lambda q: (q.x - _e.x) ** 2 + (q.y - _e.y) ** 2)
+                _tvx = float(getattr(_tg, '_last_vel_x', 0) or 0)
+                _tvy = float(getattr(_tg, '_last_vel_y', 0) or 0)
+                _tx = float(_tg.x) + _tvx * 0.35
+                _ty = float(_tg.y) + _tvy * 0.35
+                self.frost_cans.append({
+                    "x": float(_e.x), "y": float(_e.y),
+                    "sx": float(_e.x), "sy": float(_e.y),
+                    "tx": _tx, "ty": _ty,
+                    "t": 0.0, "dur": 0.65,
+                    "radius": 96.0, "duration": 4.6,
+                })
                 try:
                     self.replay_event("skill", "冰霜僵尸·冷罐", _tx, _ty, 0, tag="frost")
                 except Exception:
@@ -559,20 +576,74 @@ class PlayingMixin:
             except Exception:
                 continue
 
+    def _update_frost_cans(self, dt):
+        """冷罐飞行推进；落地瞬间生成圆形持续冰冻区。"""
+        _cans = getattr(self, 'frost_cans', None) or []
+        if not hasattr(self, 'frost_zones'):
+            self.frost_zones = []
+        for _c in _cans[:]:
+            _c["t"] = float(_c.get("t", 0.0)) + dt
+            _k = min(1.0, _c["t"] / max(0.01, float(_c.get("dur", 0.65))))
+            _c["x"] = _c["sx"] + (_c["tx"] - _c["sx"]) * _k
+            _c["y"] = _c["sy"] + (_c["ty"] - _c["sy"]) * _k
+            if _k >= 1.0:
+                self.frost_zones.append({
+                    "x": _c["tx"], "y": _c["ty"],
+                    "radius": float(_c.get("radius", 96.0)),
+                    "duration": float(_c.get("duration", 4.6)),
+                    "timer": 0.0, "applied": {},
+                })
+                _cans.remove(_c)
+                try:
+                    self.particles.spawn_explosion(_c["tx"], _c["ty"], (150, 220, 255), 12)
+                except Exception:
+                    pass
+        self.frost_cans = _cans
+
     def _update_frost_zones(self, dt):
-        """冷罐落地形成的圆形持续冰冻区：区域内玩家被冻结 + 减速。"""
+        """冷罐落地形成的淡蓝圆形区域：施加**冰冻 debuff**（走 EntityStatus）。
+
+        v2.9.20：旧版直接写 `frozen_timer`，绕过了状态/抗性/免疫系统，
+        于是冰冻既不进图鉴状态、也不会触发「连续 debuff 免疫」。现在统一
+        走 status.apply('freeze')，同时同步 frozen_timer 兼容旧渲染与移速逻辑。
+        """
         _zs = getattr(self, 'frost_zones', None) or []
         for _z in _zs[:]:
             _z["timer"] = float(_z.get("timer", 0.0)) + dt
             if _z["timer"] >= float(_z.get("duration", 4.6)):
                 _zs.remove(_z)
                 continue
+            _applied = _z.setdefault("applied", {})
             for _p in (self.registered_players() if hasattr(self, 'registered_players') else []):
                 if not getattr(_p, 'alive', True):
                     continue
                 _d = ((_p.x - _z["x"]) ** 2 + (_p.y - _z["y"]) ** 2) ** 0.5
-                if _d <= float(_z.get("radius", 92.0)):
-                    _p.frozen_timer = max(float(getattr(_p, 'frozen_timer', 0) or 0), 0.9)
+                if _d > float(_z.get("radius", 96.0)):
+                    continue
+                # 0.9s 节流：否则每帧 apply 会瞬间吃满免疫阈值
+                _last = float(_applied.get(id(_p), -99.0))
+                if _z["timer"] - _last < 0.9:
+                    continue
+                _applied[id(_p)] = _z["timer"]
+                _st = getattr(_p, 'status', None)
+                if _st is None:
+                    try:
+                        from combat_pkg import attach_status
+                        _st = attach_status(_p)
+                    except Exception:
+                        _st = None
+                if _st is not None:
+                    _r = _st.apply('freeze', duration=1.3, bridge=False)
+                    if _r is None:
+                        # 已获得冰冻免疫 buff：给一条可见反馈
+                        try:
+                            self.floating_texts.append(FloatingText(
+                                _p.x, _p.y - 52, "冰冻免疫", color=(185, 150, 255), lifetime=0.9))
+                        except Exception:
+                            pass
+                        continue
+                # 兼容旧链路（移速 / 冰块覆盖）
+                _p.frozen_timer = max(float(getattr(_p, 'frozen_timer', 0) or 0), 1.3)
         self.frost_zones = _zs
 
     def _update_playing(self, dt):
@@ -702,6 +773,7 @@ class PlayingMixin:
         # v2.9.17 冰霜僵尸：周期性投掷冷罐 → 圆形持续冰冻区域
         try:
             self._update_frost_throwers(dt)
+            self._update_frost_cans(dt)
         except Exception:
             pass
         try:
@@ -913,6 +985,11 @@ class PlayingMixin:
                 # v2.9.14：让动态视野真正消费技能瞄准距离（此前只是局部变量）
                 try:
                     self.player._skill_aim_dist = float(_aim_dist)
+                    # v2.9.20：钩爪也是「大范围技能」，预瞄时同样触发视野拉远
+                    try:
+                        self.player.riot_gear.grapple_max_dist = float(_aim_dist)
+                    except Exception:
+                        pass
                 except Exception:
                     pass
                 _rg_aim.update_grapple_lock(self.player.x, self.player.y, self.enemies,

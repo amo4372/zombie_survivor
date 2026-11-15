@@ -23,6 +23,12 @@ def is_frozen_entity(ent):
     except Exception:
         pass
     try:
+        _st = getattr(ent, 'status', None)
+        if _st is not None and _st.has('freeze'):
+            return True
+    except Exception:
+        pass
+    try:
         bm = getattr(ent, "buff_manager", None)
         if bm is not None and bm.is_frozen():
             return True
@@ -486,20 +492,20 @@ class PlayMixin:
         cam_x = camera.x - shake_x
         cam_y = camera.y - shake_y
 
-        # v2.9.15 关键修复：此前**整个主渲染层从未读取 camera.zoom**
-        # （只有回放页用了），所以 update_dynamic_zoom 算得再对，画面也
-        # 纹丝不动 —— 这就是"拉远视野一直没有全模式生效"的根因。
-        # 做法：按 zoom 缩放 world→screen 的 scale，并围绕**玩家当前屏幕
-        # 位置**重算 cam，保证玩家锚定不动、视野向四周扩展（zoom<1 = 拉远）。
-        # 所有下游绘制共用这里的 cam_x/cam_y/scale，自动一致；HUD 单独绘制不受影响。
+        # v2.9.15：主渲染层读取 camera.zoom（此前只有回放页用了）。
+        # v2.9.20：锚点由「玩家旧屏幕位置」改为「本视口中心」。
+        # 旧公式保持玩家上一帧位置，分屏时 Camera.follow 的平滑滞后与边界
+        # 钳制会让玩家偏离半屏中心，zoom 后偏移被进一步放大 —— 表现为
+        # 「多人模式拉远视野，摄像机中心不在玩家上，像绕屏幕中心缩放」。
+        # 现在用 camera.width/height（分屏即半屏尺寸）把玩家钉在各自视口中心。
+        # 所有下游绘制共用 cam_x/cam_y/scale；HUD 用 _ui_scale 不受影响。
         try:
             _zoom = float(getattr(camera, "zoom", 1.0) or 1.0)
             if abs(_zoom - 1.0) > 0.002 and 0.30 < _zoom < 2.0:
                 _eff = scale * _zoom
                 if _eff > 0.05:
-                    _k = scale / _eff
-                    cam_x = player.x - (player.x - cam_x) * _k
-                    cam_y = player.y - (player.y - cam_y) * _k
+                    cam_x, cam_y = compute_zoom_cam(camera, player, _zoom,
+                                                    shake_x, shake_y)
                     scale = _eff
         except Exception:
             pass
@@ -835,7 +841,7 @@ class PlayMixin:
                     # 不画瞄准中的预瞄线/锁定圈（否则等于泄露自己的瞄准意图）
                     try:
                         p.riot_gear.draw(self.screen, p.x, p.y, cam_x, cam_y, scale,
-                                         own_view=(p is player))
+                                         own_view=(p is self._view_owner))
                     except Exception:
                         pass
                 else:
@@ -844,7 +850,7 @@ class PlayMixin:
                     # 连本视口主人自己也被当成"别人的视口"，于是 P1/P2
                     # 的钩爪预瞄线与锁定圈在多人模式里全都不画。
                     p.draw(self.screen, cam_x, cam_y, self.game.font, scale,
-                           own_view=(p is player))
+                           own_view=(p is self._view_owner))
                 draw_frozen_overlay(self.screen, p, cam_x, cam_y, scale)
                 # v2.5.4 头顶状态：血条 + 名字/阵营色（PvP 敌方红、队友绿）
                 try:
@@ -907,12 +913,20 @@ class PlayMixin:
             pass
 
         # v2.5.0/v2.5.4 玩家冰冻冰块渲染：冻结时覆盖淡蓝冰块（多人 N 人全覆盖）
-        _ice_players = [player] if self.game.player2 is None else [p for p in (self.game.player, self.game.player2, getattr(self.game, 'player3', None), getattr(self.game, 'player4', None)) if p is not None]
-        for player in _ice_players:
-            if getattr(player, 'buff_manager', None) is not None and player.buff_manager.is_frozen() and getattr(player, 'alive', True):
-                _ppx = int((player.x - cam_x) * scale)
-                _ppy = int((player.y - cam_y) * scale)
-                _ir = max(18, int(getattr(player, 'radius', 20) * scale * 1.4))
+        # v2.9.20 **根因**：旧版这里写 `for player in _ice_players:`，把
+        # `_draw_playing_core(player, ...)` 的**视口主人参数覆盖成列表最后一个
+        # 玩家**。于是 P1 视口后续所有 `player` 判定（蓄力扇形、钩爪 own_view、
+        # 预瞄线）用的都是 P2 —— 表现就是「P2 预瞄线在 P1 渲染」「P1/P2
+        # 渲染不同步」。循环变量改名，并在循环后显式恢复视口主人。
+        try:
+            _ice_players = [q for q in self.game._all_players() if q is not None]
+        except Exception:
+            _ice_players = [player]
+        for _ice_p in _ice_players:
+            if getattr(_ice_p, 'buff_manager', None) is not None and _ice_p.buff_manager.is_frozen() and getattr(_ice_p, 'alive', True):
+                _ppx = int((_ice_p.x - cam_x) * scale)
+                _ppy = int((_ice_p.y - cam_y) * scale)
+                _ir = max(18, int(getattr(_ice_p, 'radius', 20) * scale * 1.4))
                 _ice = pygame.Surface((_ir * 2 + 8, _ir * 2 + 8), pygame.SRCALPHA)
                 _cx = _cy = _ir + 4
                 _pts = [(_cx - _ir, _cy), (_cx - int(_ir * 0.5), _cy - _ir),
@@ -923,6 +937,8 @@ class PlayMixin:
                 pygame.draw.line(_ice, (230, 250, 255, 220), (_cx, _cy - _ir + 2), (_cx, _cy + _ir - 2), max(1, int(1 * scale)))
                 pygame.draw.line(_ice, (230, 250, 255, 220), (_cx - _ir + 2, _cy), (_cx + _ir - 2, _cy), max(1, int(1 * scale)))
                 self.screen.blit(_ice, (_ppx - _cx, _ppy - _cy))
+
+        player = self._view_owner   # v2.9.20：恢复真实视口主人
 
         # v2.5.1 阵营载具乘坐提示：乘客"长按下车" / 附近候选"技能按钮上车"
         try:
@@ -1028,6 +1044,7 @@ class PlayMixin:
 
         # 绘制燃烧区域
         self._draw_fire_zones(cam_x, cam_y, scale)
+        self._draw_frost_zones(cam_x, cam_y, scale, viewport_x)
 
         # 绘制烟雾区域
         self._draw_smoke_zones(cam_x, cam_y, scale)
@@ -1054,12 +1071,15 @@ class PlayMixin:
             # v2.9.17：P1 在触控/键控下 _awm_saved 可能没被赋值，
             # 但蓄力收敛已经在跑（_charge_spread 有值）→ 扇形不该消失。
             # 只要"蓄力进行中"就画，松开后 _charge_spread 会被清空。
-            _charge_on = (getattr(player, '_awm_saved', None) is not None
-                          or getattr(player, '_charge_active', False))
+            _owner = getattr(self, '_view_owner', player)
+            _charge_on = (getattr(_owner, '_awm_saved', None) is not None
+                          or getattr(_owner, '_charge_active', False))
             if (_charge_on
-                    and getattr(player, '_charge_spread', None) is not None
-                    and getattr(player, 'downed', False) is False):
-                draw_charge_spread_fan(self, player, cam_x, cam_y, scale)
+                    and getattr(_owner, '_charge_spread', None) is not None
+                    and getattr(_owner, 'downed', False) is False):
+                # 只画本视口主人的扇形；别人的蓄力状态绝不在本视口出现
+                draw_charge_spread_fan(self, _owner, cam_x, cam_y, scale,
+                                       viewport_x=viewport_x)
         except Exception:
             pass
         # v2.8.8 子弹破空曳光（高速弹丸/轨道炮）
@@ -1256,7 +1276,10 @@ class PlayMixin:
         # v2.2.7/2.5.8：aim_owner 区分视口——P1 视口画 P1 预瞄，P2 视口画 P2 预瞄
         # v2.5.8 修复：严格隔离，P2 预瞄线绝不出现在 P1 视口中
         _g = self.game
-        _is_p2 = aim_owner == "P2"
+        # v2.9.20：以真实视口主人为准，避免 aim_owner 标签与实体不一致时串屏
+        _owner = getattr(self, '_view_owner', None)
+        _is_p2 = (_owner is not None and _owner is getattr(_g, 'player2', None)) \
+            or (aim_owner == "P2" and _owner is None)
         if _is_p2 and _g.p2_controls:
             _sc2 = _g.p2_controls.get("skill_caster")
             if _sc2 is not None and getattr(_sc2, "is_aiming", False):
@@ -2341,6 +2364,46 @@ class PlayMixin:
         except Exception:
             pass
 
+    def _draw_frost_zones(self, cam_x, cam_y, scale, viewport_x=0):
+        """v2.9.20：冷罐投掷轨迹 + 落地后的淡蓝圆形持续冰冻区。"""
+        try:
+            _zones = getattr(self.game, 'frost_zones', None) or []
+            _cans = getattr(self.game, 'frost_cans', None) or []
+            _n = len(_zones) + len(_cans)
+            if _n == 0:
+                return
+            for _z in _zones[:12]:
+                _px = int((_z['x'] - cam_x) * scale) + viewport_x
+                _py = int((_z['y'] - cam_y) * scale)
+                _r = max(6, int(float(_z.get('radius', 96)) * scale))
+                _life = max(0.0, 1.0 - float(_z.get('timer', 0)) /
+                            max(0.1, float(_z.get('duration', 4.6))))
+                _a = int(34 + 40 * _life)
+                # 局部小 Surface（不是全屏），淡蓝填充 + 双层冰边 + 霜纹
+                _surf = pygame.Surface((_r * 2 + 6, _r * 2 + 6), pygame.SRCALPHA)
+                _c = (_r + 3, _r + 3)
+                pygame.draw.circle(_surf, (120, 205, 255, _a), _c, _r)
+                pygame.draw.circle(_surf, (175, 230, 255, min(210, _a * 3)), _c, _r, 2)
+                pygame.draw.circle(_surf, (225, 248, 255, 60), _c, int(_r * 0.62), 1)
+                for _i in range(6):
+                    _ang = _i * 1.047 + _life * 1.6
+                    pygame.draw.line(_surf, (210, 242, 255, 90),
+                                     _c, (_c[0] + int(math.cos(_ang) * _r * 0.9),
+                                          _c[1] + int(math.sin(_ang) * _r * 0.9)), 1)
+                self.screen.blit(_surf, (_px - _c[0], _py - _c[1]))
+            for _c in _cans[:12]:
+                _px = int((_c['x'] - cam_x) * scale) + viewport_x
+                _py = int((_c['y'] - cam_y) * scale)
+                _k = min(1.0, float(_c.get('t', 0)) / max(0.01, float(_c.get('dur', 0.65))))
+                # 抛物线高度（冷罐飞行的视觉高度）
+                _py -= int(math.sin(_k * math.pi) * 34 * scale)
+                pygame.draw.circle(self.screen, (165, 225, 255), (_px, _py),
+                                   max(3, int(7 * scale)))
+                pygame.draw.circle(self.screen, (235, 250, 255), (_px, _py),
+                                   max(2, int(4 * scale)))
+        except Exception:
+            pass
+
     def _draw_fire_zones(self, cam_x, cam_y, scale):
         """绘制燃烧区域"""
         import pygame
@@ -2571,7 +2634,26 @@ class PlayMixin:
 # v2.8.8 蓄力武器的散布扇形 + 弹道破空特效
 # ======================================================================
 
-def draw_charge_spread_fan(self, player, cam_x, cam_y, scale):
+def compute_zoom_cam(camera, player, zoom, shake_x=0.0, shake_y=0.0):
+    """v2.9.20：返回拉远后视口左上角的世界坐标，使**玩家恰好位于视口中心**。
+
+    推导：玩家屏幕坐标 = (P - C) * scale * zoom，视口中心 = (camera.width/2)*scale。
+    令两者相等 → C = P - (camera.width/2)/zoom。
+    分屏时 camera.width 是半屏逻辑宽度（640），所以玩家钉在各自半屏中心，
+    而不是全屏中心 —— 这正是「多人模式拉远视野中心不在玩家身上」的根因。
+    """
+    z = max(0.30, min(2.0, float(zoom)))
+    half_w = float(getattr(camera, "width", 0) or 0) / 2.0
+    half_h = float(getattr(camera, "height", 0) or 0) / 2.0
+    if half_w <= 0:
+        half_w = 640.0
+    if half_h <= 0:
+        half_h = 360.0
+    return (float(getattr(player, "x", 0)) - half_w / z - float(shake_x or 0.0),
+            float(getattr(player, "y", 0)) - half_h / z - float(shake_y or 0.0))
+
+
+def draw_charge_spread_fan(self, player, cam_x, cam_y, scale, viewport_x=0):
     """蓄力时绘制"子弹散布扇形"
 
     扇形圆心角随蓄力时长**由大变小**：起始是一个很宽的大扇形（表示子弹
@@ -2589,6 +2671,8 @@ def draw_charge_spread_fan(self, player, cam_x, cam_y, scale):
         # 扇形半径取武器射程（屏幕上按 scale 换算）
         _R = int(_rng * scale * 0.55)
         _R = max(60, min(_R, 1400))
+        # v2.9.20：扇形画在视口 subsurface 里，坐标已是**视口局部**，
+        # 不能加 viewport_x（那会把整个扇形推到视口外）；参数保留兼容调用点。
         _px = int((getattr(player, 'x', 0) - cam_x) * scale)
         _py = int((getattr(player, 'y', 0) - cam_y) * scale)
         # v2.9.14：_spread 本身就是**弧度半角**（fire 里直接用

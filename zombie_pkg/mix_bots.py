@@ -30,6 +30,8 @@ class BotMixin:
         _hc = human_count if human_count is not None else \
             (2 if getattr(self, 'multiplayer_mode', None) == 'same_screen' else 1)
         self.human_player_count = max(1, int(_hc))
+        # v2.9.20：先清掉上一局挂在各槽位的 AI 实体，再创建本局 AI
+        _m.clear()
         _m.setup(self.human_player_count)
 
     def update_bots(self, dt):
@@ -38,7 +40,7 @@ class BotMixin:
             _m.update(dt)
 
     # ------------------------------------------------------------ 开火
-    def _bot_fire(self, player, angle_deg, locked=False):
+    def _bot_fire(self, player, angle_deg, locked=False, accuracy=None):
         """AI 开火：完全复用 Weapon.fire，不改伤害管线。"""
         try:
             _w = player.get_current_weapon()
@@ -69,11 +71,32 @@ class BotMixin:
                     _d = (_o.x - player.x) ** 2 + (_o.y - player.y) ** 2
                     if _d < _bd:
                         _bd, _tg = _d, _o
-                if _tg is not None:
+                # v2.9.20：AI 每帧算好的**预测命中点**优先（含弹速提前量）。
+                # 旧版强锁重新选"最近目标"并直接朝当前位置开火，反而把
+                # 提前量丢掉，超难 AI 打移动目标照样空枪。
+                _pt = getattr(player, '_bot_aim_point', None)
+                if _pt is not None:
+                    _ang = math.degrees(math.atan2(_pt[1] - player.y,
+                                                   _pt[0] - player.x))
+                elif _tg is not None:
                     _ang = math.degrees(math.atan2(_tg.y - player.y, _tg.x - player.x))
+            # v2.9.20：AI 不吃满武器大散布（详情见 PlayerBot._aim_accuracy）
+            _base_spread = float(getattr(_w, 'spread', 0.0) or 0.0)
+            _charge_max = float(getattr(_w, 'charge_spread_max', 0.0) or 0.0) * 0.45
+            _eff = max(_base_spread, _charge_max)
+            if locked:
+                _ai_spread = 0.0
+            else:
+                _acc = max(0.0, min(1.0, float(accuracy if accuracy is not None else 0.55)))
+                _ai_spread = max(0.0, _eff * (1.0 - _acc))
             try:
-                player._fire_spread = 0.0 if locked else None
-                _projs = _w.fire(player.x, player.y, _ang,
+                player._fire_spread = _ai_spread
+                # v2.9.20 **打不准的真正根因**：Weapon.fire 的 angle 是**弧度**
+                # （项目所有正常开火点都写 math.radians(facing_angle)），而
+                # `_bot_fire(player, angle_deg, ...)` 一直把**度数**直接传进去。
+                # -90° 被当成 -90 弧度 → cos/sin 得到约 -115° 的方向，AI 每发
+                # 都朝完全错误的地方飞，偶尔命中纯属随机散布碰巧。
+                _projs = _w.fire(player.x, player.y, math.radians(_ang),
                                  float(getattr(player, 'damage_multiplier', 1.0) or 1.0),
                                  float(getattr(player, 'speed_mult', 1.0) or 1.0),
                                  player=player)

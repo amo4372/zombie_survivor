@@ -1051,6 +1051,22 @@ class GameCore:
 
     def start_game(self):
         logger.info("开始新游戏")
+        # v2.9.20 **跨局残留根治**：BotManager 把 AI 注册到 player2..player10，
+        # 但 start_game 只重建了 player/player2、只在部分分支把 player3/4 置 None。
+        # 于是「开了多 AI 玩一局 → 禁用 AI 再开一局」，上局的 AI 尸体仍挂在
+        # P5..P10 槽位，registered_players() 会把它们当活人渲染 / 计入胜负 /
+        # 参与伤害与救援。开局统一清空全部非 P1/P2 槽位与摄像机。
+        try:
+            for _i in range(3, 11):
+                setattr(self, "player%d" % _i, None)
+                setattr(self, "camera%d" % _i, None)
+            self.frost_zones = []
+            self.frost_cans = []
+            _bm = getattr(self, 'bot_manager', None)
+            if _bm is not None:
+                _bm.clear()
+        except Exception:
+            pass
         # v2.5.8：开发者状态随新局重置（每玩家独立面板/无敌/抗尸/传送目标）
         try:
             self._dev_reset_states()
@@ -1437,6 +1453,11 @@ class GameCore:
             # v2.9.17：按房间配置创建玩家 AI（人类数决定渲染方式）
             try:
                 self.setup_bots(2 if self.multiplayer_mode == "same_screen" else 1)
+                # v2.9.20：全部玩家（含 AI）创建完成后统一按阵营分散出生点
+                try:
+                    self._scatter_player_spawns()
+                except Exception as _se:
+                    logger.warning("出生点分散失败: %s" % _se)
             except Exception:
                 pass
             # v2.5.2 敌方位置揭示：新局重置周期（防旧局残留导致开局即处于闪烁窗口"一直显示"）
@@ -1802,14 +1823,86 @@ class GameCore:
 
     # ==================== v2.5.7 PvP 毒圈 ====================
     # (目标半径, 收缩耗时秒, 圈外每秒伤害)
+    # v2.9.20：原总时长仅 205s（3.4 分钟），一局还没展开圈就缩完了。
+    # 按故事模式 20 分钟（1200s）的节奏铺开，总收缩约 1260s，
+    # 且第一阶段给足 240s 的发育期，圈外伤害也更温和。
     PVP_ZONE_PHASES = [
-        (5200.0, 55.0, 3.0),
-        (2900.0, 45.0, 6.0),
-        (1700.0, 40.0, 10.0),
-        (950.0, 35.0, 16.0),
-        (520.0, 30.0, 24.0),
+        (5400.0, 240.0, 2.0),
+        (4200.0, 220.0, 3.5),
+        (3000.0, 220.0, 6.0),
+        (2000.0, 210.0, 10.0),
+        (1200.0, 200.0, 15.0),
+        (600.0, 170.0, 22.0),
     ]
     PVP_ZONE_START_R = 6200.0
+
+    # ==================== v2.9.20 出生点 / 圈内夹取 ====================
+    def _zone_safe_point(self, x, y, pad=0.72):
+        """把坐标夹进当前毒圈与地图边界；复活/出生/章节切换都走这里。"""
+        try:
+            _bd = getattr(getattr(self, 'world', None), 'bounds', None)
+            _lo, _hi = (float(_bd[0]), float(_bd[1])) if _bd and len(_bd) == 2 else (0.0, 12000.0)
+            _lo, _hi = _lo + 120.0, _hi - 120.0
+            x = max(_lo, min(_hi, float(x)))
+            y = max(_lo, min(_hi, float(y)))
+            _z = getattr(self, 'pvp_zone', None)
+            if _z:
+                _cx, _cy = float(_z.get('cx', x)), float(_z.get('cy', y))
+                _r = max(120.0, float(_z.get('r', 6200)) * pad)
+                _dx, _dy = x - _cx, y - _cy
+                _d = (_dx * _dx + _dy * _dy) ** 0.5
+                if _d > _r:
+                    x = _cx + _dx / _d * _r
+                    y = _cy + _dy / _d * _r
+            return x, y
+        except Exception:
+            return x, y
+
+    def _scatter_player_spawns(self):
+        """按 team_id 分组分散出生点：同阵营聚拢、异阵营拉开 ≥ 900，
+        且全部落在毒圈内。修复「多人出生点一直是同一点」与「复活在圈外」。
+        """
+        try:
+            _ps = [q for q in self.registered_players() if q is not None]
+        except Exception:
+            return
+        if not _ps:
+            return
+        import random as _rnd
+        import math as _m
+        _teams = {}
+        for _p in _ps:
+            _teams.setdefault(int(getattr(_p, 'team_id', 0) or 0), []).append(_p)
+        _z = getattr(self, 'pvp_zone', None)
+        if _z:
+            _cx, _cy = float(_z.get('cx', 6000)), float(_z.get('cy', 6000))
+        else:
+            _ms = float(getattr(getattr(self, 'world', None), 'map_size', 12000) or 12000)
+            _cx, _cy = _ms / 2.0, _ms / 2.0
+        _n = max(1, len(_teams))
+        for _ti, (_tid, _group) in enumerate(sorted(_teams.items())):
+            _base_a = 2 * _m.pi * _ti / _n + _rnd.uniform(-0.18, 0.18)
+            _sep = 900.0 if _n > 1 else 0.0
+            _tx = _cx + _m.cos(_base_a) * _sep
+            _ty = _cy + _m.sin(_base_a) * _sep
+            for _i, _p in enumerate(_group):
+                _a = _base_a + (_i - (len(_group) - 1) / 2.0) * 0.85
+                _rad = 150.0 + (_i % 3) * 75.0 + _rnd.uniform(0.0, 70.0)
+                _p.x, _p.y = self._zone_safe_point(
+                    _tx + _m.cos(_a) * _rad, _ty + _m.sin(_a) * _rad)
+                _p.downed = False
+                _p.permanently_dead = False
+                _p.rescue_progress = 0.0
+                # 摄像机立刻跟上，避免开局一帧镜头还在旧位置
+                try:
+                    _cam = self.camera_for(_p) if hasattr(self, 'camera_for') else None
+                    if _cam is not None:
+                        _cam.x = _p.x - _cam.width // 2
+                        _cam.y = _p.y - _cam.height // 2
+                        if hasattr(_cam, 'reset_zoom'):
+                            _cam.reset_zoom()
+                except Exception:
+                    pass
 
     def _init_pvp_zone(self):
         """初始化 PvP 毒圈（开局覆盖全图，逐阶段收缩，逼玩家进圈交手）"""

@@ -259,8 +259,17 @@ class Player:
         return False
 
     def update(self, dt, move_x, move_y, mouse_angle, world=None, sprinting=False):
-        # v2.9.17 冰霜冷罐：冻结期间移动降到 35%（与冰块覆盖同步）
+        # v2.9.20 冰冻 debuff 化：status.freeze 是权威，frozen_timer 只是旧链路镜像。
+        # 任一侧被写入都能同步到另一侧，保证冰块覆盖 / 移速 / 免疫一致。
         try:
+            _st = getattr(self, 'status', None)
+            if _st is not None:
+                _fs = _st.get('freeze')
+                if _fs is not None and _fs.time > 0:
+                    self.frozen_timer = max(float(getattr(self, 'frozen_timer', 0) or 0),
+                                            float(_fs.time))
+                elif float(getattr(self, 'frozen_timer', 0) or 0) > 0:
+                    _st.apply('freeze', duration=float(self.frozen_timer), bridge=False)
             _fz = float(getattr(self, 'frozen_timer', 0) or 0)
             if _fz > 0:
                 self.frozen_timer = max(0.0, _fz - float(dt))

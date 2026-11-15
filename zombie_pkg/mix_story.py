@@ -443,6 +443,12 @@ class StoryMixin:
         # 玩家位置重置
         # 故事模式进入新地图：重置全部局内状态（技能/符文/经验/生命），保留初始武器与角色
         self.player = Player(0, 0, start_weapon=self.selected_weapon, start_weapon_level=self.selected_weapon_level)
+        # v2.9.20：跨章节重建 P1 后，旧玩家（含 AI / 其它阵营）仍留着上一张
+        # 地图的坐标，阵营之间会叠在同一点甚至卡在地图外。统一重排一次。
+        try:
+            self._scatter_player_spawns()
+        except Exception:
+            pass
         self.rune_buffs = {}  # 符文局内buff 重置
         self.rune_manager = RuneManager()  # 符文局内层数重置（不跨局、不跨地图）
         try:

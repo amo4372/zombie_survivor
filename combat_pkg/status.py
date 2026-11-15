@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""实体状态数据管理（v2.9.12）
+"""实体状态数据管理（v2.9.12 / v2.9.20）
 
 统一维护 流血 / 燃烧 / 冰冻 / 中毒 / 眩晕 / 感电 等状态的
 层数、剩余时间、每跳伤害与易伤，供：
@@ -9,10 +9,19 @@
 
 不推翻原有 BuffManager：apply 时可选桥接进去，保证冻结移速、燃烧加深
 等旧机制继续生效，本项目只是把它变成**结构化数据**并补齐渲染。
+
+v2.9.20：新增「免疫抗性」——连续吃同一种 debuff 达到阈值后，获得一个
+**免疫 buff**（immune_<kind>），期间该 debuff 完全无法再挂上，防止被
+冰冻/燃烧/中毒无限连锁控到死。免疫本身也是结构化状态，会出现在
+active_states / snapshot / HUD 渲染里。
 """
 from typing import Dict, List, Optional
 
 KINDS = ("bleed", "burn", "freeze", "poison", "stun", "shock")
+DEBUFF_KINDS = ("bleed", "burn", "freeze", "poison", "stun", "shock")
+IMMUNITY_THRESHOLD = 3       # 同一种 debuff 累计 3 次触发免疫
+IMMUNITY_DURATION = 6.0      # 免疫持续 6 秒
+IMMUNE_PREFIX = "immune_"
 
 # 默认状态定义（也是 status_defs 表的播种数据；数据库权威）
 STATUS_DEFS: Dict[str, dict] = {
@@ -34,6 +43,10 @@ STATUS_DEFS: Dict[str, dict] = {
     "shock":  {"name": "感电", "color": (160, 190, 255), "icon": "电",
                "dps": 4.0, "duration": 2.5, "max_stacks": 2,
                "vulnerability": {"lightning": 0.15}, "fx": "spark"},
+    # 免疫 buff：无 DOT、无易伤，纯粹是一个可见的增益状态
+    "immune": {"name": "免疫", "color": (185, 150, 255), "icon": "免",
+               "dps": 0.0, "duration": IMMUNITY_DURATION, "max_stacks": 1,
+               "vulnerability": {}, "fx": "shield"},
 }
 
 # 状态 → damage.py 的通道（DOT 走什么抗性）
@@ -73,6 +86,9 @@ class EntityStatus:
         self.defs = defs or STATUS_DEFS
         self.states: Dict[str, StatusState] = {}
         self._flash = 0.0          # 新状态命中的闪光，渲染层读
+        self.debuff_hits: Dict[str, int] = {}   # v2.9.20 同种类 debuff 命中计数
+        self.immunities: Dict[str, float] = {}  # v2.9.20 免疫剩余秒数
+        self.last_immune_kind: Optional[str] = None
 
     # ------------------------------------------------------------ 写入
     def apply(self, kind: str, stacks: int = 1, duration: Optional[float] = None,
@@ -80,6 +96,10 @@ class EntityStatus:
         kind = str(kind).lower()
         d = self.defs.get(kind)
         if not d:
+            return None
+        # v2.9.20：免疫窗口内该 debuff 完全无效
+        if kind in DEBUFF_KINDS and self.is_immune(kind):
+            self.last_immune_kind = kind
             return None
         dur = float(duration if duration is not None else d.get("duration", 3.0))
         cap = int(d.get("max_stacks", 3))
@@ -94,15 +114,47 @@ class EntityStatus:
             st.time = max(st.time, dur)
             st.intensity = max(st.intensity, float(intensity))
         self._flash = 0.25
+        if kind in DEBUFF_KINDS:
+            self._register_debuff_hit(kind)
         if bridge:
             self._bridge(kind, st.time)
         return st
 
+    # ------------------------------------------------------------ 免疫
+    def is_immune(self, kind: str) -> bool:
+        return float(self.immunities.get(str(kind).lower(), 0.0) or 0.0) > 0.0
+
+    def immune_remaining(self, kind: str) -> float:
+        return float(self.immunities.get(str(kind).lower(), 0.0) or 0.0)
+
+    def immune_buffs(self) -> List[StatusState]:
+        """免疫本身作为 buff 暴露给 HUD / 渲染 / 快照。"""
+        return [st for k, st in self.states.items()
+                if k.startswith(IMMUNE_PREFIX) and st.time > 0]
+
+    def _register_debuff_hit(self, kind: str):
+        n = int(self.debuff_hits.get(kind, 0) or 0) + 1
+        if n >= IMMUNITY_THRESHOLD:
+            self.debuff_hits[kind] = 0
+            self.immunities[kind] = IMMUNITY_DURATION
+            bk = IMMUNE_PREFIX + kind
+            self.states[bk] = StatusState(bk, stacks=1, time=IMMUNITY_DURATION)
+            self.last_immune_kind = kind
+            self._flash = 0.4
+        else:
+            self.debuff_hits[kind] = n
+
     def clear(self, kind: str = None):
         if kind is None:
             self.states.clear()
+            self.debuff_hits.clear()
+            self.immunities.clear()
         else:
-            self.states.pop(str(kind).lower(), None)
+            k = str(kind).lower()
+            self.states.pop(k, None)
+            self.states.pop(IMMUNE_PREFIX + k, None)
+            self.debuff_hits.pop(k, None)
+            self.immunities.pop(k, None)
 
     # ------------------------------------------------------------ 查询
     def has(self, kind: str) -> bool:
@@ -140,6 +192,18 @@ class EntityStatus:
         """推进计时，返回本帧应结算的 DOT 列表 [(amount, damage_type), ...]"""
         out = []
         self._flash = max(0.0, self._flash - dt)
+        # v2.9.20：免疫窗口倒计时；结束后连同名 buff 状态一起移除
+        for k in list(self.immunities.keys()):
+            t = float(self.immunities[k] or 0.0) - dt
+            if t <= 0:
+                self.immunities.pop(k, None)
+                self.states.pop(IMMUNE_PREFIX + k, None)
+                self.debuff_hits[k] = 0
+            else:
+                self.immunities[k] = t
+                bk = IMMUNE_PREFIX + k
+                if bk in self.states:
+                    self.states[bk].time = t
         for kind, st in list(self.states.items()):
             if st.time <= 0:
                 del self.states[kind]
@@ -181,9 +245,13 @@ class EntityStatus:
 
     # ------------------------------------------------------------ 快照
     def snapshot(self) -> dict:
-        return {k: {"stacks": s.stacks, "time": round(s.time, 2),
-                    "intensity": s.intensity}
-                for k, s in self.states.items() if s.time > 0}
+        d = {k: {"stacks": s.stacks, "time": round(s.time, 2),
+                 "intensity": s.intensity,
+                 "immune": k.startswith(IMMUNE_PREFIX)}
+             for k, s in self.states.items() if s.time > 0}
+        d["_immunities"] = {k: round(v, 2)
+                            for k, v in self.immunities.items() if v > 0}
+        return d
 
 
 def attach_status(owner, defs=None) -> EntityStatus:
@@ -193,9 +261,16 @@ def attach_status(owner, defs=None) -> EntityStatus:
 
 
 def status_meta(kind: str) -> dict:
-    return STATUS_DEFS.get(kind, {"name": kind, "color": (200, 200, 200),
-                                  "icon": "?", "fx": "none"})
+    k = str(kind).lower()
+    if k.startswith(IMMUNE_PREFIX):
+        raw = k[len(IMMUNE_PREFIX):]
+        base = dict(STATUS_DEFS.get("immune", {}))
+        base["name"] = "免疫·" + str(STATUS_DEFS.get(raw, {}).get("name", raw))
+        return base
+    return STATUS_DEFS.get(k, {"name": k, "color": (200, 200, 200),
+                               "icon": "?", "fx": "none"})
 
 
 __all__ = ["KINDS", "STATUS_DEFS", "KIND_CHANNEL", "EntityStatus",
-           "StatusState", "attach_status", "status_meta"]
+           "DEBUFF_KINDS", "IMMUNITY_THRESHOLD", "IMMUNITY_DURATION",
+           "IMMUNE_PREFIX", "StatusState", "attach_status", "status_meta"]
