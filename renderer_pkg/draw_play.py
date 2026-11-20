@@ -1206,6 +1206,21 @@ class PlayMixin:
                 is_multiplayer=bool(_light_players),
             )
 
+        # v2.9.21 视野遮罩：低分辨率(1/3) Surface + 每 3 帧重算 48 条射线，
+        # 世界层之后、HUD 之前绘制，UI 不受暗化。分屏暂不启用（避免串屏）。
+        try:
+            if not self.game.is_multiplayer_active():
+                _v = getattr(self.game, 'vision', None)
+                if _v is None:
+                    from zombie_pkg.vision import VisionSystem
+                    _v = VisionSystem()
+                    self.game.vision = _v
+                _v.enabled = bool(getattr(self.game.config, 'vision_enabled', True))
+                _v.update(self.game, player, camera, scale, cam_x, cam_y)
+                _v.draw(self.screen)
+        except Exception:
+            pass
+
         # v2.9.18 关键修复：zoom 拉远时上面把局部 scale 改成了
         # scale*zoom（用于世界绘制）。若继续用这个值画 HUD，按钮、摇杆、
         # 文字会跟着一起缩小 —— 这正是"拉远视角 UI 也缩小"的根因。

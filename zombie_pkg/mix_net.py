@@ -419,6 +419,40 @@ class NetMixin:
         if self.net_snap_timer > 0:
             return
         self.net_snap_timer = 0.05
+        # v2.9.21：阶段驱动的精简帧。房主在等待/装备选择/结算时**没有世界实体**，
+        # 旧版直接遍历 self.projectiles 会抛异常（被外层 except 静默），客户端
+        # 一帧都收不到 —— 这就是「P2 完全不显示游戏画面」的直接原因。
+        _phase = "wait"
+        try:
+            _phase = self._net_current_phase()
+        except Exception:
+            pass
+        try:
+            self.net_host.phase = _phase
+        except Exception:
+            pass
+        if _phase != "playing":
+            _light = {
+                "started": False, "phase": _phase, "version": 3,
+                "room": getattr(self.net_host, 'room_name', ''),
+                "host": getattr(self.net_host, 'host_name', ''),
+                "time_left": getattr(self, 'time_left', 0),
+                "wave": int(getattr(self, 'wave_count', 0) or 0),
+                "ts": round(time.time(), 3),
+            }
+            if _phase == "setup":
+                try:
+                    _light["ready"] = self._net_ready_map()
+                    _light["room_cfg"] = getattr(self.net_host, 'room_cfg', {}) or {}
+                except Exception:
+                    pass
+            if _phase == "over":
+                try:
+                    _light["result"] = self._net_result_data()
+                except Exception:
+                    pass
+            self.net_host.send_snapshot({"type": "snapshot", "data": _light})
+            return
         try:
             projs = []
             for p in self.projectiles[:50]:
@@ -475,7 +509,8 @@ class NetMixin:
                 _rtt = {}
             snap = {
                 "started": True,
-                "version": 2,
+                "version": 3,
+                "phase": "playing",
                 "room": getattr(self.net_host, 'room_name', ''),
                 "host": getattr(self.net_host, 'host_name', ''),
                 "time_left": getattr(self, 'time_left', 0),
@@ -628,9 +663,15 @@ class NetMixin:
                 self.net_beacon.start()
             except Exception:
                 self.net_beacon = None
+            self.multiplayer_mode = "network"
+            self.net_started = True          # v2.9.21：等待阶段就广播 phase=wait
+            self.net_phase = "wait"
+            try: self.net_host.phase = "wait"
+            except Exception: pass
             self.state = GameState.NET_WAIT
             self.floating_texts = []
             self.net_last_error = None
+            self._net_init_my_loadout()
         else:
             self.net_last_error = getattr(self.net_host, 'error', None) if self.net_host else "端口被占用或无法监听"
             self.net_role = None
@@ -641,18 +682,26 @@ class NetMixin:
         from net import NetClient
         self._net_stop()
         self.net_role = "client"
-        ip = (self.net_ip_input or "").strip()
+        try:
+            from net import parse_host_port
+            _ip, _pp = parse_host_port(self.net_ip_input, 26000)
+            ip = (_ip or "").strip()
+            # 一次粘贴 "IP:端口" 时以粘贴里的端口为准
+            if ":" in str(self.net_ip_input or "") or "[" in str(self.net_ip_input or ""):
+                self.net_port_input = str(_pp)
+        except Exception:
+            ip = (self.net_ip_input or "").strip()
+            _pp = 26000
         if not ip:
-            self.net_last_error = "请先填房主 IP（或点右侧发现的房间）"
-            from config import GameState as _GS
-            self.state = _GS.NET_MULTIPLAYER
+            self.net_last_error = "请先填房主 IP:端口（或点房间列表）"
+            self.state = GameState.NET_JOIN_SETUP
             return
         if ip in ("127.0.0.1", "localhost", "::1"):
-            self.net_last_error = "提示：127.0.0.1 只会连自己；同 WiFi 请填房主显示的局域网 IP"
+            self.net_last_error = "提示：127.0.0.1 只会连自己；请填房主显示的 IP"
         try:
-            self.net_port = max(1024, min(65535, int(getattr(self, 'net_port_input', '26000') or '26000')))
+            self.net_port = max(1024, min(65535, int(getattr(self, 'net_port_input', _pp) or _pp)))
         except Exception:
-            self.net_port = 26000
+            self.net_port = int(_pp) if str(_pp).isdigit() else 26000
         try:
             self._net_stop_discovery()   # 已选定房间，省掉后台广播扫描
         except Exception:
@@ -666,8 +715,12 @@ class NetMixin:
             self.net_last_error = "连不上 %s:%s → %s" % (ip, self.net_port, _err)
             self.net_role = None
             self.net_client = None
-            self.state = GameState.NET_MULTIPLAYER
+            self.state = GameState.NET_JOIN_SETUP
             return
+        self.multiplayer_mode = "network"
+        self.net_started = True
+        self.net_phase = "wait"
+        self._net_init_my_loadout()
         self.state = GameState.NET_WAIT
 
     def _net_stop(self):
@@ -686,15 +739,25 @@ class NetMixin:
             self.net_client = None
         self.net_role = None
         self.net_started = False
-        self.state = GameState.NET_MULTIPLAYER
+        self.net_phase = "lobby"
+        self.multiplayer_mode = None
+        self.state = GameState.NET_LOBBY
 
     def _net_host_start_game(self):
-        """主机：客户端已连接，进入装备选择（P1/P2），完成后开始双人网络游戏"""
+        """v2.9.21：进入**各自独立**的装备选择（不再复用同屏双人 EQUIP_SELECT）。
+
+        旧版把房主切到 EQUIP_SELECT，客户端完全没有参与，而且该状态下
+        快照不广播 → 客户端永远卡在等待页。现在统一走 NET_SETUP + phase。
+        """
         if not self.net_host or not self.net_host.connected:
             return
         self.multiplayer_mode = "network"
         self.net_started = True
-        self.equip_p2_phase = False
-        self.selected_weapon = None
-        self.selected_character = None
-        self.state = GameState.EQUIP_SELECT
+        self.net_phase = "setup"
+        try:
+            self.net_host.phase = "setup"
+        except Exception:
+            pass
+        self._net_init_my_loadout()
+        self.state = GameState.NET_SETUP
+        self._net_send_snapshot_now()

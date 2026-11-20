@@ -2275,6 +2275,27 @@ class GameCore:
             except Exception:
                 self.state = GameState.MENU
 
+        # v2.9.21 **核心修复**：此前 _net_send_snapshot() 只写在 PLAYING 分支里，
+        # 房主一切到 EQUIP_SELECT / 等待页 / 结算页就再也不发快照 → 客户端永远
+        # 收不到 started，卡在"连接中"，P2 完全不显示游戏画面。
+        # 现在与 state 解耦：只要房主会话存在就按自身节流广播（内部 20Hz）。
+        if (getattr(self, 'multiplayer_mode', None) == "network"
+                and getattr(self, 'net_role', None) == "host"
+                and getattr(self, 'net_started', False) and getattr(self, 'net_host', None)):
+            try:
+                self._net_send_snapshot()
+            except Exception:
+                pass
+        # v2.9.21 客户端 phase 同步：任何状态下都能被房主推进到
+        # 装备选择 / 开局 / 结算，不再只在 NET_WAIT 的 draw 里等 started。
+        if (getattr(self, 'multiplayer_mode', None) == "network"
+                and getattr(self, 'net_role', None) == "client"
+                and getattr(self, 'net_client', None)):
+            try:
+                self._net_client_sync_phase()
+            except Exception:
+                pass
+
         # 时间减缓效果
         if hasattr(self, 'time_slow_active') and self.time_slow_active:
             self.time_slow_timer -= dt
@@ -2286,13 +2307,12 @@ class GameCore:
         if self.state == GameState.PLAYING:
             # v2.2.5：决策树 AI 无批处理需求（即时 decide），无模型加载
             self._update_playing(dt)
-            # v2.2.13 主机驱动客户端玩家实体（移动/射击/技能），随后广播快照
+            # v2.2.13 主机驱动客户端玩家实体（移动/射击/技能）
             if self.multiplayer_mode == "network" and self.net_role == "host" and self.net_started:
                 try:
                     self._update_net_host(dt)
                 except Exception:
                     pass
-                self._net_send_snapshot()
             # 开发者调试面板（v2.5.8：任一玩家面板打开即处理，各自独立）
             if self.dev_mode:
                 try:

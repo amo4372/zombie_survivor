@@ -17,6 +17,11 @@ import time
 import socket
 
 from config import *
+
+# v2.9.21：所有需要系统输入法的联机页面（创建/加入/各自装备页）
+_NET_INPUT_STATES = frozenset((
+    GameState.NET_MULTIPLAYER, GameState.NET_LOBBY,
+    GameState.NET_HOST_SETUP, GameState.NET_JOIN_SETUP, GameState.NET_SETUP))
 from assets import AssetManager, SOUND_MAP, MUSIC_MAP, MAP_MUSIC_MAP
 from records import GameRecords, GameSession
 from codex import MONSTER_CODEX, WEAPON_CODEX, MONSTER_CATEGORIES, WEAPON_CATEGORIES, codex_unlock_manager
@@ -814,6 +819,17 @@ class InputMixin:
         return mouse_pos, mouse_pressed
 
     # ================= 开发者测试模式 =================
+    # v2.9.21：F5 打开 / 退出游戏内地图编辑器（PC 端快捷键；触控走主菜单按钮）
+    def _me_f5(self, events):
+        for ev in events:
+            if ev.type == pygame.KEYDOWN and ev.key == pygame.K_F5:
+                if self.state == GameState.MAP_EDITOR:
+                    self.state = GameState.MENU
+                else:
+                    self._me_enter()
+                return True
+        return False
+
     def _handle_net_ip_keyboard(self, events):
         """网络联机界面 IP/端口输入框：聚焦时接受系统输入法输入（v2.2.13 加端口）"""
         for ev in events:
@@ -866,11 +882,15 @@ class InputMixin:
                 pass
             return
         # v2.9.11：房间名 / 昵称 输入框（系统输入法，触控可用）
-        if self.state == GameState.NET_MULTIPLAYER and (
+        if self.state in _NET_INPUT_STATES and (
                 getattr(self, 'net_room_focused', False)
-                or getattr(self, 'net_nick_focused', False)):
-            _key = 'net_room_name' if self.net_room_focused else 'net_nickname'
-            _lim = 16 if self.net_room_focused else 12
+                or getattr(self, 'net_nick_focused', False)
+                or getattr(self, 'net_setup_name_focused', False)):
+            if getattr(self, 'net_setup_name_focused', False):
+                _key, _lim = 'net_my_name', 12
+            else:
+                _key = 'net_room_name' if self.net_room_focused else 'net_nickname'
+                _lim = 16 if self.net_room_focused else 12
             for ev in events:
                 if ev.type == pygame.TEXTINPUT:
                     _cur = str(getattr(self, _key, '') or '')
@@ -883,10 +903,11 @@ class InputMixin:
                                     pygame.K_KP_ENTER, pygame.K_TAB):
                         self.net_room_focused = False
                         self.net_nick_focused = False
+                        self.net_setup_name_focused = False
                         self.stop_text_input()
             return
         # 网络联机 IP 输入框：聚焦时优先接受系统输入法输入
-        if self.state == GameState.NET_MULTIPLAYER and (
+        if self.state in _NET_INPUT_STATES and (
                 getattr(self, 'net_ip_focused', False)
                 or getattr(self, 'net_port_focused', False)):
             self._handle_net_ip_keyboard(events)

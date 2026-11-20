@@ -43,6 +43,15 @@ def local_lan_ip():
     return _cands[0] if _cands else "127.0.0.1"
 
 
+def all_local_addresses():
+    """v2.9.21：房主页面列出**全部**网卡地址（含陶瓦/EasyTier 虚拟网卡）。"""
+    try:
+        from net import local_addresses
+        return local_addresses()
+    except Exception:
+        return [local_lan_ip()]
+
+
 def broadcast_targets():
     """全局广播 + 子网定向广播 + 常见热点网段。"""
     _out = ["255.255.255.255", "<broadcast>"]

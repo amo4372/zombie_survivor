@@ -3369,8 +3369,11 @@ class UiMixin:
             _clist = list(CHARACTERS.keys())
         except Exception:
             _clist = []
+        # v2.9.21 **显示与实际不符修复**：difficulty 表与 config.difficulty 用的
+        # 都是中文 key（"普通"），旧版这里写 ["easy","normal","hard","hell"]，
+        # 页面显示「普通」却把 "normal" 存进配置，难度查表失败 → 选了等于没选。
         _diff_names = ["简单", "普通", "困难", "地狱"]
-        _diff_keys = ["easy", "normal", "hard", "hell"]
+        _diff_keys = ["简单", "普通", "困难", "地狱"]
         _mode_names = ["无尽模式", "故事模式", "争分夺秒"]
         _cur_mode = getattr(g.config, 'game_mode', None)
         _cur_mode_name = getattr(_cur_mode, 'name', 'endless').lower() if _cur_mode else 'endless'
@@ -3585,7 +3588,10 @@ class UiMixin:
         # v2.9.3：删除多人房间的武器下拉栏 —— 武器统一走单人模式的分阶段
         # 选择流程（地图 → P1武器 → P1角色 → P2…），避免两套选择逻辑分叉。
         # 这里只做只读展示，并给一个进入正式流程的入口。
-        _dd_box(pygame.Rect(rx, _cy, rw, rh), f"武器：{_wn}（流程内选择）")
+        # v2.9.21：房间页的 weapon 配置与分阶段流程页是两套数据源，旧版
+        # 显示房间页的武器名但进游戏用的是流程页选的 → "实际与显示不符"。
+        # 现在明确以流程页为准，并把房间配置同步成流程页的初始选择。
+        _dd_box(pygame.Rect(rx, _cy, rw, rh), "武器：以开局流程页选择为准")
         _cy += rh + gap
         # 角色（v2.4.0 金币解锁：与单人共享 records）
         _ci = _clist.index(_cur.get("char")) if _cur.get("char") in _clist else 0
@@ -3612,7 +3618,7 @@ class UiMixin:
             elif _r == "gacha_only":
                 g.multi_room_tip = ("武器仅可通过「军械库补给」抽取获得", 2.0)
         # v2.9.8：删除多人房间角色下拉栏，角色统一走分阶段流程页
-        _dd_box(pygame.Rect(rx, _cy, rw, rh), f"角色：{_cn}（流程内选择）")
+        _dd_box(pygame.Rect(rx, _cy, rw, rh), "角色：以开局流程页选择为准")
         _cy += rh + gap
         # 阵营（PvP 时）v2.2.13：默认"自动（按序号轮转分阵营）"，
         # 修复"无论如何还是同阵营"——此前默认 team=1 让显式分支吞掉轮转
@@ -3830,6 +3836,17 @@ class UiMixin:
                     _default_w = _wlist[0]
                 if _default_w is not None:
                     g.selected_weapon = _default_w
+            except Exception:
+                pass
+            # v2.9.21：把房间页的武器/角色同步成分阶段流程页的初始选择，
+            # 保证「房间页显示」与「进游戏实际」一致（此前两套数据源分叉）。
+            try:
+                for _pi in (1, 2):
+                    _c = _rpcs.get(_pi) or {}
+                    if _c.get("weapon") is not None:
+                        setattr(g, 'selected_weapon_p%d' % _pi, _c["weapon"])
+                    if _c.get("char"):
+                        setattr(g, 'selected_char_p%d' % _pi, _c["char"])
             except Exception:
                 pass
             # v2.9.2：全模式走分阶段开局（地图 → P1武器 → P1角色 → P2…）
@@ -4222,7 +4239,7 @@ class UiMixin:
                 640, 332, self.game.font, GREEN if _conn else LIGHT_GRAY)
             start_r = C(490, 372, 300, 54)
             cancel_r = C(490, 444, 300, 46)
-            btn(start_r, "开始游戏", (40, 90, 40) if _conn else (50, 50, 55),
+            btn(start_r, "进入装备选择", (40, 90, 40) if _conn else (50, 50, 55),
                 GREEN if _conn else GRAY)
             btn(cancel_r, "取消房间", (64, 48, 48), GRAY)
             if _conn and hit(start_r):
@@ -4258,7 +4275,8 @@ class UiMixin:
             if hit(cancel_r):
                 g._net_stop()
             try:
-                if _nc and _nc.get_snapshot().get("started"):
+                _sn = _nc.get_snapshot() if _nc else {}
+                if _sn.get("phase") == "playing" or _sn.get("started"):
                     g.state = GameState.NET_CLIENT_PLAY
             except Exception:
                 pass
@@ -4354,8 +4372,8 @@ class UiMixin:
         # 玩家（v2.2.13 PvPvE：按阵营敌我渲染——敌方红色描边+红标，队友绿色/蓝标）
         _pvpm = bool(getattr(g.config, 'pvp_enabled', False))
         _my_team = int(me.get("team", 0)) if me else 0
-        labels = ["P1", "P2"]
-        cols = [GREEN, CYAN]
+        labels = ["P1", "P2", "P3", "P4"]   # v2.9.21：4 人房间不再 IndexError
+        cols = [GREEN, CYAN, GOLD, PURPLE]
         for idx, p in enumerate(players):
             px = int((p["x"] - cam_x) * scale)
             py = int((p["y"] - cam_y) * scale)
@@ -4371,7 +4389,9 @@ class UiMixin:
                 pygame.draw.circle(self.screen, _bcol, (px, py), r)
                 pygame.draw.circle(self.screen, _ring, (px, py), r, 2)
                 _lt = ("敌方 " if _enemy else "") + labels[idx] + ("·" + "AB"[_pt] if _pvpm else "")
-                tag = g.font_small.render(_lt, True, _bcol)
+                _lt = ("敌方 " if _enemy else "") + (labels[idx] if idx < len(labels)
+                    else "P%d" % (idx + 1)) + ("·" + "ABCD"[_pt] if _pvpm else "")
+            tag = g.font_small.render(_lt, True, _bcol)
             self.screen.blit(tag, (px - tag.get_width() // 2, py - r - int(14 * scale)))
             # 武器名
             wname = p.get("weapon", "")

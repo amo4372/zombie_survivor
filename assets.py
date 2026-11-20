@@ -7,6 +7,11 @@ import os
 import random
 from config import *
 
+# v2.9.21：进程级资源缓存。同一进程里重复创建 Game（联机双端自检 / 回归测试
+# 需要房主+客户端两个实例）时，117 张图片与 82 个音效不必重复解码。
+# 游戏本体单进程只有一个 Game，行为完全不变。
+_ASSET_CACHE = {}
+
 # ============================================================
 # 资源清单表（所有支持的资源）
 # ============================================================
@@ -306,8 +311,25 @@ class AssetManager:
         # 占位图缓存
         self._placeholder_cache = {}
 
-        self._init_mixer()
-        self._load_all()
+        if pygame.mixer.get_init():
+            # 同进程第二个实例：跳过重复 init，否则 mixer 被重置、音效状态丢失
+            self._sound_enabled = True
+            self._music_enabled = True
+        else:
+            self._init_mixer()
+
+        _cached = _ASSET_CACHE.get(base_path)
+        if _cached is not None:
+            self.images = dict(_cached[0])
+            self.sounds = dict(_cached[1])
+            self.music = dict(_cached[2])
+            self._loaded_assets = list(_cached[3])
+            self._missing_assets = list(_cached[4])
+        else:
+            self._load_all()
+            _ASSET_CACHE[base_path] = (
+                dict(self.images), dict(self.sounds), dict(self.music),
+                list(self._loaded_assets), list(self._missing_assets))
 
     def _init_mixer(self):
         """初始化音频系统，失败时静默禁用"""

@@ -78,9 +78,15 @@ class RenderCore:
 
     def render(self):
         state = self.game.state
+        # v2.9.21：页面切换时清掉上一页缓存的下拉覆盖区。旧版拿上一帧的
+        # overlay 去排除本页按钮点击，切页后会误伤新页面（表现为「点不动」）。
+        if getattr(self, '_zs_prev_state', None) != state:
+            self.game._dd_overlay_rects = []
+            self._zs_prev_state = state
 
         if state == GameState.MENU:
             self._draw_menu()
+            self._draw_map_editor_entry()   # v2.9.21 地图编辑器入口
         elif state == GameState.SETTINGS:
             self._draw_settings()
         elif state == GameState.HUD_EDIT:
@@ -93,8 +99,20 @@ class RenderCore:
             self._draw_multi_room_config()
         elif state == GameState.BOT_CONFIG:
             self._draw_bot_config()
+        elif state == GameState.MAP_EDITOR:
+            self._draw_map_editor()
         elif state == GameState.NET_MULTIPLAYER:
-            self._draw_net_multiplayer()
+            self._draw_net_lobby()
+        elif state == GameState.NET_LOBBY:
+            self._draw_net_lobby()
+        elif state == GameState.NET_HOST_SETUP:
+            self._draw_net_host_setup()
+        elif state == GameState.NET_JOIN_SETUP:
+            self._draw_net_join_setup()
+        elif state == GameState.NET_SETUP:
+            self._draw_net_setup()
+        elif state == GameState.NET_RESULT:
+            self._draw_net_result()
         elif state == GameState.NET_WAIT:
             self._draw_net_wait()
         elif state == GameState.NET_CLIENT_PLAY:

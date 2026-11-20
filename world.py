@@ -331,6 +331,143 @@ class GameWorld:
             color = self._obs_color(otype)
         self.obstacles.append({'rect': r, 'type': otype, 'color': color, 'rotation': rot})
 
+    # ==================== v2.9.21 障碍物材质 / 弹道 / 视线 ====================
+    # 六类材质，与 _obs_color 的 otype 一一对应：
+    #   solid    实体墙/建筑：挡所有实物弹，只有高穿透/激光能过
+    #   vehicle  车辆：挡所有弹，爆炸弹可炸穿
+    #   thin     薄掩体（栅栏/沙袋/路障）：挡普通弹，高伤/爆炸打穿
+    #   glass    易碎（终端/饮水机/黑板/油桶）：低速普通弹被挡，高速/高伤/爆炸打碎
+    #   hollow   中空（管道/垃圾堆/板条箱）：挡普通弹，高穿透弹穿过
+    #   foliage  植被（树/灌木/花坛/草垛）：**不挡子弹，但挡视线**
+    OBSTACLE_MATERIAL = {}
+    for _t in ('wall', 'building', 'house', 'pillar', 'locker', 'bookshelf',
+               'reactor', 'container', 'cooling_tower', 'shed', 'water_tower',
+               'checkpoint', 'desk', 'podium', 'server_rack', 'generator',
+               'pingpong_table', 'dumpster', 'streetlight', 'basketball_hoop'):
+        OBSTACLE_MATERIAL[_t] = 'solid'
+    for _t in ('car', 'bus', 'truck', 'school_bus', 'burning_car',
+               'wrecked_tank', 'tractor', 'vending_machine'):
+        OBSTACLE_MATERIAL[_t] = 'vehicle'
+    for _t in ('fence', 'barricade', 'sandbag', 'radiation_barrier',
+               'billboard', 'bench', 'mailbox', 'bus_stop', 'fire_hydrant',
+               'shopping_cart', 'barrel'):
+        OBSTACLE_MATERIAL[_t] = 'thin'
+    for _t in ('water_dispenser', 'terminal', 'control_panel', 'blackboard',
+               'trash_bin', 'well', 'crate'):
+        OBSTACLE_MATERIAL[_t] = 'glass'
+    for _t in ('pipe', 'debris_pile', 'chair'):
+        OBSTACLE_MATERIAL[_t] = 'hollow'
+    for _t in ('tree', 'bush', 'flower_bed', 'haystack'):
+        OBSTACLE_MATERIAL[_t] = 'foliage'
+
+    @staticmethod
+    def material_of(obs):
+        _t = (obs or {}).get('type', '')
+        _m = GameWorld.OBSTACLE_MATERIAL.get(_t)
+        if _m:
+            return _m
+        # 地图编辑器可直接把材质名当类型用，也允许外部数据表写材质
+        if _t in ('solid', 'vehicle', 'thin', 'glass', 'hollow', 'foliage'):
+            return _t
+        return 'solid'
+
+    @staticmethod
+    def blocks_sight(obs):
+        """视线遮挡：植被、实体、车辆挡视线；玻璃/薄板/中空可看穿。"""
+        return GameWorld.material_of(obs) in ('solid', 'vehicle', 'foliage')
+
+    @staticmethod
+    def bullet_vs_obstacle(obs, proj):
+        """返回 'pass'（穿过）/ 'block'（弹丸消失）/ 'break'（打碎障碍仍消失）。
+
+        不同武器 / 弹种对同一障碍物结果不同，是本轮「不同障碍物抵挡不同子弹」的核心。
+        """
+        import math as _m
+        _mat = GameWorld.material_of(obs)
+        _laser = bool(getattr(proj, 'is_laser', False))
+        _rail = bool(getattr(proj, 'is_rail', False))
+        _plasma = bool(getattr(proj, 'is_plasma', False))
+        _chain = bool(getattr(proj, 'is_chain', False))
+        _dmg = float(getattr(proj, 'damage', 0) or 0)
+        _spd = _m.hypot(float(getattr(proj, 'vx', 0) or 0),
+                        float(getattr(proj, 'vy', 0) or 0))
+        _pierce = int(getattr(proj, 'pierce', 1) or 1)
+        _boom = bool(getattr(proj, 'explosive', False))
+        if _mat == 'foliage':
+            return 'pass'
+        if _mat == 'glass':
+            if _boom or _dmg >= 60 or _spd >= 16 or _pierce >= 3:
+                return 'break'
+            return 'block'
+        if _mat == 'thin':
+            if _boom or _dmg >= 80 or _rail or _pierce >= 5:
+                return 'break'
+            return 'block'
+        if _mat == 'hollow':
+            if _laser or _rail or _plasma or _pierce >= 3:
+                return 'pass'
+            return 'block'
+        if _mat == 'vehicle':
+            if _boom:
+                return 'break'
+            return 'block'
+        # solid
+        if _laser or _rail or _pierce >= 5:
+            return 'pass'
+        return 'block'
+
+    def _ensure_obs_grid(self):
+        """懒构建 160px 网格；地图编辑器改动 obstacles 后调 invalidate_obs_grid()。"""
+        if getattr(self, '_obs_grid', None) is not None:
+            return self._obs_grid
+        _g = {}
+        for _o in self.obstacles:
+            _r = _o['rect']
+            for _cx in range(_r.left // 160, _r.right // 160 + 1):
+                for _cy in range(_r.top // 160, _r.bottom // 160 + 1):
+                    _g.setdefault((_cx, _cy), []).append(_o)
+        self._obs_grid = _g
+        return _g
+
+    def invalidate_obs_grid(self):
+        self._obs_grid = None
+
+    def obstacle_candidates(self, x0, y0, x1, y1):
+        """线段包围盒覆盖的格子里的障碍（去重），避免上千障碍×每颗子弹全表扫描。"""
+        _g = self._ensure_obs_grid()
+        _minx, _maxx = min(x0, x1), max(x0, x1)
+        _miny, _maxy = min(y0, y1), max(y0, y1)
+        _out, _seen = [], set()
+        for _cx in range(int(_minx) // 160, int(_maxx) // 160 + 1):
+            for _cy in range(int(_miny) // 160, int(_maxy) // 160 + 1):
+                for _o in _g.get((_cx, _cy), ()):
+                    _id = id(_o)
+                    if _id not in _seen:
+                        _seen.add(_id)
+                        _out.append(_o)
+        return _out
+
+    @staticmethod
+    def segment_hits_rect(x0, y0, x1, y1, rect, pad=0):
+        """扫掠线段 vs AABB（Liang–Barsky），防高速弹丸穿透薄障碍。"""
+        _dx, _dy = x1 - x0, y1 - y0
+        _p = (-_dx, _dx, -_dy, _dy)
+        _q = (x0 - rect.left + pad, rect.right + pad - x0,
+              y0 - rect.top + pad, rect.bottom + pad - y0)
+        _u0, _u1 = 0.0, 1.0
+        for _pi, _qi in zip(_p, _q):
+            if abs(_pi) < 1e-9:
+                if _qi < 0: return False
+                continue
+            _t = _qi / _pi
+            if _pi < 0:
+                if _t > _u1: return False
+                if _t > _u0: _u0 = _t
+            else:
+                if _t < _u0: return False
+                if _t < _u1: _u1 = _t
+        return _u0 <= _u1
+
     def _obs_color(self, otype):
         palettes = {
             'desk': (139,119,101), 'chair': (80,70,60), 'podium': (100,80,60),

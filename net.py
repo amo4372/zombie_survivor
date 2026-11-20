@@ -12,9 +12,119 @@ import json
 import time
 
 DEFAULT_PORT = 26000
-PROTOCOL_VERSION = 2      # v2.9.11：版本不一致直接拒绝，避免跨版本快照解析崩溃
+PROTOCOL_VERSION = 3      # v2.9.21：新增 loadout / phase 消息（跨版本直接拒绝）
 MAX_CLIENTS = 4          # 总人数上限（1 主机 + 3 客户端）
 CLIENT_SLOTS = MAX_CLIENTS - 1
+
+
+def parse_host_port(text, default_port=DEFAULT_PORT):
+    """v2.9.21：把用户粘贴的一整串地址解析成 (host, port)。
+
+    支持：192.168.1.5 / 192.168.1.5:26000 / [fd00::1]:26000 /
+          fd00::1 / 10.126.0.7 / terracotta.local / 100.64.0.3:26000
+    陶瓦 / EasyTier 常用 10.x、100.64.x(CGNAT) 或 fd00::/8(IPv6 ULA)，
+    旧版只按 IPv4 数字过滤会把冒号和字母全吃掉，虚拟 IP 永远填不进去。
+    """
+    _t = str(text or '').strip()
+    if not _t:
+        return '', default_port
+    _port = default_port
+    if _t.startswith('['):                       # [IPv6]:port
+        _rb = _t.find(']')
+        if _rb > 0:
+            _host = _t[1:_rb]
+            if _rb + 1 < len(_t) and _t[_rb + 1] == ':':
+                try: _port = int(_t[_rb + 2:])
+                except Exception: pass
+            return _host.strip(), _port
+    if _t.count(':') == 1:                       # host:port (IPv4 或域名)
+        _h, _, _ps = _t.partition(':')
+        try:
+            _port = int(_ps)
+            return _h.strip(), _port
+        except Exception:
+            return _t, default_port              # 纯 IPv6 带单个冒号不可能，交给 create_connection
+    return _t, _port
+
+
+def local_addresses(include_loopback=False):
+    """枚举本机全部 IP（含陶瓦/EasyTier 虚拟网卡），供房主一键复制。
+
+    优先顺序：物理 LAN(192.168/10/172.16) → 虚拟网段(100.64/10.126/fd00) → 其它。
+    Android/Pydroid3 上 getaddrinfo(gethostname()) 常只回 127.0.0.1，
+    所以额外读 /proc/net/fib_trie（Linux/Android 通用，无需第三方库）。
+    """
+    out = []
+    try:
+        for _ai in socket.getaddrinfo(socket.gethostname(), None, socket.AF_UNSPEC,
+                                      socket.SOCK_DGRAM):
+            _ip = _ai[4][0]
+            if _ip and _ip not in out:
+                out.append(_ip)
+    except Exception:
+        pass
+    try:
+        for _tgt in (("8.8.8.8", 80), ("1.1.1.1", 80), ("223.5.5.5", 80)):
+            try:
+                _sk = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                _sk.connect(_tgt)
+                _ip = _sk.getsockname()[0]
+                _sk.close()
+                if _ip and _ip not in out: out.append(_ip)
+            except Exception:
+                pass
+    except Exception:
+        pass
+    # v2.9.21：SIOCGIFCONF 精确枚举网卡绑定的地址（Linux/Android 标准库，无需第三方包）。
+    # 之前直接扫 /proc/net/fib_trie 会把路由表里的 0.0.0.0 / 127.255.255.255
+    # 之类前缀当成本机 IP，房主复制给队友的地址是错的。
+    try:
+        import fcntl, struct, array
+        _SIOCGIFCONF = 0x8912
+        _buf = array.array('B', b'\0' * 4096)
+        _sk = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        _res = fcntl.ioctl(_sk.fileno(), _SIOCGIFCONF,
+                           struct.pack('iL', 4096, _buf.buffer_info()[0]))
+        _n = struct.unpack('iL', _res[:8])[0]
+        _sk.close()
+        _data = _buf.tobytes()[:_n]
+        _step = 40 if struct.calcsize('L') == 8 else 32
+        for _o in range(0, len(_data) - _step + 1, _step):
+            _name = _data[_o:_o + 16].split(b'\0')[0].decode('utf-8', 'ignore')
+            _fam = struct.unpack('H', _data[_o + 16:_o + 18])[0]
+            if _fam != 2:  # AF_INET
+                continue
+            _ip = socket.inet_ntoa(_data[_o + 20:_o + 24])
+            if _ip and _ip not in out:
+                out.append(_ip)
+    except Exception:
+        pass
+    _raw = list(out)
+    if not include_loopback:
+        out = [x for x in out
+               if x not in ('127.0.0.1', '0.0.0.0')
+               and not x.startswith('169.254.')
+               and not x.endswith('.0') and not x.endswith('.255')]
+    if not out and not include_loopback:
+        # 容器 / 模拟器里可能只有回环：给 UDP 默认路由探测到的源地址，
+        # 实在没有就退回 127.0.0.1（供单设备自检，真机不会走到这里）。
+        _fallback = [x for x in _raw if x not in ('127.0.0.1', '0.0.0.0')]
+        out = _fallback[:1] if _fallback else ['127.0.0.1']
+    def _rank(ip):
+        if ip.startswith('192.168.') or ip.startswith('172.16.') or ip.startswith('10.'):
+            return 0
+        if ip.startswith('100.') or ip.startswith('fd') or ip.startswith('fc') or ':' in ip:
+            return 1
+        return 2
+    return sorted(out, key=_rank)
+
+
+def virtual_lan_hint():
+    """判断本机是否挂着陶瓦/EasyTier 类虚拟网卡，给房间页提示用。"""
+    for _ip in local_addresses():
+        if _ip.startswith('100.') or _ip.startswith('10.126.') or            _ip.startswith('fd') or _ip.startswith('fc'):
+            return _ip
+    return ''
 
 
 class NetHost:
@@ -34,6 +144,10 @@ class NetHost:
         self.clients = {}
         self.inputs = {}
         self.pending_picks = {}  # idx -> 客户端发来的升级选卡下标（房主权威消费）
+        # v2.9.21：每个客户端各自上报的武器/角色/昵称 + 准备状态
+        self.loadouts = {}       # idx -> {"weapon","char","name"}
+        self.ready = {}          # idx -> bool
+        self.phase = "lobby"     # lobby / setup / playing / over（由房主写在快照里）
         self.error = None
         # 兼容旧接口（第一个客户端别名）
         self._primary_conn = None
@@ -62,13 +176,32 @@ class NetHost:
 
     def start(self):
         try:
-            self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            # v2.9.21：优先 IPv6 双栈(:: + V6ONLY=0)，失败回退 IPv4 0.0.0.0。
+            # 关键是**绑定所有网卡**，陶瓦/EasyTier 的虚拟网卡地址才能被连上。
+            # 注意：SO_REUSEADDR 必须在 bind 之前设置，且不能重复 bind
+            # （旧代码在分支外还留了一次 0.0.0.0 bind，双栈 socket 上会
+            #  报 Errno -9 Address family for hostname not supported）。
+            _s6 = None
+            try:
+                _s6 = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+                try:
+                    _s6.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+                except Exception:
+                    pass
+                _s6.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                _s6.bind(("::", self.port))
+                self.sock = _s6
+            except Exception:
+                try: _s6.close()
+                except Exception: pass
+                _s4 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                _s4.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                _s4.bind(("0.0.0.0", self.port))
+                self.sock = _s4
             try:
                 self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             except Exception:
                 pass
-            self.sock.bind(("0.0.0.0", self.port))
             self.sock.listen(CLIENT_SLOTS)
             self.running = True
             threading.Thread(target=self._accept_loop, daemon=True).start()
@@ -151,6 +284,18 @@ class NetHost:
                                 _pk = (msg.get("data") or {}).get("upgrade_pick")
                                 if _pk is not None:
                                     self.pending_picks[idx] = int(_pk)
+                        elif _ty == "loadout":
+                            _d = msg.get("data") or {}
+                            if isinstance(_d, dict):
+                                with self.lock:
+                                    self.loadouts[idx] = {
+                                        "weapon": str(_d.get("weapon") or ""),
+                                        "char": str(_d.get("char") or ""),
+                                        "name": str(_d.get("name") or "")[:16],
+                                    }
+                                    self.ready[idx] = bool(_d.get("ready", False))
+                        elif _ty == "phase_ack":
+                            pass
                         elif _ty == "hello":
                             with self.lock:
                                 _p = self.peers.setdefault(idx, {})
@@ -184,6 +329,20 @@ class NetHost:
             self.pending_picks.pop(idx, None)
             if self._primary_conn is conn:
                 self._primary_conn = next(iter(self.clients.values()), None)
+
+    def get_loadouts(self):
+        """v2.9.21：返回 {idx: loadout}，房主据此为每人创建自己的武器/角色。"""
+        with self.lock:
+            return {k: dict(v) for k, v in self.loadouts.items()}
+
+    def all_ready(self):
+        with self.lock:
+            _ids = list(self.clients.keys())
+            return bool(_ids) and all(self.ready.get(i, False) for i in _ids)
+
+    def ready_count(self):
+        with self.lock:
+            return sum(1 for i in self.clients if self.ready.get(i, False))
 
     def pop_upgrade_pick(self, idx):
         """取出并清除某客户端的升级选择（房主权威：由主机应用技能）"""
@@ -272,9 +431,8 @@ class NetClient:
 
     def start(self):
         try:
-            self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.sock.settimeout(5)
-            self.sock.connect((self.ip, self.port))
+            # v2.9.21：create_connection 自动处理 IPv4 / IPv6 / 主机名 / 虚拟网卡 IP
+            self.sock = socket.create_connection((self.ip, self.port), timeout=5)
             self.sock.settimeout(None)
             try:
                 self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
@@ -352,6 +510,17 @@ class NetClient:
                 self.sock.sendall((json.dumps({"type": "pong"}) + "\n").encode("utf-8"))
         except Exception:
             pass
+
+    def send_loadout(self, weapon, char, name, ready=True):
+        """v2.9.21：客户端把自己选的武器/角色/昵称发给房主（各自独立，不复用同屏流程）。"""
+        try:
+            msg = {"type": "loadout", "data": {
+                "weapon": str(weapon or ""), "char": str(char or ""),
+                "name": str(name or "")[:16], "ready": bool(ready)}}
+            self.sock.sendall((json.dumps(msg, ensure_ascii=False) + "\n").encode("utf-8"))
+            return True
+        except Exception:
+            return False
 
     def send_input(self, data):
         try:

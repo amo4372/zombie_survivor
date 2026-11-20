@@ -216,6 +216,12 @@ class GameState(Enum):
     NET_MULTIPLAYER = auto()  # 新增：网络联机（创建/加入房间）
     NET_WAIT = auto()  # 新增：网络等待（主机等待客户端/客户端连接中）
     NET_CLIENT_PLAY = auto()  # 新增：客户端游玩（渲染主机快照）
+    # v2.9.21：网络联机分页与各自装备选择（不再复用同屏双人 EQUIP_SELECT）
+    NET_LOBBY = auto()        # 入口：创建房间 / 加入房间
+    NET_HOST_SETUP = auto()   # 创建房间页（配置 + 地址 + 一键复制）
+    NET_JOIN_SETUP = auto()   # 加入房间页（IP:端口 + 房间列表 + 陶瓦提示）
+    NET_SETUP = auto()        # 各自独立选武器 / 角色 / 昵称（房主与客户端同页）
+    NET_RESULT = auto()       # 网络对局结算（由房主广播）
     DYING = auto()    # v2.8.0：死亡反应时间（不立刻结算，慢动作展示死亡瞬间）
     REPLAY = auto()   # v2.8.0：全局回放（自由摄像机 + 数据面板）
     DEATH_DETAIL = auto()  # v2.8.2：死亡详情独立页面（带退出按钮，触控可滚动）
@@ -223,6 +229,7 @@ class GameState(Enum):
     GACHA = auto()         # v2.8.9：军械库补给（武器抽取，米哈游式保底）
     SLOT_MACHINE = auto()  # v2.8.9：老虎机
     BOT_CONFIG = auto()    # v2.9.17：多人模式玩家 AI 配置（最多 9 个）
+    MAP_EDITOR = auto()    # v2.9.21：游戏内地图 / 障碍物编辑器
 
 
 class ControlMode(Enum):

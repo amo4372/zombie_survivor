@@ -2432,6 +2432,32 @@ class PlayingMixin:
         # 更新投射物
         for proj in self.projectiles[:]:
             result = proj.update(dt)
+            # v2.9.21 障碍物按材质抵挡不同子弹（扫掠线段 + 网格候选，性能可控）
+            try:
+                _w = getattr(self, 'world', None)
+                if _w is not None and getattr(proj, 'alive', True) \
+                        and not getattr(proj, 'is_laser', False):
+                    _x0 = float(getattr(proj, 'prev_x', proj.x))
+                    _y0 = float(getattr(proj, 'prev_y', proj.y))
+                    _pad = max(0.0, float(getattr(proj, 'size', 4) or 4) * 0.5)
+                    for _o in _w.obstacle_candidates(_x0, _y0, proj.x, proj.y):
+                        if not _w.segment_hits_rect(_x0, _y0, proj.x, proj.y,
+                                                    _o['rect'], pad=_pad):
+                            continue
+                        _res = _w.bullet_vs_obstacle(_o, proj)
+                        if _res == 'pass':
+                            continue
+                        if _res == 'break':
+                            try:
+                                _w.obstacles.remove(_o)
+                                _w.invalidate_obs_grid()
+                                self.particles.spawn_explosion(proj.x, proj.y, ORANGE, 8)
+                            except Exception:
+                                pass
+                        proj.alive = False
+                        break
+            except Exception:
+                pass
             if result == "explode":
                 self.particles.spawn_explosion(proj.x, proj.y, ORANGE, 30)
                 self.camera.shake(5, 0.3)
