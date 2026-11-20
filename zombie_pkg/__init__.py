@@ -14,14 +14,12 @@ from .mix_multi import MultiplayerMixin
 from .mix_players import PlayerRegistryMixin
 from .mix_replay import ReplayMixin
 from .mix_feedback import FeedbackMixin
-from .mix_net import NetMixin
 from .mix_records import RecordsMixin
 from .mix_shop import ShopMixin
 from .mix_story import StoryMixin
 from .mix_block import BlockMixin
 from .mix_targets import TargetMixin
 from .mix_bots import BotMixin
-from .mix_net_lobby import NetLobbyMixin
 from .map_editor import MapEditorMixin
 # v2.9.3：双子 Boss 暂时移除（表现异常且卡顿），代码保留待重构
 # from .mix_twinboss import TwinBossMixin
@@ -29,8 +27,8 @@ from .map_editor import MapEditorMixin
 
 class Game(GameCore, PlayerRegistryMixin, ReplayMixin, FeedbackMixin, MenuMixin, HudMixin,
            InputMixin, SkillsMixin, CombatMixin, EffectsMixin, PlayingMixin,
-           MultiplayerMixin, NetMixin, RecordsMixin, ShopMixin, StoryMixin,
-           BlockMixin, TargetMixin, BotMixin, NetLobbyMixin, MapEditorMixin,
+           MultiplayerMixin, RecordsMixin, ShopMixin, StoryMixin,
+           BlockMixin, TargetMixin, BotMixin, MapEditorMixin,
            ):
     """完整游戏类（聚合拆分后的全部功能 Mixin，逻辑与拆分前等价）
 

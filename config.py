@@ -211,17 +211,8 @@ class GameState(Enum):
     CHARACTER_SELECT_P2 = auto()
     HUD_EDIT = auto()  # 新增：HUD触控按钮自定义布局编辑
     PLAY_SELECT = auto()  # 新增：开始游戏 → 单人/多人选择
-    MULTIPLAYER_SELECT = auto()  # 新增：多人 → 同屏双人/网络联机选择
+    MULTIPLAYER_SELECT = auto()  # 多人 → 同屏双人选择
     MULTI_ROOM_CONFIG = auto()  # v2.2.9：同屏多人房间配置（人数/玩法/阵营/难度/地图/模式/统一武器）
-    NET_MULTIPLAYER = auto()  # 新增：网络联机（创建/加入房间）
-    NET_WAIT = auto()  # 新增：网络等待（主机等待客户端/客户端连接中）
-    NET_CLIENT_PLAY = auto()  # 新增：客户端游玩（渲染主机快照）
-    # v2.9.21：网络联机分页与各自装备选择（不再复用同屏双人 EQUIP_SELECT）
-    NET_LOBBY = auto()        # 入口：创建房间 / 加入房间
-    NET_HOST_SETUP = auto()   # 创建房间页（配置 + 地址 + 一键复制）
-    NET_JOIN_SETUP = auto()   # 加入房间页（IP:端口 + 房间列表 + 陶瓦提示）
-    NET_SETUP = auto()        # 各自独立选武器 / 角色 / 昵称（房主与客户端同页）
-    NET_RESULT = auto()       # 网络对局结算（由房主广播）
     DYING = auto()    # v2.8.0：死亡反应时间（不立刻结算，慢动作展示死亡瞬间）
     REPLAY = auto()   # v2.8.0：全局回放（自由摄像机 + 数据面板）
     DEATH_DETAIL = auto()  # v2.8.2：死亡详情独立页面（带退出按钮，触控可滚动）
@@ -952,3 +943,14 @@ COMBO_SKILLS = {
         "bonus": {"damage": 0.20},
     },
 }
+
+
+# ==================== v2.9.22 PvP 对玩家伤害：按来源独立结算 ====================
+# 旧版通用 ×0.2 太弱，防爆套装 / 载具 / 狙击全部"打不动"。
+# 现在通用武器 0.6、狙击 0.9、特高伤武器 1.2；
+# 防爆套装与载具走各自独立倍率，不再混用通用衰减。
+PVP_GENERAL_MULT = 0.6
+PVP_SNIPER_MULT = 0.9
+PVP_NO_ATTEN_MULT = 1.2
+PVP_GEAR_MULT = 0.85       # 防爆套装肘击 / 盾冲对敌方玩家
+PVP_VEHICLE_MULT = 1.15    # 载具撞击对敌方玩家（质量大，不衰减）

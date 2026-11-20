@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""实体状态数据管理（v2.9.12 / v2.9.20）
+"""实体状态数据管理（v2.9.12 / v2.9.20 / v2.9.22）
 
 统一维护 流血 / 燃烧 / 冰冻 / 中毒 / 眩晕 / 感电 等状态的
 层数、剩余时间、每跳伤害与易伤，供：
@@ -10,16 +10,24 @@
 不推翻原有 BuffManager：apply 时可选桥接进去，保证冻结移速、燃烧加深
 等旧机制继续生效，本项目只是把它变成**结构化数据**并补齐渲染。
 
-v2.9.20：新增「免疫抗性」——连续吃同一种 debuff 达到阈值后，获得一个
-**免疫 buff**（immune_<kind>），期间该 debuff 完全无法再挂上，防止被
-冰冻/燃烧/中毒无限连锁控到死。免疫本身也是结构化状态，会出现在
-active_states / snapshot / HUD 渲染里。
+v2.9.22 **免疫机制重做**（按需求重新定义）：
+  1. 每次吃到 debuff → 叠加层数；
+  2. 层数到达该状态上限后，后续施加改为「覆盖」：刷新持续时间/强度，
+     **不清除已有 debuff**、不重置层数；
+  3. 满层后反复覆盖达到 `IMMUNITY_THRESHOLD` 次 → 获得 `immune_<kind>`
+     buff，一段时间内不再接受该 debuff 的新覆盖（免疫窗口）；
+  4. 免疫**不清除当前已有的 debuff**，它按自己的剩余时间自然走完；
+  5. 免疫结束（或 debuff 自然结束）后计数归零，可以重新被施加。
+
+旧版是「累计 3 次施加直接给 6s 免疫并拒绝刷新」，在冰冻区域里每帧 apply
+会瞬间吃满阈值 → 冻一下马上解冻、之后很久不再冻。现在覆盖按真实时间
+节流推进，区域内能稳定冻结一段时间才进入免疫。
 """
 from typing import Dict, List, Optional
 
 KINDS = ("bleed", "burn", "freeze", "poison", "stun", "shock")
 DEBUFF_KINDS = ("bleed", "burn", "freeze", "poison", "stun", "shock")
-IMMUNITY_THRESHOLD = 3       # 同一种 debuff 累计 3 次触发免疫
+IMMUNITY_THRESHOLD = 3       # 满层后的**覆盖次数**上限（达到即进入免疫）
 IMMUNITY_DURATION = 6.0      # 免疫持续 6 秒
 IMMUNE_PREFIX = "immune_"
 
@@ -85,36 +93,51 @@ class EntityStatus:
         self.owner = owner
         self.defs = defs or STATUS_DEFS
         self.states: Dict[str, StatusState] = {}
-        self._flash = 0.0          # 新状态命中的闪光，渲染层读
-        self.debuff_hits: Dict[str, int] = {}   # v2.9.20 同种类 debuff 命中计数
-        self.immunities: Dict[str, float] = {}  # v2.9.20 免疫剩余秒数
+        self._flash = 0.0                    # 新状态命中的闪光，渲染层读
+        self.debuff_hits: Dict[str, int] = {}   # 满层后的「覆盖」次数
+        self.immunities: Dict[str, float] = {}  # 免疫剩余秒数
         self.last_immune_kind: Optional[str] = None
 
     # ------------------------------------------------------------ 写入
     def apply(self, kind: str, stacks: int = 1, duration: Optional[float] = None,
-              intensity: float = 1.0, bridge: bool = True):
+              intensity: float = 1.0, bridge: bool = True, count_hit: bool = True):
+        """施加 / 叠层 / 覆盖一个状态。
+
+        返回现有或新建的 StatusState；免疫窗口内返回**当前已有的那个 debuff**
+        （不刷新、不清除），若当前没有则返回 None。
+        `count_hit=False` 用于「纯维持」类的调用，不计入覆盖次数。
+        """
         kind = str(kind).lower()
         d = self.defs.get(kind)
         if not d:
             return None
-        # v2.9.20：免疫窗口内该 debuff 完全无效
+        # 免疫窗口：不再叠加、不再覆盖，但**保留现有 debuff**让它自然走完
         if kind in DEBUFF_KINDS and self.is_immune(kind):
             self.last_immune_kind = kind
-            return None
+            return self.states.get(kind)
+
         dur = float(duration if duration is not None else d.get("duration", 3.0))
         cap = int(d.get("max_stacks", 3))
         st = self.states.get(kind)
+        covered = False
         if st is None:
             # 首次施加：stacks 参数直接就是层数（而非"再叠加 stacks 次"）
             st = StatusState(kind, stacks=max(1, int(stacks)),
                              time=dur, intensity=intensity)
             self.states[kind] = st
-        else:
+        elif st.stacks < cap:
+            # 未达上限：叠层（同时把持续时间补到本次的时长）
             st.stacks = min(cap, st.stacks + max(1, int(stacks)))
             st.time = max(st.time, dur)
             st.intensity = max(st.intensity, float(intensity))
+        else:
+            # 已达上限：**覆盖**——刷新持续时间与强度，不清除、不重置层数
+            st.time = max(st.time, dur)
+            st.intensity = max(st.intensity, float(intensity))
+            covered = True
+
         self._flash = 0.25
-        if kind in DEBUFF_KINDS:
+        if kind in DEBUFF_KINDS and covered and count_hit:
             self._register_debuff_hit(kind)
         if bridge:
             self._bridge(kind, st.time)
@@ -127,6 +150,10 @@ class EntityStatus:
     def immune_remaining(self, kind: str) -> float:
         return float(self.immunities.get(str(kind).lower(), 0.0) or 0.0)
 
+    def refresh_count(self, kind: str) -> int:
+        """该 debuff 满层后已发生的覆盖次数（调试 / 测试用）。"""
+        return int(self.debuff_hits.get(str(kind).lower(), 0) or 0)
+
     def immune_buffs(self) -> List[StatusState]:
         """免疫本身作为 buff 暴露给 HUD / 渲染 / 快照。"""
         return [st for k, st in self.states.items()
@@ -138,6 +165,8 @@ class EntityStatus:
             self.debuff_hits[kind] = 0
             self.immunities[kind] = IMMUNITY_DURATION
             bk = IMMUNE_PREFIX + kind
+            # 只挂免疫 buff，**绝不动 self.states[kind]**：
+            # 现有的 debuff 保留并按剩余时间自然结束。
             self.states[bk] = StatusState(bk, stacks=1, time=IMMUNITY_DURATION)
             self.last_immune_kind = kind
             self._flash = 0.4
@@ -192,7 +221,8 @@ class EntityStatus:
         """推进计时，返回本帧应结算的 DOT 列表 [(amount, damage_type), ...]"""
         out = []
         self._flash = max(0.0, self._flash - dt)
-        # v2.9.20：免疫窗口倒计时；结束后连同名 buff 状态一起移除
+        # 免疫窗口倒计时；结束后删免疫 buff 并清零覆盖计数，
+        # 但不碰原本的 debuff（它若还在就继续走完）。
         for k in list(self.immunities.keys()):
             t = float(self.immunities[k] or 0.0) - dt
             if t <= 0:
@@ -220,6 +250,9 @@ class EntityStatus:
                                 KIND_CHANNEL.get(kind, "physical")))
             if st.time <= 0:
                 del self.states[kind]
+                # debuff 自然结束时清零覆盖计数，下次从「首次施加」重新计
+                if kind in DEBUFF_KINDS:
+                    self.debuff_hits[kind] = 0
         return out
 
     def flash(self) -> float:
@@ -251,6 +284,7 @@ class EntityStatus:
              for k, s in self.states.items() if s.time > 0}
         d["_immunities"] = {k: round(v, 2)
                             for k, v in self.immunities.items() if v > 0}
+        d["_refresh_counts"] = {k: int(v) for k, v in self.debuff_hits.items()}
         return d
 
 

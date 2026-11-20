@@ -290,131 +290,122 @@ class MultiplayerMixin:
         self._p2_cast_angle = 0.0
         self._p2_cast_ratio = 1.0
         # ===== 输入来源 =====
-        if self.multiplayer_mode == "network" and self.net_host:
-            ci = self.net_host.get_input()
-            mx = float(ci.get("mx", 0))
-            my = float(ci.get("my", 0))
-            shoot = bool(ci.get("shoot", False))
-            skill = bool(ci.get("skill", False))
-            throw = bool(ci.get("throw", False))
-            sprint = bool(ci.get("sprint", False))
-        else:
-            # 触控模式：先把触摸事件分发给 P2 控件（右半屏）
-            if self.config.control_mode == ControlMode.TOUCH and self.p2_controls:
-                for _tev in self.touch_events:
-                    if _tev["type"] == "down":
-                        x, y = _tev["pos"]
-                        if x >= self.scaled_width // 2:
-                            self._p2_finger_ids.add(_tev["id"])
-                    elif _tev["type"] == "up":
-                        self._p2_finger_ids.discard(_tev["id"])
-                # v2.5.5 打断绳索 QTE：P2 被勾期间右半屏任意"按下"登记为待判定单击点（世界坐标）
-                try:
-                    if p2.grappled and p2.qte_window > 0 and p2.qte_break_tap is None:
-                        for _e2 in self.touch_events:
-                            if _e2.get("type") == "down" and _e2.get("pos", (0, 0))[0] >= self.scaled_width // 2:
-                                _sx, _sy = _e2["pos"]
-                                p2.qte_break_tap = (self.camera2.x + (_sx - self.scaled_width // 2) / self.scale,
-                                                    self.camera2.y + _sy / self.scale)
-                                break
-                except Exception:
-                    pass
-                self.p2_controls["joystick"].handle_touch(self.touch_events, self.scale, self._p2_finger_ids)
-                self.p2_controls["aim"].handle_touch(self.touch_events, self.scale)
-                for name in ("shoot", "sprint", "skill_selector", "skill_caster", "throwable_switch", "throwable_caster"):
-                    self.p2_controls[name].handle_touch(self.touch_events, self.scale)
-            mx, my, shoot, skill, throw, sprint = self._get_p2_local_input()
-            # P2 键控技能 U 长按：预瞄瞄准（照 G 键模板）
-            # v2.5.6：key_u_* 用 getattr 兜底（P2 控件未初始化时不应崩溃）
-            if (self.config.control_mode != ControlMode.TOUCH
-                    and getattr(self, 'key_u_held', False) and self.p2_controls):
-                hold_t = time.time() - getattr(self, 'key_u_press_start', 0)
-                c2 = self.p2_controls
-                c2["skill_caster"].set_player_pos(p2.x, p2.y, self.camera2.x, self.camera2.y)
-                c2["skill_caster"].set_max_distance(self._get_skill_max_distance(self.p2_selected_skill or SkillType.GRENADE))
-                # v2.2.9 P2 投掷预瞄：同样以 P2 位置/视口填充（修复渲染点不在 P2 上）
-                try:
-                    c2["throwable_caster"].set_player_pos(p2.x, p2.y, self.camera2.x, self.camera2.y)
-                    c2["throwable_caster"].set_max_distance(getattr(self, 'throwable_max_dist', 450))
-                except Exception:
-                    pass
-                if not getattr(self, 'u_aim_started', False) and hold_t >= getattr(self, 'key_u_long_threshold', 0.4):
-                    self.u_aim_started = True
-                    c2["skill_caster"].is_aiming = True
-                # v2.2.6：P2 钩爪瞄准锁定圈更新（键控 U 长按）
-                # v2.6.4 修复：仅在选择了钩爪技能时才更新锁定圈
-                # v2.8.7：装备防爆套装后钩爪即可用，不再要求选中 GRAPPLE_PULL 技能卡
-                if self._p2_grapple_available(p2):
-                    self._update_p2_grapple_lock(p2, bool(self.u_aim_started))
-                else:
-                    rg = p2.riot_gear
-                    rg.grapple_aiming = False
-                    if not rg.grapple_active:
-                        rg.grapple_locked_target = None
-                if getattr(self, 'u_aim_started', False):
-                    aim_ang = math.radians(self._p2_auto_aim_angle(p2))
-                    c2["skill_caster"].set_aim_angle(aim_ang)
-                    c2["skill_caster"].set_distance_ratio(1.0)
-            # 触控模式：P2 控件输入（右半屏）
-            if self.config.control_mode == ControlMode.TOUCH and self.p2_controls:
-                joystick2 = self.p2_controls["joystick"]
-                if joystick2.active:
-                    dx, dy = joystick2.get_direction()
-                    if dx or dy:
-                        mx, my = dx, dy
-                aim2 = self.p2_controls["aim"]
-                if aim2.is_shooting:
-                    shoot = True
-                if aim2.is_aiming:
-                    pass
-                if self.p2_controls["sprint"].pressed:
-                    sprint = True
-                # 填充 P2 技能释放控件数据（长按/拖拽预瞄用）
-                c2sc = self.p2_controls["skill_caster"]
-                c2sc.set_player_pos(p2.x, p2.y, self.camera2.x, self.camera2.y)
-                c2sc.set_max_distance(self._get_skill_max_distance(self.p2_selected_skill or SkillType.GRENADE))
-                # v2.2.9 P2 投掷预瞄：以 P2 位置/视口填充（修复渲染点不在 P2 上）
-                try:
-                    c2tc = self.p2_controls["throwable_caster"]
-                    c2tc.set_player_pos(p2.x, p2.y, self.camera2.x, self.camera2.y)
-                    c2tc.set_max_distance(getattr(self, 'throwable_max_dist', 450))
-                except Exception:
-                    pass
-                # v2.2.6/11：P2 钩爪瞄准锁定圈更新（触控长按，锚点跟随瞄准移动）
-                # v2.6.4 修复：仅在选择了钩爪技能时才更新锁定圈
-                # v2.8.7：同上，套装已装备也算钩爪可用
-                if self._p2_grapple_available(p2):
-                    self._update_p2_grapple_lock(p2, bool(c2sc.is_aiming), caster=c2sc)
-                else:
-                    # 钩爪不可用时清除瞄准状态
-                    rg = p2.riot_gear
-                    rg.grapple_aiming = False
-                    if not rg.grapple_active:
-                        rg.grapple_locked_target = None
-                if self.p2_controls["skill_caster"].just_released:
-                    skill = True
-                    # 触控长按/拖拽预瞄状态（handle_touch 会在 up 时重置 is_aiming）
-                    self._p2_cast_aimed = self.p2_controls["skill_caster"].was_aiming_on_release
-                    self._p2_cast_angle = self.p2_controls["skill_caster"].angle
-                    self._p2_cast_ratio = self.p2_controls["skill_caster"].distance_ratio
-                if self.p2_controls["throwable_caster"].just_released:
-                    throw = True
-                # v2.2.9 P2 投掷切换（触控投掷切换按钮）：仅在有库存的类型间轮换
-                if self.p2_controls["throwable_switch"].just_released:
-                    self._cycle_p2_throwable(p2)
-                # P2 技能切换（短按）
-                if self.p2_controls["skill_selector"].just_released:
-                    sts = self._get_unlocked_skills_for(p2)
-                    if sts:
-                        if self.p2_selected_skill not in sts:
-                            self.p2_selected_skill = sts[0]
-                        else:
-                            idx = sts.index(self.p2_selected_skill)
-                            self.p2_selected_skill = sts[(idx + 1) % len(sts)]
-                        skill_obj = p2.skill_tree.get_skill(self.p2_selected_skill)
-                        self.floating_texts.append(FloatingText(
-                            p2.x, p2.y - 40,
-                            f"P2技能: {skill_obj.name if skill_obj else '空'}", color=GOLD, lifetime=1.5))
+        # 触控模式：先把触摸事件分发给 P2 控件（右半屏）
+        if self.config.control_mode == ControlMode.TOUCH and self.p2_controls:
+            for _tev in self.touch_events:
+                if _tev["type"] == "down":
+                    x, y = _tev["pos"]
+                    if x >= self.scaled_width // 2:
+                        self._p2_finger_ids.add(_tev["id"])
+                elif _tev["type"] == "up":
+                    self._p2_finger_ids.discard(_tev["id"])
+            # v2.5.5 打断绳索 QTE：P2 被勾期间右半屏任意"按下"登记为待判定单击点（世界坐标）
+            try:
+                if p2.grappled and p2.qte_window > 0 and p2.qte_break_tap is None:
+                    for _e2 in self.touch_events:
+                        if _e2.get("type") == "down" and _e2.get("pos", (0, 0))[0] >= self.scaled_width // 2:
+                            _sx, _sy = _e2["pos"]
+                            p2.qte_break_tap = (self.camera2.x + (_sx - self.scaled_width // 2) / self.scale,
+                                                self.camera2.y + _sy / self.scale)
+                            break
+            except Exception:
+                pass
+            self.p2_controls["joystick"].handle_touch(self.touch_events, self.scale, self._p2_finger_ids)
+            self.p2_controls["aim"].handle_touch(self.touch_events, self.scale)
+            for name in ("shoot", "sprint", "skill_selector", "skill_caster", "throwable_switch", "throwable_caster"):
+                self.p2_controls[name].handle_touch(self.touch_events, self.scale)
+        mx, my, shoot, skill, throw, sprint = self._get_p2_local_input()
+        # P2 键控技能 U 长按：预瞄瞄准（照 G 键模板）
+        # v2.5.6：key_u_* 用 getattr 兜底（P2 控件未初始化时不应崩溃）
+        if (self.config.control_mode != ControlMode.TOUCH
+                and getattr(self, 'key_u_held', False) and self.p2_controls):
+            hold_t = time.time() - getattr(self, 'key_u_press_start', 0)
+            c2 = self.p2_controls
+            c2["skill_caster"].set_player_pos(p2.x, p2.y, self.camera2.x, self.camera2.y)
+            c2["skill_caster"].set_max_distance(self._get_skill_max_distance(self.p2_selected_skill or SkillType.GRENADE))
+            # v2.2.9 P2 投掷预瞄：同样以 P2 位置/视口填充（修复渲染点不在 P2 上）
+            try:
+                c2["throwable_caster"].set_player_pos(p2.x, p2.y, self.camera2.x, self.camera2.y)
+                c2["throwable_caster"].set_max_distance(getattr(self, 'throwable_max_dist', 450))
+            except Exception:
+                pass
+            if not getattr(self, 'u_aim_started', False) and hold_t >= getattr(self, 'key_u_long_threshold', 0.4):
+                self.u_aim_started = True
+                c2["skill_caster"].is_aiming = True
+            # v2.2.6：P2 钩爪瞄准锁定圈更新（键控 U 长按）
+            # v2.6.4 修复：仅在选择了钩爪技能时才更新锁定圈
+            # v2.8.7：装备防爆套装后钩爪即可用，不再要求选中 GRAPPLE_PULL 技能卡
+            if self._p2_grapple_available(p2):
+                self._update_p2_grapple_lock(p2, bool(self.u_aim_started))
+            else:
+                rg = p2.riot_gear
+                rg.grapple_aiming = False
+                if not rg.grapple_active:
+                    rg.grapple_locked_target = None
+            if getattr(self, 'u_aim_started', False):
+                aim_ang = math.radians(self._p2_auto_aim_angle(p2))
+                c2["skill_caster"].set_aim_angle(aim_ang)
+                c2["skill_caster"].set_distance_ratio(1.0)
+        # 触控模式：P2 控件输入（右半屏）
+        if self.config.control_mode == ControlMode.TOUCH and self.p2_controls:
+            joystick2 = self.p2_controls["joystick"]
+            if joystick2.active:
+                dx, dy = joystick2.get_direction()
+                if dx or dy:
+                    mx, my = dx, dy
+            aim2 = self.p2_controls["aim"]
+            if aim2.is_shooting:
+                shoot = True
+            if aim2.is_aiming:
+                pass
+            if self.p2_controls["sprint"].pressed:
+                sprint = True
+            # 填充 P2 技能释放控件数据（长按/拖拽预瞄用）
+            c2sc = self.p2_controls["skill_caster"]
+            c2sc.set_player_pos(p2.x, p2.y, self.camera2.x, self.camera2.y)
+            c2sc.set_max_distance(self._get_skill_max_distance(self.p2_selected_skill or SkillType.GRENADE))
+            # v2.2.9 P2 投掷预瞄：以 P2 位置/视口填充（修复渲染点不在 P2 上）
+            try:
+                c2tc = self.p2_controls["throwable_caster"]
+                c2tc.set_player_pos(p2.x, p2.y, self.camera2.x, self.camera2.y)
+                c2tc.set_max_distance(getattr(self, 'throwable_max_dist', 450))
+            except Exception:
+                pass
+            # v2.2.6/11：P2 钩爪瞄准锁定圈更新（触控长按，锚点跟随瞄准移动）
+            # v2.6.4 修复：仅在选择了钩爪技能时才更新锁定圈
+            # v2.8.7：同上，套装已装备也算钩爪可用
+            if self._p2_grapple_available(p2):
+                self._update_p2_grapple_lock(p2, bool(c2sc.is_aiming), caster=c2sc)
+            else:
+                # 钩爪不可用时清除瞄准状态
+                rg = p2.riot_gear
+                rg.grapple_aiming = False
+                if not rg.grapple_active:
+                    rg.grapple_locked_target = None
+            if self.p2_controls["skill_caster"].just_released:
+                skill = True
+                # 触控长按/拖拽预瞄状态（handle_touch 会在 up 时重置 is_aiming）
+                self._p2_cast_aimed = self.p2_controls["skill_caster"].was_aiming_on_release
+                self._p2_cast_angle = self.p2_controls["skill_caster"].angle
+                self._p2_cast_ratio = self.p2_controls["skill_caster"].distance_ratio
+            if self.p2_controls["throwable_caster"].just_released:
+                throw = True
+            # v2.2.9 P2 投掷切换（触控投掷切换按钮）：仅在有库存的类型间轮换
+            if self.p2_controls["throwable_switch"].just_released:
+                self._cycle_p2_throwable(p2)
+            # P2 技能切换（短按）
+            if self.p2_controls["skill_selector"].just_released:
+                sts = self._get_unlocked_skills_for(p2)
+                if sts:
+                    if self.p2_selected_skill not in sts:
+                        self.p2_selected_skill = sts[0]
+                    else:
+                        idx = sts.index(self.p2_selected_skill)
+                        self.p2_selected_skill = sts[(idx + 1) % len(sts)]
+                    skill_obj = p2.skill_tree.get_skill(self.p2_selected_skill)
+                    self.floating_texts.append(FloatingText(
+                        p2.x, p2.y - 40,
+                        f"P2技能: {skill_obj.name if skill_obj else '空'}", color=GOLD, lifetime=1.5))
         # ===== 瞄准角度：触控摇杆 / 最近敌人 / 保持原朝向 =====
         angle = p2.facing_angle
         if self.config.control_mode == ControlMode.TOUCH and self.p2_controls:
@@ -659,29 +650,12 @@ class MultiplayerMixin:
         return self.auto_aim_angle_for(p2)
 
     def _update_ai_companion(self, p, dt):
-        """3/4 号玩家（网络联机补位）：有网络输入用网络输入（idx=2→P3, 3→P4），
-        无输入则自动作战——找最近敌人移动射击（AI 队友玩法），拾取地面道具"""
+        """3/4 号玩家（同屏 N 人补位）：自动作战——找最近敌人移动射击
+        （AI 队友玩法），拾取地面道具"""
         if not p or not getattr(p, "alive", True):
             return
         mx = my = 0.0
         shoot = False
-        # 网络输入：idx = 2 -> P3, 3 -> P4
-        if self.multiplayer_mode == "network" and self.net_host:
-            ci = self.net_host.get_input(2 if p is getattr(self, 'player3', None) else 3)
-            mx = float(ci.get("mx", 0))
-            my = float(ci.get("my", 0))
-            shoot = bool(ci.get("shoot", False))
-            if mx or my or shoot:
-                p.update(dt, mx, my, p.facing_angle, self.world)
-                if shoot and p.can_act():
-                    _w = p.get_current_weapon()
-                    if _w and _w.can_fire():
-                        self.projectiles.extend(_w.fire(
-                            p.x, p.y, math.radians(p.facing_angle),
-                            p.damage_mult * p.buff_manager.get_damage_mult() * p.damage_multiplier,
-                            p.speed_mult, player=p))
-                self._pickup_for_player(p)
-                return
         # 自动作战（AI 队友）
         best = None
         best_d = 1e9

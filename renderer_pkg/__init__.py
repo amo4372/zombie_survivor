@@ -8,12 +8,11 @@ from .draw_ui import UiMixin
 from .draw_play import PlayMixin
 from .draw_dev import DevMixin
 from .draw_replay import ReplayRenderMixin
-from .draw_net_lobby import NetLobbyUiMixin
 from .draw_map_editor import MapEditorUiMixin
 
 
 class Renderer(RenderCore, ReplayRenderMixin, UiMixin, PlayMixin, DevMixin,
-               NetLobbyUiMixin, MapEditorUiMixin):
+               MapEditorUiMixin):
     """完整渲染器（聚合拆分后的全部绘制 Mixin，逻辑与拆分前等价）"""
     pass
 

@@ -717,7 +717,7 @@ class ShopMixin:
             self.equip_p2_phase = False
         self.start_game()
 
-    # ===== 网络联机 =====
+    # ===== 局外角色加成 =====
     def _apply_character_bonuses(self):
         """应用局外角色特殊能力加成（按角色等级缩放）"""
         if not self.selected_character:

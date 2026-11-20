@@ -101,30 +101,6 @@ class RenderCore:
             self._draw_bot_config()
         elif state == GameState.MAP_EDITOR:
             self._draw_map_editor()
-        elif state == GameState.NET_MULTIPLAYER:
-            self._draw_net_lobby()
-        elif state == GameState.NET_LOBBY:
-            self._draw_net_lobby()
-        elif state == GameState.NET_HOST_SETUP:
-            self._draw_net_host_setup()
-        elif state == GameState.NET_JOIN_SETUP:
-            self._draw_net_join_setup()
-        elif state == GameState.NET_SETUP:
-            self._draw_net_setup()
-        elif state == GameState.NET_RESULT:
-            self._draw_net_result()
-        elif state == GameState.NET_WAIT:
-            self._draw_net_wait()
-        elif state == GameState.NET_CLIENT_PLAY:
-            self._draw_net_client()
-            # v2.5.8：网络客户端同样支持开发者面板（本地 P1）
-            if getattr(self.game, 'dev_mode', False):
-                try:
-                    _any_open = any(st.panel_open for st in (getattr(self.game, 'dev_states', None) or {}).values())
-                except Exception:
-                    _any_open = False
-                if _any_open:
-                    self._draw_dev_panel()
         elif state in (GameState.MAP_SELECT, GameState.WEAPON_SELECT_P1,
                        GameState.CHARACTER_SELECT_P1,
                        GameState.WEAPON_SELECT_P2,

@@ -469,7 +469,7 @@ class GameCore:
         self.mouse_angle = 0.0
 
         # ===== 多人模式（v2.0）=====
-        self.multiplayer_mode = None      # None / "same_screen" / "network"
+        self.multiplayer_mode = None      # None / "same_screen"
         self.player2 = None               # 双人模式的第二位玩家
         self.camera2 = None               # 双人模式第二摄像机
         self.equip_p2_phase = False       # 多人模式装备选择阶段（False=P1 / True=P2）
@@ -479,26 +479,6 @@ class GameCore:
         self.selected_weapon_p2 = None
         self.selected_char_p2 = None
         self.selected_weapon_p2_level = 1
-        self.net_role = None              # None / "host" / "client"
-        # v2.9.11 局域网联机
-        self.net_room_name = "幸存者房间"
-        self.net_nickname = "玩家"
-        self.net_show_rooms = False
-        self.net_room_focused = False
-        self.net_nick_focused = False
-        self.net_discovery = None
-        self.net_beacon = None
-        self.net_last_error = None
-        self.net_host = None
-        self.net_client = None
-        self.net_port = 26000
-        # v2.2.13 网络配置自定义：端口（文本输入）/最大人数/玩法/模式/地图
-        self.net_port_input = "26000"
-        self.net_port_focused = False
-        # v2.9.19：默认留空，避免"同 WiFi 两台设备却连了自己"
-        self.net_ip_input = ""
-        self.net_ip_focused = False
-        self.net_started = False
         # 同屏双人 P2 键控输入状态
         self.p2_input = {"mx": 0.0, "my": 0.0, "shoot": False, "skill": False,
                          "throw": False, "sprint": False}
@@ -911,7 +891,7 @@ class GameCore:
                 continue
 
     def is_multiplayer_active(self):
-        """是否处于双人/联机游玩中"""
+        """是否处于同屏多人游玩中"""
         return bool(self.player2 is not None)
 
     # ---------- v2.9.11 升级会话：P1/P2 完全独立 ----------
@@ -1025,19 +1005,6 @@ class GameCore:
             return True
         return False
 
-    def is_network_client_render(self):
-        """是否为网络客户端游玩渲染（快照渲染，无本地世界）"""
-        return self.multiplayer_mode == "network" and self.net_role == "client" and self.state == GameState.NET_CLIENT_PLAY
-
-    def _setup_client_controls(self):
-        """网络客户端输入控件（全屏布局，单人同款）"""
-        from ui import VirtualJoystick, AimButton, TouchButton
-        self.client_joystick = VirtualJoystick(120, BASE_HEIGHT - 120, 70)
-        self.client_aim = AimButton(780, BASE_HEIGHT - 145, 62)
-        self.client_shoot = TouchButton(780, BASE_HEIGHT - 145, 62, "射击", RED)
-        self.client_skill = TouchButton(580, BASE_HEIGHT - 320, 42, "技能", BLUE)
-        self._client_finger_ids = set()
-
     def _get_p2_local_input(self):
         """同屏双人：P2 键控输入（方向键+J/K/L）"""
         keys = pygame.key.get_pressed()
@@ -1073,7 +1040,7 @@ class GameCore:
         except Exception:
             pass
         # v2.5.10：非多人模式时强制关闭 PvP 开关（防止上局 PvP 残留导致单人/非PvP模式出现毒圈/阵营）
-        if self.multiplayer_mode not in ("same_screen", "network"):
+        if self.multiplayer_mode != "same_screen":
             self.config.pvp_enabled = False
         # v2.2.11 逐玩家房间配置：先把 per-player 武器/角色写入选择槽
         # （必须在 selected_character/玩家创建之前生效）
@@ -1193,7 +1160,7 @@ class GameCore:
             if _psp and not (getattr(self.config, 'pvp_enabled', False) and getattr(self, 'pvp_zone', None)):
                 self.player.x, self.player.y = float(_psp[0][0]), float(_psp[0][1])
             # 双人模式：P1 实际武器/角色来自第一轮选择
-            if self.multiplayer_mode in ("same_screen", "network"):
+            if self.multiplayer_mode == "same_screen":
                 if getattr(self, 'selected_weapon_p1', None):
                     self.player = Player(_sx, _sy, start_weapon=self.selected_weapon_p1,
                                          start_weapon_level=self.selected_weapon_level)
@@ -1242,7 +1209,7 @@ class GameCore:
             self.camera = Camera(BASE_WIDTH, BASE_HEIGHT)
             self.camera.shake_enabled = self.config.screen_shake
             # ===== 多人模式：创建第二位玩家 + 第二摄像机 =====
-            if self.multiplayer_mode in ("same_screen", "network"):
+            if self.multiplayer_mode == "same_screen":
                 # v2.2.11 逐玩家房间配置：先把 per-player 武器/角色写入选择槽（创建玩家前生效）
                 try:
                     _rpcs = getattr(self, 'room_player_cfgs', None) or {}
@@ -1280,27 +1247,11 @@ class GameCore:
                     self._dev_sync_states()
                 except Exception:
                     pass
-                # v2.2.7：网络联机支持最多 4 人——3/4 号客户端由主机补位实体
-                # （无对应客户端时保持 None；有客户端连接时创建 AI 补位，受网络输入驱动）
+                # v2.2.7：同屏 N 人补位（P3/P4）
                 for _i in (3, 4):
                     setattr(self, f"player{_i}", None)
                     setattr(self, f"camera{_i}", None)
-                if self.multiplayer_mode == "network" and self.net_host is not None:
-                    try:
-                        _cc = self.net_host.client_count
-                        # v2.2.9 出生点分散：P3 上侧、P4 左侧错开（按序号四向分布）
-                        for _i, _off in ((3, (0, 140)), (4, (-140, 0))):
-                            if _cc >= _i - 1:
-                                _pw = getattr(self, f'selected_weapon_p{_i}', None) or self.selected_weapon
-                                setattr(self, f"player{_i}", Player(
-                                    self.player.x + _off[0], self.player.y + _off[1], start_weapon=_pw,
-                                    start_weapon_level=1))
-                                _cam = Camera(BASE_WIDTH // 2, BASE_HEIGHT)
-                                _cam.shake_enabled = self.config.screen_shake
-                                setattr(self, f"camera{_i}", _cam)
-                    except Exception as _e:
-                        logger.warning(f"创建网络补位玩家失败: {_e}")
-                elif self.multiplayer_mode == "same_screen":
+                if self.multiplayer_mode == "same_screen":
                     # v2.2.7 同屏 N 人：coop_player_count(2-4)，3/4 号位 AI 队友补位
                     _ccnt = int(getattr(self, 'coop_player_count', 2) or 2)
                     # v2.2.9 出生点四向分散：P1(0,0) P2(右) P3(上) P4(左)
@@ -1769,18 +1720,30 @@ class GameCore:
             return None
 
     # ==================== v2.5.2 钩爪玩家锁定辅助 ====================
-    def _pvp_dmg_to_player(self, base, owner_proj=None):
-        """v2.5.5 PvP 玩家互伤：默认大幅削减（×0.2 防止死太快）；
-        单发特高伤武器（AWM/轨道炮，pvp_no_atten）不作衰减反而小幅加强（×1.2）"""
+    def _pvp_dmg_to_player(self, base, owner_proj=None, kind=None):
+        """v2.9.22：PvP 对玩家伤害按**来源独立**结算。
+
+        kind: gear=防爆套装肘击/盾冲, vehicle=载具撞击,
+              sniper=精确/狙击武器, None=通用武器。
+        damage_vs_player 仍是策划设定的权威值（AWM 等），优先于一切倍率。
+        """
         try:
-            # v2.9.13：damage_vs_player 是策划设定的 PvP 权威值，优先于通用系数
             _dv = getattr(owner_proj, 'damage_vs_player', None)
             if _dv is not None:
-                return int(_dv)
-            _no = bool(getattr(owner_proj, 'pvp_no_atten', False))
-            return int(base * (1.2 if _no else 0.2))
+                return int(round(_dv))
+            # round 而不是 int：1.15 × 100 = 114.999...，直接截断会莫名少 1 点
+            if kind == 'gear':
+                return int(round(base * PVP_GEAR_MULT))
+            if kind == 'vehicle':
+                return int(round(base * PVP_VEHICLE_MULT))
+            if bool(getattr(owner_proj, 'pvp_no_atten', False)):
+                return int(round(base * PVP_NO_ATTEN_MULT))
+            _wt = str(getattr(owner_proj, 'weapon_type', '') or '').upper()
+            _is_sniper = (kind == 'sniper' or getattr(owner_proj, 'is_sniper', False)
+                          or any(k in _wt for k in ('AWP', 'SNIPER', 'RAILGUN')))
+            return int(round(base * (PVP_SNIPER_MULT if _is_sniper else PVP_GENERAL_MULT)))
         except Exception:
-            return int(base * 0.2)
+            return int(round(base * PVP_GENERAL_MULT))
 
     def _downed_teammates_of(self, player):
         """同阵营倒地玩家（可被钩爪勾取救援，优先级最高）"""
@@ -2275,27 +2238,6 @@ class GameCore:
             except Exception:
                 self.state = GameState.MENU
 
-        # v2.9.21 **核心修复**：此前 _net_send_snapshot() 只写在 PLAYING 分支里，
-        # 房主一切到 EQUIP_SELECT / 等待页 / 结算页就再也不发快照 → 客户端永远
-        # 收不到 started，卡在"连接中"，P2 完全不显示游戏画面。
-        # 现在与 state 解耦：只要房主会话存在就按自身节流广播（内部 20Hz）。
-        if (getattr(self, 'multiplayer_mode', None) == "network"
-                and getattr(self, 'net_role', None) == "host"
-                and getattr(self, 'net_started', False) and getattr(self, 'net_host', None)):
-            try:
-                self._net_send_snapshot()
-            except Exception:
-                pass
-        # v2.9.21 客户端 phase 同步：任何状态下都能被房主推进到
-        # 装备选择 / 开局 / 结算，不再只在 NET_WAIT 的 draw 里等 started。
-        if (getattr(self, 'multiplayer_mode', None) == "network"
-                and getattr(self, 'net_role', None) == "client"
-                and getattr(self, 'net_client', None)):
-            try:
-                self._net_client_sync_phase()
-            except Exception:
-                pass
-
         # 时间减缓效果
         if hasattr(self, 'time_slow_active') and self.time_slow_active:
             self.time_slow_timer -= dt
@@ -2307,12 +2249,6 @@ class GameCore:
         if self.state == GameState.PLAYING:
             # v2.2.5：决策树 AI 无批处理需求（即时 decide），无模型加载
             self._update_playing(dt)
-            # v2.2.13 主机驱动客户端玩家实体（移动/射击/技能）
-            if self.multiplayer_mode == "network" and self.net_role == "host" and self.net_started:
-                try:
-                    self._update_net_host(dt)
-                except Exception:
-                    pass
             # 开发者调试面板（v2.5.8：任一玩家面板打开即处理，各自独立）
             if self.dev_mode:
                 try:
@@ -2321,16 +2257,7 @@ class GameCore:
                     _dev_any = self.dev_panel_open
                 if _dev_any:
                     self._update_dev_panel(pygame.mouse.get_pos(), pygame.mouse.get_pressed(), self.touch_events, self.scale)
-        elif self.state == GameState.NET_CLIENT_PLAY:
-            self._update_net_client(dt)
         elif self.state == GameState.DIALOGUE:
-            # v2.2.7：主机在开场/Boss 对话期间也广播快照——
-            # 否则客户端永远收不到 started 快照，卡在"等待主机开始游戏"
-            if self.multiplayer_mode == "network" and self.net_role == "host" and self.net_started:
-                try:
-                    self._net_send_snapshot()
-                except Exception:
-                    pass
             # v2.2.6 兜底：对话对象缺失或已非活跃但状态仍卡在 DIALOGUE → 自动恢复 PLAYING，
             # 防止"整个游戏卡住、点关闭无反应"（异常残留导致输入分支被跳过）
             if self.dialogue is None or not getattr(self.dialogue, "active", False):

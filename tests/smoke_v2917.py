@@ -16,15 +16,6 @@ pygame.init(); _S = pygame.display.set_mode((1280, 720))
 _F = pygame.font.Font(None, 18)
 from config import GameState, ControlMode, GameMode
 
-print("[A] 复制：无 pygame.scrap 时静默降级")
-from renderer_pkg.draw_ui import _zs_copy_text
-_buf = io.StringIO()
-with contextlib.redirect_stderr(_buf):
-    _ok = _zs_copy_text("192.168.1.5:26000")
-check(_ok is True, "复制返回成功（降级到文件/外部命令）")
-check("RuntimeWarning" not in _buf.getvalue(), "不再产生 RuntimeWarning")
-check(os.path.exists("clipboard.txt") or _ok, "降级产物存在")
-
 print("[B] 钩爪：锁定圈重置 / 倒地队友 / P2 自动锁定")
 from zombie_pkg import Game
 from entities_pkg.gear import RiotGear
@@ -192,12 +183,12 @@ try:
 except Exception as ex:
     check(False, "双人跑帧异常 %r" % ex)
 try:
-    _gg = Game(); _gg.state = GameState.NET_MULTIPLAYER
+    _gg = Game(); _gg.state = GameState.MULTI_ROOM_CONFIG
     _gg.touch_events = []
     _gg.renderer.render()
-    check(True, "网络联机页渲染无异常")
+    check(True, "同屏房间页渲染无异常")
 except Exception as ex:
-    check(False, "网络页异常 %r" % ex)
+    check(False, "房间页异常 %r" % ex)
 
 print("\n===== v2.9.17 测试: PASS=%d FAIL=%d =====" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)

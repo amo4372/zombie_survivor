@@ -333,7 +333,13 @@ class Vehicle:
                     _df = abs((_a - facing + 180) % 360 - 180)
                     if _df > 80.0:
                         continue
-                _act = self.ram_damage * self.damage_mult
+                # v2.9.22：载具撞击敌方玩家走独立倍率（不混用通用 PvP 衰减）
+                try:
+                    from config import PVP_VEHICLE_MULT
+                    _vmult = float(PVP_VEHICLE_MULT)
+                except Exception:
+                    _vmult = 1.15
+                _act = self.ram_damage * self.damage_mult * _vmult
                 # 关键：damage_type 用 melee、source 用 player，
                 # 并保证 attack_x/attack_y 传入以便正确判定盾牌格挡方向
                 try:

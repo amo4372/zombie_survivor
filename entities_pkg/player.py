@@ -15,7 +15,7 @@ from buff import BuffManager, BuffType
 
 class Player:
     def __init__(self, x, y, start_weapon=WeaponType.PISTOL, start_weapon_level=1):
-        # v2.1.3：防御 None 武器（存档/联机同步异常时兜底手枪，避免 weapon_type 为 None 导致崩溃）
+        # v2.1.3：防御 None 武器（异常存档时兜底手枪，避免 weapon_type 为 None 导致崩溃）
         if start_weapon is None:
             start_weapon = WeaponType.PISTOL
         self.x = x

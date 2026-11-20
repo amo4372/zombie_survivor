@@ -18,10 +18,6 @@ import socket
 
 from config import *
 
-# v2.9.21：所有需要系统输入法的联机页面（创建/加入/各自装备页）
-_NET_INPUT_STATES = frozenset((
-    GameState.NET_MULTIPLAYER, GameState.NET_LOBBY,
-    GameState.NET_HOST_SETUP, GameState.NET_JOIN_SETUP, GameState.NET_SETUP))
 from assets import AssetManager, SOUND_MAP, MUSIC_MAP, MAP_MUSIC_MAP
 from records import GameRecords, GameSession
 from codex import MONSTER_CODEX, WEAPON_CODEX, MONSTER_CATEGORIES, WEAPON_CATEGORIES, codex_unlock_manager
@@ -830,37 +826,6 @@ class InputMixin:
                 return True
         return False
 
-    def _handle_net_ip_keyboard(self, events):
-        """网络联机界面 IP/端口输入框：聚焦时接受系统输入法输入（v2.2.13 加端口）"""
-        for ev in events:
-            if ev.type == pygame.TEXTINPUT:
-                if self.net_port_focused:
-                    if len(self.net_port_input) < 6 and ev.text.isdigit():
-                        self.net_port_input += ev.text
-                elif self.net_ip_focused and len(self.net_ip_input) < 30:
-                    self.net_ip_input += ev.text
-                # 房间名 / 昵称由 _handle_dev_keys 处理，绝不误写进 IP
-            elif ev.type == pygame.KEYDOWN:
-                if self.net_port_focused:
-                    if ev.key == pygame.K_RETURN:
-                        self.net_port_focused = False
-                        self.stop_text_input()
-                    elif ev.key == pygame.K_BACKSPACE:
-                        self.net_port_input = self.net_port_input[:-1]
-                    elif ev.key == pygame.K_ESCAPE:
-                        self.net_port_focused = False
-                        self.stop_text_input()
-                    continue
-                if ev.key == pygame.K_RETURN:
-                    self.net_ip_focused = False
-                    self.stop_text_input()
-                    self._net_join()
-                elif ev.key == pygame.K_BACKSPACE:
-                    self.net_ip_input = self.net_ip_input[:-1]
-                elif ev.key == pygame.K_ESCAPE:
-                    self.net_ip_focused = False
-                    self.stop_text_input()
-
     def _handle_dev_keys(self, events):
         """处理开发者密码输入与局内调试面板开关（键盘）"""
         # v2.2.11 同屏多人房间配置：逐玩家名字输入（SDL_IME 系统输入法）
@@ -880,37 +845,6 @@ class InputMixin:
                             self.stop_text_input()
             except Exception:
                 pass
-            return
-        # v2.9.11：房间名 / 昵称 输入框（系统输入法，触控可用）
-        if self.state in _NET_INPUT_STATES and (
-                getattr(self, 'net_room_focused', False)
-                or getattr(self, 'net_nick_focused', False)
-                or getattr(self, 'net_setup_name_focused', False)):
-            if getattr(self, 'net_setup_name_focused', False):
-                _key, _lim = 'net_my_name', 12
-            else:
-                _key = 'net_room_name' if self.net_room_focused else 'net_nickname'
-                _lim = 16 if self.net_room_focused else 12
-            for ev in events:
-                if ev.type == pygame.TEXTINPUT:
-                    _cur = str(getattr(self, _key, '') or '')
-                    if len(_cur) < _lim:
-                        setattr(self, _key, _cur + ev.text)
-                elif ev.type == pygame.KEYDOWN:
-                    if ev.key == pygame.K_BACKSPACE:
-                        setattr(self, _key, str(getattr(self, _key, '') or '')[:-1])
-                    elif ev.key in (pygame.K_RETURN, pygame.K_ESCAPE,
-                                    pygame.K_KP_ENTER, pygame.K_TAB):
-                        self.net_room_focused = False
-                        self.net_nick_focused = False
-                        self.net_setup_name_focused = False
-                        self.stop_text_input()
-            return
-        # 网络联机 IP 输入框：聚焦时优先接受系统输入法输入
-        if self.state in _NET_INPUT_STATES and (
-                getattr(self, 'net_ip_focused', False)
-                or getattr(self, 'net_port_focused', False)):
-            self._handle_net_ip_keyboard(events)
             return
         if self.dev_input_active:
             for ev in events:

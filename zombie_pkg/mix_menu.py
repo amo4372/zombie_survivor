@@ -293,16 +293,9 @@ class MenuMixin:
             Button(cx, 330, 220, 55, "多人游戏", color=CYAN),
             Button(cx, 420, 200, 45, "返回", color=RED),
         ]
-        # 多人游戏：同屏双人 / 网络联机
+        # 多人游戏：同屏双人
         self.multiplayer_select_buttons = [
             Button(cx, 240, 240, 55, "同屏双人", color=GOLD),
-            Button(cx, 320, 240, 55, "网络联机", color=BLUE),
-            Button(cx, 420, 200, 45, "返回", color=RED),
-        ]
-        # 网络联机：创建房间 / 加入房间
-        self.net_mp_buttons = [
-            Button(cx, 240, 240, 55, "创建房间(主机)", color=GREEN),
-            Button(cx, 320, 240, 55, "加入房间(客户端)", color=GOLD),
             Button(cx, 420, 200, 45, "返回", color=RED),
         ]
         # 剧情资料库相关

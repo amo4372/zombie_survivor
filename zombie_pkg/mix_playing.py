@@ -620,7 +620,9 @@ class PlayingMixin:
                 _d = ((_p.x - _z["x"]) ** 2 + (_p.y - _z["y"]) ** 2) ** 0.5
                 if _d > float(_z.get("radius", 96.0)):
                     continue
-                # 0.9s 节流：否则每帧 apply 会瞬间吃满免疫阈值
+                # v2.9.22：0.9s 节流 + 长持续（3.2s > 节流），保证区域内
+                # 稳定冻结而不是"冻一下马上解冻"。免疫由 EntityStatus 按
+                # 满层后的覆盖次数触发，免疫期间不再刷新但保留现有 debuff。
                 _last = float(_applied.get(id(_p), -99.0))
                 if _z["timer"] - _last < 0.9:
                     continue
@@ -633,17 +635,17 @@ class PlayingMixin:
                     except Exception:
                         _st = None
                 if _st is not None:
-                    _r = _st.apply('freeze', duration=1.3, bridge=False)
-                    if _r is None:
-                        # 已获得冰冻免疫 buff：给一条可见反馈
+                    if _st.is_immune('freeze'):
+                        # 免疫窗口：不清除当前冰冻，只给一条可见反馈
                         try:
                             self.floating_texts.append(FloatingText(
                                 _p.x, _p.y - 52, "冰冻免疫", color=(185, 150, 255), lifetime=0.9))
                         except Exception:
                             pass
                         continue
+                    _st.apply('freeze', duration=3.2, bridge=False)
                 # 兼容旧链路（移速 / 冰块覆盖）
-                _p.frozen_timer = max(float(getattr(_p, 'frozen_timer', 0) or 0), 1.3)
+                _p.frozen_timer = max(float(getattr(_p, 'frozen_timer', 0) or 0), 3.2)
         self.frost_zones = _zs
 
     def _update_playing(self, dt):
@@ -1485,7 +1487,7 @@ class PlayingMixin:
                 if _projs:
                     self.assets.play_sound_random(["shoot_pistol", "shoot_smg"])
         elif (auto_shoot or _fire_angle is not None) and self.player.can_act() and not self.player.riot_gear.equipped and self.riot_anim_state != "equipping":
-            weapon = None  # 防御：weapon_type 为 None（异常存档/联机同步兜底）
+            weapon = None  # 防御：weapon_type 为 None（异常存档兜底）
             if _veh is None or not _veh.alive:
                 weapon = self.player.get_current_weapon()
             # v2.5.6 蓄力武器：按住期间抑制开火（仅在松开瞬间开火一次）
@@ -1498,7 +1500,7 @@ class PlayingMixin:
                     pass
             if weapon is not None and getattr(weapon, "hold_charge", False) and _charge_blocked:
                 pass  # 蓄力中 → 本帧不开火（预瞄线由 draw 渲染）
-            # v2.1.3：防御 weapon/weapon_type 为 None（异常存档/联机同步兜底，不再崩溃）
+            # v2.1.3：防御 weapon/weapon_type 为 None（异常存档兜底，不再崩溃）
             elif weapon is not None and getattr(weapon, "weapon_type", None) is not None and weapon.can_fire():
                 # 过热倾泻buff：无限弹药
                 if getattr(self.player, 'overdrive_timer', 0) > 0 and hasattr(weapon, 'current_ammo') and weapon.current_ammo != "∞":
@@ -1629,7 +1631,7 @@ class PlayingMixin:
         except Exception:
             pass
         # 生成敌人 - 尸潮期间大量刷新，非尸潮期间少量刷新
-        # 双人/联机：怪物按玩家人数调整难度（上限×1.8 + 额外刷新频率）
+        # 同屏多人：怪物按玩家人数调整难度（上限×1.8 + 额外刷新频率）
         spawn_type = self.horde_manager.should_spawn() if not _spawn_disabled else None
         mp_mult = 1.8 if self.is_multiplayer_active() else 1.0
         max_enemies = 80 if self.horde_manager.is_horde_active() else 25
@@ -1724,7 +1726,7 @@ class PlayingMixin:
                     f"【{scale_name}】", color=scale_color, lifetime=3.0
                 ))
 
-        # 双人/联机：额外刷新频率（难度随玩家数调整）
+        # 同屏多人：额外刷新频率（难度随玩家数调整）
         if self.is_multiplayer_active() and not _spawn_disabled:
             self._mp_spawn_timer = getattr(self, '_mp_spawn_timer', 0) + dt
             if self._mp_spawn_timer >= 0.35 and len(self.enemies) < max_enemies:
@@ -3030,7 +3032,7 @@ class PlayingMixin:
             # v2.1.3：P2 升级选卡时暂停 P2 游戏进程（怪物已脱锁，选卡完成后恢复）
             if not (self.player2 is not None and getattr(self.player2, 'upgrade_paused', False)):
                 self._update_player2(dt)
-        # v2.2.7：3/4 号玩家（网络联机补位/AI 队友）更新
+        # v2.2.7：3/4 号玩家（同屏补位 / AI 队友）更新
         for _i in (3, 4):
             _pn = getattr(self, f"player{_i}", None)
             _cam = getattr(self, f"camera{_i}", None)
@@ -3042,7 +3044,7 @@ class PlayingMixin:
                     pass
 
         if self.is_multiplayer_active():
-            # 双人/联机：救援系统——全部倒地才游戏结束
+            # 同屏多人：救援系统——全部倒地才游戏结束
             # v2.8.0：不再立刻结算，先进死亡反应时间（慢放+镜头），给玩家反应余地
             # v2.8.8：合作模式下若仍有队友存活，则**不结算**，转为观战
             if self._update_rescue(dt):

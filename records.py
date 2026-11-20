@@ -324,7 +324,7 @@ class GameRecords:
                 "mp_rescue_10": {"unlocked": False, "desc": "累计救援队友10次", "date": None, "group":"多人", "hidden":False, "coef_threshold": 0,
                                  "detail": "在多人模式中累计将倒地队友救起10次。救援会被怪物打断，先清场再施救是铁律。"},
                 "mp_10_games": {"unlocked": False, "desc": "累计游玩10局多人模式", "date": None, "group":"多人", "hidden":False, "coef_threshold": 0,
-                                "detail": "累计参与10局多人模式（同屏或联机均可）。每局都会计入统计。"},
+                                "detail": "累计参与10局多人模式（同屏多人）。每局都会计入统计。"},
                 "mp_vehicle": {"unlocked": False, "desc": "多人模式乘坐队友载具", "date": None, "group":"多人", "hidden":False, "coef_threshold": 0,
                                "detail": "靠近同阵营队友召唤的大运载具，按下技能按钮上车成为乘客。在载具上你仍可射击与使用技能。"},
             },

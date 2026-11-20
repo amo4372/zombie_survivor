@@ -399,7 +399,7 @@ class PlayMixin:
             pygame.draw.rect(self.screen, _col, (bx, _ty2, int(bar_w * _pct2 / 100), int(6 * scale)))
             pygame.draw.rect(self.screen, (255, 255, 255), (bx, _ty2, bar_w, int(6 * scale)), 1)
         # ===== 触控控件（仅触控模式） =====
-        if g.config.control_mode == ControlMode.TOUCH and not g.is_network_client_render():
+        if g.config.control_mode == ControlMode.TOUCH:
             if label == "P1":
                 self._draw_touch_controls_split(g, left=True)
             else:
@@ -1096,7 +1096,7 @@ class PlayMixin:
         _bad = False
         # v2.9.4：None 混入会直接崩整帧（AttributeError: 'NoneType' has no
         # attribute 'draw'）。来源包括 Mod API spawn_damage_number 导入失败、
-        # 以及部分旧存档/联机同步兜底。这里统一过滤并就地清理。
+        # 以及部分旧存档兜底。这里统一过滤并就地清理。
         _dn_list = getattr(self.game, 'damage_numbers', None) or []
         if any(_d is None for _d in _dn_list):
             self.game.damage_numbers = [_d for _d in _dn_list if _d is not None]

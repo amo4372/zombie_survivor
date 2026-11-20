@@ -1232,7 +1232,11 @@ class SkillsMixin:
                     # v2.9.13：PvP 肘击定位从"爆发伤害"改为"控制开团"。
                     # 原 160×1.6=256（再吃伤害乘区），一肘接近秒人；
                     # 现在约 35 点，换来更长眩晕 + 更强击退 + 短缴械。
-                    _dmg = rg.charge_damage * 0.22 * player.damage_mult
+                    # v2.9.22：防爆套装对玩家伤害单独计算，不再混用通用 ×0.2。
+                    # 基础系数 0.22 → 0.45，再乘 PVP_GEAR_MULT（控制定位不变）。
+                    _dmg = self._pvp_dmg_to_player(
+                        rg.charge_damage * 0.45 * player.damage_mult,
+                        None, kind='gear')
                     try:
                         _dmg *= player.buff_manager.get_damage_mult()
                     except Exception:
@@ -1357,6 +1361,9 @@ class SkillsMixin:
             hit_any = True
             if not enemy.alive:
                 self._on_enemy_death(enemy)
+            # v2.9.22：无畏冲锋撞到 Boss 立即退出冲锋状态（Boss 不再被一路推着走）
+            if fearless and _is_boss:
+                rg.charge_timer = min(rg.charge_timer, 0.0)
         # v2.7.0 无畏冲锋：撞到敌对阵营玩家 → 强眩晕 + 直接扣除 50% 最大生命
         if fearless and getattr(self.config, 'pvp_enabled', False):
             for _pp in self._all_players():
@@ -1386,6 +1393,8 @@ class SkillsMixin:
                     # 交由既有救援/倒地系统接管（同屏双人会自动判定倒地）
                     _pp.alive = False
                 hit_any = True
+                # v2.9.22：无畏冲锋撞到敌方玩家后退出冲锋状态
+                rg.charge_timer = min(rg.charge_timer, 0.0)
         if hit_any:
             self.camera.shake(8, 0.3)
         # 冲撞拖尾粒子
