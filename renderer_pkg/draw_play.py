@@ -509,9 +509,6 @@ class PlayMixin:
                     scale = _eff
         except Exception:
             pass
-        # v2.9.23：世界层缩放（zoom 后）单独留存，给技能预瞄用；
-        # HUD 仍会在下面还原成 _ui_scale。
-        _world_scale = scale
 
         # 绘制世界
         # v2.5.0 地图边界警示：玩家接近有限地图边缘时屏幕红框+提示（摄像机已 clamp）
@@ -1298,41 +1295,20 @@ class PlayMixin:
         _owner = getattr(self, '_view_owner', None)
         _is_p2 = (_owner is not None and _owner is getattr(_g, 'player2', None)) \
             or (aim_owner == "P2" and _owner is None)
-
-        # v2.9.23：把「当帧」摄像机（已含 shake + zoom 重算的世界坐标）、
-        # 视口偏移、玩家世界坐标注入 caster，再按世界层缩放绘制。
-        # 旧版 caster.camera_x 是上一帧的 camera.x，玩家一移动预瞄线就脱体。
-        def _sync_aim_caster(_c, _p):
-            if _c is None or _p is None:
-                return
-            try:
-                _c.camera_x = float(cam_x)
-                _c.camera_y = float(cam_y)
-                _c.player_x = float(getattr(_p, "x", 0.0) or 0.0)
-                _c.player_y = float(getattr(_p, "y", 0.0) or 0.0)
-                _c.aim_viewport_x = float(viewport_x or 0.0)
-                _c.aim_viewport_y = 0.0
-            except Exception:
-                pass
-
         if _is_p2 and _g.p2_controls:
             _sc2 = _g.p2_controls.get("skill_caster")
             if _sc2 is not None and getattr(_sc2, "is_aiming", False):
-                _sync_aim_caster(_sc2, _owner or _g.player2)
-                _sc2._draw_aim_preview(self.screen, _g.p2_selected_skill or SkillType.GRENADE, _world_scale)
+                _sc2._draw_aim_preview(self.screen, _g.p2_selected_skill or SkillType.GRENADE, _g.scale)
             _tc2 = _g.p2_controls.get("throwable_caster")
             if _tc2 is not None and getattr(_tc2, "is_aiming", False):
-                _sync_aim_caster(_tc2, _owner or _g.player2)
-                self._draw_throwable_preview(_tc2, _world_scale)
+                self._draw_throwable_preview(_tc2, _g.scale)
         elif not _is_p2:
             # v2.5.8 确保只有 P1 的预瞄在此绘制（P2 的预瞄由 aim_owner="P2" 视口负责）
             if _g.config.control_mode == ControlMode.KEYBOARD and _g.skill_caster.is_aiming:
-                _sync_aim_caster(_g.skill_caster, player)
-                _g.skill_caster._draw_aim_preview(self.screen, _g.selected_skill, _world_scale)
+                _g.skill_caster._draw_aim_preview(self.screen, _g.selected_skill, _g.scale)
             # ========== 投掷物瞄准预览（键鼠长按Q/触控长按投掷均显示） ==========
             if hasattr(_g, 'throwable_caster') and _g.throwable_caster and _g.throwable_caster.is_aiming:
-                _sync_aim_caster(_g.throwable_caster, player)
-                self._draw_throwable_preview(_g.throwable_caster, _world_scale)
+                self._draw_throwable_preview(_g.throwable_caster, _g.scale)
             
         # =========【v2.0.11 成就/图鉴解锁 toast：徽章式 + 滑入 + 粒子光效】========
         scale = self.game.scale

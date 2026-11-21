@@ -832,7 +832,7 @@ class MultiplayerMixin:
         elif skill_type == SkillType.RAILGUN_ANNIHILATION:
             lv = self._legendary_skill_level(SkillType.RAILGUN_ANNIHILATION, p2)
             width = {1: 40, 2: 40, 3: 55, 4: 70, 5: 85}[lv]
-            # v2.9.23：P2 同样走锁血制帧伤
+            # v2.9.22.1：P2 同样走锁血制帧伤
             proj = Projectile(p2.x, p2.y, math.cos(angle) * 3, math.sin(angle) * 3,
                               1.0, 1200, (140, 200, 245), 15, pierce=99,
                               is_laser=True, laser_width=width,
@@ -941,12 +941,6 @@ class MultiplayerMixin:
                     _a_dist = getattr(caster, 'max_skill_distance', 500) * getattr(caster, 'distance_ratio', 1.0)
                     try:
                         p2._skill_aim_dist = float(_a_dist)
-                        try:
-                            from ui_pkg.skills_ui import AIM_RADIUS_BY_SKILL
-                            p2._skill_aim_radius = float(AIM_RADIUS_BY_SKILL.get(
-                                getattr(self, "p2_selected_skill", None), 140.0))
-                        except Exception:
-                            p2._skill_aim_radius = 140.0
                         try:
                             p2.riot_gear.grapple_max_dist = float(_a_dist)
                         except Exception:
