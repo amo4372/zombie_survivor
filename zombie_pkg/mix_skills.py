@@ -1085,20 +1085,22 @@ class SkillsMixin:
         v2.5.7：支持传入瞄准角（长按预瞄时按预瞄方向释放，而不是固定朝向前方）"""
         lv = self._legendary_skill_level(SkillType.RAILGUN_ANNIHILATION)
         width = {1: 40, 2: 40, 3: 55, 4: 70, 5: 85}[lv]
-        dmg = 300
-        dmg *= (self.player.damage_multiplier *
-                self.player.buff_manager.get_damage_mult() *
-                getattr(self.player, 'damage_mult', 1.0))
         if angle is None:
             angle = math.radians(self.player.facing_angle)
+        # v2.9.23 锁血制：取消 300 瞬发 + 爆炸，改为持续帧伤。
+        # 帧伤较大，但敌方玩家永不致死（至少留 1 HP）；僵尸/Boss 另按 PVE 系数结算。
         proj = Projectile(
             self.player.x, self.player.y,
             math.cos(angle) * 3, math.sin(angle) * 3,
-            dmg, 1200, (140, 200, 245), 15, pierce=99,
-            explosive=True, explosion_radius=90 + 30 * (lv >= 3),
-            is_laser=True, laser_width=width, laser_duration=0.85,
-            laser_angle=angle)   # v2.9.15：不传则 Projectile 默认 0°，射线永远朝右
+            1.0, 1200, (140, 200, 245), 15, pierce=99,
+            is_laser=True, laser_width=width,
+            laser_duration=ANNIHILATION_DURATION,
+            laser_angle=angle)
         proj.owner = getattr(self, "player", None)
+        proj.annihilation = True
+        proj.beam_dps = ANNIHILATION_BEAM_DPS
+        proj.beam_total = ANNIHILATION_BEAM_TOTAL
+        proj.damage_vs_player = ANNIHILATION_PVP_MULT
         self.projectiles.append(proj)
         self.camera.shake(20, 0.7)
         self.particles.spawn(self.player.x, self.player.y, (160, 210, 255), 30, (2, 8), (-8, 8), (0.3, 1.0))
@@ -1242,9 +1244,11 @@ class SkillsMixin:
                     except Exception:
                         pass
                     try:
+                        # v2.9.23：用户要的是「抗性计算系数独立」，不是再堆总倍率
                         _op.take_damage(_dmg, damage_type="melee",
                                         attack_x=player.x, attack_y=player.y,
-                                        source="player")
+                                        source="player",
+                                        resist_scale=SOURCE_RESIST_SCALE.get("gear", 0.25))
                     except Exception:
                         pass
                     try:

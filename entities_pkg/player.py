@@ -576,7 +576,7 @@ class Player:
         except Exception:
             pass
 
-    def take_damage(self, damage, damage_type="melee", from_front=False, attack_x=None, attack_y=None, bypass_dodge=False, source="zombie", incoming_angle=None):
+    def take_damage(self, damage, damage_type="melee", from_front=False, attack_x=None, attack_y=None, bypass_dodge=False, source="zombie", incoming_angle=None, resist_scale=1.0, lock_hp=None):
         # 开发者模式：无敌
         if getattr(self, 'dev_god', False):
             return 0
@@ -601,7 +601,8 @@ class Player:
         # ---- v2.9.12：统一伤害计算（基础伤害 × 倍率 → 状态易伤 → 抗性） ----
         from combat_pkg import coerce_packet, resolve_damage
         _pkt = coerce_packet(damage, damage_type=damage_type,
-                             source=source, attack_x=attack_x, attack_y=attack_y)
+                             source=source, attack_x=attack_x, attack_y=attack_y,
+                             resist_scale=resist_scale)
         _res = resolve_damage(_pkt, self)
         self.last_damage_result = _res
         damage = _res.final
@@ -690,7 +691,18 @@ class Player:
             except Exception:
                 blocked = from_front
         actual_damage = self.riot_gear.take_damage(damage, damage_type, from_front, attack_x, attack_y, blocked=blocked)
-        self.hp -= actual_damage
+        # v2.9.23 湮灭射线锁血制：每次命中至少扣 1 点，精确收敛到下限，
+        # 不受护甲 / 格挡 / buff 把小额帧伤截成 0 的影响，且永不致死。
+        if lock_hp is not None:
+            try:
+                _floor = max(0, int(lock_hp))
+                self.hp = max(_floor, self.hp - max(1.0, float(actual_damage)))
+                self.alive = True
+                self.downed = False
+            except Exception:
+                self.hp -= actual_damage
+        else:
+            self.hp -= actual_damage
         # v2.8.0 死亡详情：登记本次伤害来源（actual_damage 为格挡/护甲后的真实扣血）
         if actual_damage > 0:
             self._log_damage(actual_damage, damage_type, source, attack_x, attack_y)

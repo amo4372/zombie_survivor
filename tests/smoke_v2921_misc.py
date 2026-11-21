@@ -39,34 +39,14 @@ check(GameWorld.segment_hits_rect(0, 0, 100, 0, pygame.Rect(40, -10, 20, 20)),
 check(not GameWorld.segment_hits_rect(0, 0, 100, 0, pygame.Rect(40, 50, 20, 20)),
       '扫掠线段未命中时不误判')
 
-print('=== B. 游戏内地图编辑器 ===')
-check(hasattr(g, '_me_enter') and hasattr(g.renderer, '_draw_map_editor'),
-      '编辑器 Mixin 已装配')
-g.state = GameState.MAP_EDITOR; g._me_enter()
-try:
-    for _ in range(3): g.draw()
-    check(True, '编辑器页面渲染无异常')
-except Exception as e:
-    check(False, '编辑器渲染异常: %s' % e)
-_n0 = len(g.me_obstacles)
-g.me_type = 'wall'
-g._me_place(300, 300)
-check(len(g.me_obstacles) == _n0 + 1, '放置一个障碍物（网格吸附）')
-g._me_place(300, 300)
-check(len(g.me_obstacles) == _n0 + 1, '同格重复放置被跳过（不重叠）')
-g.me_type = 'bush'; g._me_place(420, 300)
-check(len(g.me_obstacles) == _n0 + 2, '放置第二种材质')
-check(g._me_material('bush') == 'foliage' and '不挡子弹' in g._me_rule_text('bush'),
-      '工具栏显示材质与挡弹规则')
-g._me_place(420, 300, erase=True)
-check(len(g.me_obstacles) == _n0 + 1, '擦除生效')
-check(g._me_save('selftest'), '保存到 maps/selftest.json')
-g._me_clear(); check(len(g.me_obstacles) == 0, '清空生效')
-check(g._me_load('selftest') and len(g.me_obstacles) == _n0 + 1,
-      '载入还原（JSON 往返一致）')
-try: os.remove('maps/selftest.json')
-except Exception: pass
-
+print('=== B. 独立地图编辑器（v2.9.23 口径） ===')
+check(not hasattr(g, '_me_enter') and not hasattr(g.renderer, '_draw_map_editor'),
+      '游戏内编辑器 Mixin 已移除')
+check(not hasattr(GameState, 'MAP_EDITOR'), '游戏内无地图编辑状态')
+import os as _os
+check(_os.path.isfile('tools/map_editor_standalone.py'), '独立编辑器工具存在')
+check('FINGERDOWN' in io.open('tools/map_editor_standalone.py', encoding='utf-8').read(),
+      '独立工具支持触控')
 print('=== C. 视野系统 ===')
 from zombie_pkg.vision import VisionSystem
 v = VisionSystem(); g.vision = v

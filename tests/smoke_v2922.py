@@ -75,10 +75,10 @@ check(g._pvp_dmg_to_player(100, None, kind='gear') == 85, '防爆套装独立 ×
 check(g._pvp_dmg_to_player(100, None, kind='vehicle') == 115, '载具独立 ×1.15')
 check(g._pvp_dmg_to_player(100, types.SimpleNamespace(pvp_no_atten=True)) == 120,
       '特高伤武器 ×1.2')
-check(g._pvp_dmg_to_player(999, types.SimpleNamespace(damage_vs_player=110)) == 110,
+check(g._pvp_dmg_to_player(999, types.SimpleNamespace(damage_vs_player=100)) == 100,
       'damage_vs_player 权威值优先')
-check('"damage_vs_player": 110' in src('weapons.py'), 'AWM 对玩家 80 → 110')
-check('DATA_VERSION = 6' in src('gamedata/seed.py'), '数据版本 6，玩家库随更新同步')
+check('"damage_vs_player": 100' in src('weapons.py'), 'AWM 对玩家一枪 100')
+check('DATA_VERSION = 7' in src('gamedata/seed.py'), '数据版本 7，玩家库随更新同步')
 _sk = src('zombie_pkg/mix_skills.py')
 check("kind='gear'" in _sk and '0.45 * player.damage_mult' in _sk,
       '防爆肘击走独立倍率且基础系数上调')

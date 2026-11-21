@@ -815,17 +815,7 @@ class InputMixin:
         return mouse_pos, mouse_pressed
 
     # ================= 开发者测试模式 =================
-    # v2.9.21：F5 打开 / 退出游戏内地图编辑器（PC 端快捷键；触控走主菜单按钮）
-    def _me_f5(self, events):
-        for ev in events:
-            if ev.type == pygame.KEYDOWN and ev.key == pygame.K_F5:
-                if self.state == GameState.MAP_EDITOR:
-                    self.state = GameState.MENU
-                else:
-                    self._me_enter()
-                return True
-        return False
-
+    # v2.9.23：地图编辑器已独立为 tools/map_editor_standalone.py，游戏内无入口
     def _handle_dev_keys(self, events):
         """处理开发者密码输入与局内调试面板开关（键盘）"""
         # v2.2.11 同屏多人房间配置：逐玩家名字输入（SDL_IME 系统输入法）

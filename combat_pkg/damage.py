@@ -208,6 +208,7 @@ class DamagePacket:
     tags: tuple = ()             # "crit" / "skill" / "dot" / "melee" ...
     attack_x: Optional[float] = None
     attack_y: Optional[float] = None
+    resist_scale: float = 1.0      # v2.9.23：来源独立的抗性计算系数
 
     @property
     def raw(self) -> float:
@@ -272,7 +273,12 @@ def resolve_damage(packet: DamagePacket, target) -> DamageResult:
             vuln = float(st.vulnerability(ch) or 0.0)
         except Exception:
             vuln = 0.0
-    mult = rs.multiplier(ch) * (1.0 + max(0.0, vuln))
+    # v2.9.23：防爆肘击 / 载具 / 技能各吃自己的抗性系数，
+    # 不再一律套用目标完整抗性（否则盾与车血厚 + 高抗性 = 完全打不动）。
+    _base_mult = rs.multiplier(ch)
+    _rs = float(getattr(packet, "resist_scale", 1.0) or 1.0)
+    _eff = 1.0 - (1.0 - _base_mult) * _rs
+    mult = _eff * (1.0 + max(0.0, vuln))
     final = max(0.0, raw * mult)
     return DamageResult(raw=raw, final=final, channel=ch, resistance=res,
                         absorbed=max(0.0, raw - raw * rs.multiplier(ch)),

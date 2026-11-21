@@ -14,11 +14,13 @@ from buff import BuffManager, BuffType
 class RiotGear:
     def __init__(self):
         self.equipped = False
-        self.shield_hp = 500
-        self.max_shield_hp = 500
+        # v2.9.23：盾太厚打不动 → 500 → 300
+        self.shield_hp = 300
+        self.max_shield_hp = 300
         self.shield_broken = False
-        self.viewing_window_hp = 400
-        self.max_viewing_window_hp = 400
+        # v2.9.23：观察窗 400 → 220
+        self.viewing_window_hp = 220
+        self.max_viewing_window_hp = 220
         self.facing_angle = 0
         self.stamina = 100
         self.max_stamina = 100

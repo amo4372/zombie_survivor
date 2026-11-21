@@ -660,6 +660,14 @@ class EffectsMixin:
                     enemy.apply_buff(BuffType.STUN, duration=3.0)
                     enemy.take_damage(50)
                     self.damage_numbers.append(DamageNumber(enemy.x, enemy.y, 50, color=CYAN))
+            # v2.9.23：EMP 同样作用于敌方玩家（眩晕 + 伤害）
+            try:
+                self.apply_area_damage(x, y, 180, 50, "magic",
+                                       getattr(self, "player", None),
+                                       players_only=True, scale_by_dist=True,
+                                       stun=3.0)
+            except Exception:
+                pass
             self.floating_texts.append(FloatingText(x, y - 30, "EMP脉冲!", color=CYAN, lifetime=2.0))
 
         elif gtype in ("frag", "frag_fire", "frag_frost", "frag_poison", "frag_nuke"):
@@ -731,6 +739,18 @@ class EffectsMixin:
                     if not enemy.alive:
                         self._on_enemy_death(enemy)
             
+            # v2.9.23：技能手雷此前只遍历 self.enemies → 对敌方玩家完全无效。
+            # 统一走 apply_area_damage（含独立 PvP 倍率与抗性系数）。
+            try:
+                self.apply_area_damage(
+                    x, y, explosion_radius, base_damage, "explosion",
+                    getattr(self, "player", None), players_only=True,
+                    scale_by_dist=True,
+                    status_kind=("burn" if has_fire else ("stun" if has_emp else None)),
+                    status_duration=(5.0 if has_fire else 3.0))
+            except Exception:
+                pass
+
             # 燃烧附魔：创建持续燃烧区域
             if has_fire:
                 if not hasattr(self, 'fire_zones'):

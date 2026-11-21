@@ -97,6 +97,19 @@ class SkillSelector:
         screen.blit(label, (bx - label.get_width() // 2, by - r - label.get_height() - 2))
 
 
+# v2.9.23：技能范围圈半径（动态视野按「完整看到整圈」计算，而非中心点距离）
+try:
+    AIM_RADIUS_BY_SKILL = {
+        SkillType.GRENADE: 150.0, SkillType.AIRSTRIKE: 200.0,
+        SkillType.GRAPPLE_PULL: 200.0, SkillType.FEARLESS_CHARGE: 120.0,
+        SkillType.DASH: 90.0, SkillType.BLACK_HOLE: 180.0,
+        SkillType.FROST_NOVA: 160.0, SkillType.CHAIN_LIGHTNING: 140.0,
+        SkillType.MEDICAL_POD: 110.0, SkillType.RAILGUN_ANNIHILATION: 220.0,
+    }
+except Exception:
+    AIM_RADIUS_BY_SKILL = {}
+
+
 class SkillCaster:
     """技能释放按钮 - 支持长按瞄准+拖拽改变方向和距离"""
     def __init__(self, x, y, radius=55):
@@ -260,8 +273,13 @@ class SkillCaster:
             screen.blit(cd_text, cd_rect)
 
     def _draw_aim_preview(self, screen, skill_type, scale):
-        px = int((self.player_x - self.camera_x) * scale)
-        py = int((self.player_y - self.camera_y) * scale)
+        # v2.9.23：注入的 camera_x/y 已是「当帧 + zoom 重算后」的世界坐标，
+        # 分屏再补视口偏移，预瞄线永远从玩家身上射出（旧版读的是滞后一帧的相机）。
+        _vx = int(getattr(self, "aim_viewport_x", 0.0) or 0.0)
+        _vy = int(getattr(self, "aim_viewport_y", 0.0) or 0.0)
+        self.aim_radius = float(AIM_RADIUS_BY_SKILL.get(skill_type, 140.0))
+        px = int((self.player_x - self.camera_x) * scale) + _vx
+        py = int((self.player_y - self.camera_y) * scale) + _vy
 
         # 使用distance_ratio计算实际距离
         dist = self.max_skill_distance * self.distance_ratio

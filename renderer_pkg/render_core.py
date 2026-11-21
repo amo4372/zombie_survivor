@@ -86,7 +86,6 @@ class RenderCore:
 
         if state == GameState.MENU:
             self._draw_menu()
-            self._draw_map_editor_entry()   # v2.9.21 地图编辑器入口
         elif state == GameState.SETTINGS:
             self._draw_settings()
         elif state == GameState.HUD_EDIT:
@@ -99,8 +98,6 @@ class RenderCore:
             self._draw_multi_room_config()
         elif state == GameState.BOT_CONFIG:
             self._draw_bot_config()
-        elif state == GameState.MAP_EDITOR:
-            self._draw_map_editor()
         elif state in (GameState.MAP_SELECT, GameState.WEAPON_SELECT_P1,
                        GameState.CHARACTER_SELECT_P1,
                        GameState.WEAPON_SELECT_P2,

@@ -100,6 +100,18 @@ class Config:
     MAP_FILE = ""                # .zmap 二进制大地图（空=默认随机地图；如 rl/maps/demo.zmap）
 
     def __init__(self):
+        # v2.9.23：独立地图编辑器导出的 .zmap 可零配置导入
+        # 优先 config.json 的 "map_file"，其次 maps/active.zmap（编辑器「导出为当前地图」）
+        try:
+            import json as _json, os as _os
+            self.MAP_FILE = ""
+            if _os.path.isfile("config.json"):
+                with open("config.json", encoding="utf-8") as _f:
+                    self.MAP_FILE = str((_json.load(_f) or {}).get("map_file", "") or "")
+            if not self.MAP_FILE and _os.path.isfile("maps/active.zmap"):
+                self.MAP_FILE = "maps/active.zmap"
+        except Exception:
+            self.MAP_FILE = ""
         self.control_mode = ControlMode.KEYBOARD
         self.game_mode = GameMode.TIMED
         self.sound_volume = 0.7
@@ -1731,7 +1743,13 @@ class GameCore:
             _dv = getattr(owner_proj, 'damage_vs_player', None)
             if _dv is not None:
                 return int(round(_dv))
+            # v2.9.23：每把武器自己的倍率优先于任何通用分类模板
+            _pm = getattr(owner_proj, 'pvp_mult', None)
+            if _pm is not None:
+                return int(round(base * float(_pm)))
             # round 而不是 int：1.15 × 100 = 114.999...，直接截断会莫名少 1 点
+            if kind == 'skill':
+                return int(round(base * PVP_SKILL_MULT))
             if kind == 'gear':
                 return int(round(base * PVP_GEAR_MULT))
             if kind == 'vehicle':
@@ -2158,7 +2176,8 @@ class GameCore:
         dx = target_x - self.player.x
         dy = target_y - self.player.y
         total_dist = math.hypot(dx, dy)
-        speed = total_dist / 1.1 if total_dist > 0 else 300
+        # v2.9.23：飞行 1.1s → 0.32s（约 3.4 倍速）
+        speed = total_dist / 0.32 if total_dist > 0 else 900
         if total_dist > 0:
             vx = dx / total_dist * speed
             vy = dy / total_dist * speed
@@ -2183,7 +2202,7 @@ class GameCore:
             "effects": g_effects,
             "x": self.player.x, "y": self.player.y,
             "vx": vx, "vy": vy,
-            "timer": 1.1,
+            "timer": 0.32,
             "target_x": target_x, "target_y": target_y,
         })
         self.assets.play_sound("grenade_throw")

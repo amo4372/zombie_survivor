@@ -126,7 +126,7 @@ class Vehicle:
 
         # === 类型属性表（等级1重卡为基础，2坦克、3武直增强）===
         base = {
-            "hp": 900, "speed": 250, "size": 46, "ram_damage": 70,
+            "hp": 540, "speed": 250, "size": 46, "ram_damage": 70,
             "immune_melee": False, "can_shoot": False,
             "mag_size": 0, "mag_left": 0, "reload_time": 0.0,
             "fire_rate": 0.0, "fire_timer": 0.0, "rocket_cd": 0.0,
@@ -134,14 +134,14 @@ class Vehicle:
         }
         if vehicle_type == "tank":
             base.update({
-                "hp": 1800, "speed": 195, "size": 58, "ram_damage": 130,
+                "hp": 1080, "speed": 195, "size": 58, "ram_damage": 130,
                 "can_shoot": True, "mag_size": 4, "mag_left": 4,
                 "reload_time": 2.6, "fire_rate": 0.0, "armor_reduction": 0.35,
                 "collision": 88,   # v2.5.0 坦克碰撞箱最大
             })
         elif vehicle_type == "heli":
             base.update({
-                "hp": 1100, "speed": 340, "size": 48, "ram_damage": 95,
+                "hp": 700, "speed": 340, "size": 48, "ram_damage": 95,
                 "immune_melee": True, "can_shoot": True,
                 "fire_rate": 0.14, "fire_timer": 0.0, "rocket_cd": 0.0,
                 "armor_reduction": 0.15, "collision": 66,   # v2.5.0 武直碰撞箱
@@ -149,8 +149,8 @@ class Vehicle:
         # v2.5.1 三级全为大运：属性按级增强（红→金→银），每级血量/撞击/车身/碰撞箱递增
         if vehicle_type == "truck" and self.level > 1:
             _lv_up = {
-                2: {"hp": 1500, "speed": 265, "ram_damage": 110, "size": 50, "collision": 84},
-                3: {"hp": 2200, "speed": 282, "ram_damage": 160, "size": 55, "collision": 96},
+                2: {"hp": 900, "speed": 265, "ram_damage": 110, "size": 50, "collision": 84},
+                3: {"hp": 1320, "speed": 282, "ram_damage": 160, "size": 55, "collision": 96},
             }.get(self.level, {})
             base.update(_lv_up)
 
@@ -335,17 +335,20 @@ class Vehicle:
                         continue
                 # v2.9.22：载具撞击敌方玩家走独立倍率（不混用通用 PvP 衰减）
                 try:
-                    from config import PVP_VEHICLE_MULT
+                    from config import PVP_VEHICLE_MULT, SOURCE_RESIST_SCALE
                     _vmult = float(PVP_VEHICLE_MULT)
+                    _vrs = float(SOURCE_RESIST_SCALE.get("vehicle", 0.20))
                 except Exception:
                     _vmult = 1.15
+                    _vrs = 0.20
                 _act = self.ram_damage * self.damage_mult * _vmult
                 # 关键：damage_type 用 melee、source 用 player，
                 # 并保证 attack_x/attack_y 传入以便正确判定盾牌格挡方向
                 try:
                     _pp.take_damage(_act, damage_type="melee",
                                     attack_x=self.x, attack_y=self.y,
-                                    source="player")
+                                    source="player",
+                                    resist_scale=_vrs)
                 except Exception:
                     pass
                 _kb = 160

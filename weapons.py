@@ -272,6 +272,27 @@ class Projectile:
                                  max(1, s // 2))
 
 
+# v2.9.23：每把武器自己的 PvP 伤害倍率（不再用「通用 / 狙击 / 特高伤」分类模板）。
+# damage_vs_player 若显式给出（如 AWM=100）仍为最高优先的策划权威值。
+WEAPON_PVP_MULTS = {
+    WeaponType.PISTOL: 0.62, WeaponType.RIFLE: 0.60, WeaponType.SHOTGUN: 0.72,
+    WeaponType.SNIPER: 0.88, WeaponType.MACHINE_GUN: 0.55,
+    WeaponType.ROCKET_LAUNCHER: 0.78, WeaponType.FLAMETHROWER: 0.58,
+    WeaponType.CROSSBOW: 0.80, WeaponType.GRENADE_LAUNCHER: 0.76,
+    WeaponType.PLASMA_RIFLE: 0.70, WeaponType.RAILGUN: 0.92,
+    WeaponType.MINIGUN: 0.52, WeaponType.DOUBLE_BARREL: 0.74,
+    WeaponType.SEMI_AUTO_SNIPER: 0.86, WeaponType.KNIFE: 0.68,
+    WeaponType.BAT: 0.70, WeaponType.CHAINSAW: 0.66, WeaponType.SCYTHE: 0.84,
+    WeaponType.REVOLVER: 0.82, WeaponType.DESERT_EAGLE: 0.85,
+    WeaponType.SMG: 0.56, WeaponType.UMP45: 0.59, WeaponType.P90: 0.57,
+    WeaponType.AK47: 0.63, WeaponType.M4A1: 0.61, WeaponType.SCAR: 0.64,
+    WeaponType.AWP: 1.00, WeaponType.AA12: 0.71, WeaponType.LMG: 0.54,
+    # 三件投掷道具已从武器池移除，保留兜底值防止旧存档读取时 KeyError
+    WeaponType.GRENADE: 0.75, WeaponType.MOLOTOV: 0.60,
+    WeaponType.SMOKE_GRENADE: 0.35,
+}
+
+
 class Weapon:
     def __init__(self, weapon_type, level=1):
         self.weapon_type = weapon_type
@@ -878,7 +899,7 @@ class Weapon:
                 # v2.8.8：AWM 基础伤害 420 → 对僵尸 200 / 对玩家 100
                 # （原值过高且对玩家与僵尸同伤，PvP 里一枪秒人）
                 "name": "AWM", "damage": 200, "fire_rate": 1.1,
-                "damage_vs_player": 110,  # v2.9.22：PvP 由 80 上调到 110
+                "damage_vs_player": 100,  # v2.9.23：AWM 对玩家一枪固定 100
                 # v2.9.14：散布是真的（之前 spread=0、蓄力上限仅 0.06≈±3°，
                 # 肉眼看不出任何偏移）。平射 ±0.20rad(≈11°)，长按起始
                 # ±0.45rad(≈26°) 的大扇形，蓄满收敛到 ±0.02rad。
@@ -936,6 +957,13 @@ class Weapon:
         try:
             from gamedata import db as _gdb
             config = _gdb.weapon(self.weapon_type, fallback=config)
+        except Exception:
+            pass
+        # v2.9.23：数据库权威值之后仍注入本武器专属倍率（非列字段随 extra 同步）
+        try:
+            config = dict(config)
+            config["pvp_mult"] = float(WEAPON_PVP_MULTS.get(
+                self.weapon_type, PVP_GENERAL_MULT))
         except Exception:
             pass
         for k, v in config.items():
@@ -1013,7 +1041,8 @@ class Weapon:
             proj.burn_radius = getattr(self, "burn_radius", 0)
             proj.slow_radius = getattr(self, "slow_radius", 0)
             proj.slow_duration = getattr(self, "slow_duration", 0)
-            proj.owner = player  # v2.2.7 PvPvE 归属
+            proj.owner = player
+            proj.pvp_mult = getattr(self, "pvp_mult", None)  # v2.2.7 PvPvE 归属
             return [proj]
 
         # 消耗弹药
@@ -1082,7 +1111,8 @@ class Weapon:
                 False,
                 bool(getattr(self, "is_scythe", False))
             )
-            proj.owner = player  # v2.2.7 PvPvE 归属
+            proj.owner = player
+            proj.pvp_mult = getattr(self, "pvp_mult", None)  # v2.2.7 PvPvE 归属
             proj.damage_vs_player = getattr(self, "damage_vs_player", None)
             proj.beam_total = int(getattr(self, "beam_total", 0) or 0)
             proj.beam_dps = float(getattr(self, "beam_dps", 0) or 0)

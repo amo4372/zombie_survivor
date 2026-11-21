@@ -363,7 +363,7 @@ class CombatMixin:
             "type": grenade_type,
             "x": self.player.x, "y": self.player.y,
             "vx": vx, "vy": vy,
-            "timer": 1.5,  # 飞行时间
+            "timer": 0.42,  # 飞行时间
             "target_x": target_x, "target_y": target_y,
         })
         self.assets.play_sound("grenade_throw")
@@ -392,7 +392,8 @@ class CombatMixin:
         dy = target_y - self.player.y
         total_dist = math.hypot(dx, dy)
         # 飞行速度根据距离调整，保持飞行时间约1.2秒
-        speed = total_dist / 1.2 if total_dist > 0 else 300
+        # v2.9.23：投掷物飞行 1.2s → 0.42s
+        speed = total_dist / 0.42 if total_dist > 0 else 700
         if total_dist > 0:
             vx = dx / total_dist * speed
             vy = dy / total_dist * speed

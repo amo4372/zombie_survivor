@@ -987,6 +987,12 @@ class PlayingMixin:
                 # v2.9.14：让动态视野真正消费技能瞄准距离（此前只是局部变量）
                 try:
                     self.player._skill_aim_dist = float(_aim_dist)
+                    try:
+                        from ui_pkg.skills_ui import AIM_RADIUS_BY_SKILL
+                        self.player._skill_aim_radius = float(AIM_RADIUS_BY_SKILL.get(
+                            getattr(self, "selected_skill", None), 140.0))
+                    except Exception:
+                        self.player._skill_aim_radius = 140.0
                     # v2.9.20：钩爪也是「大范围技能」，预瞄时同样触发视野拉远
                     try:
                         self.player.riot_gear.grapple_max_dist = float(_aim_dist)
@@ -2572,6 +2578,9 @@ class PlayingMixin:
                         if not _beam_hit(_e.x, _e.y, getattr(_e, "size", 16)):
                             continue
                         _d = min(_tick, _cap - _bt.get(_k, 0))
+                        # v2.9.23：湮灭射线对僵尸 / Boss 单独计算（可致死）
+                        if getattr(proj, "annihilation", False):
+                            _d *= ANNIHILATION_PVE_MULT
                         _e._last_hit_team = getattr(proj.owner, "team_id", 0)
                         _e._last_hit_player = proj.owner
                         _e.take_damage(_d)
@@ -2595,10 +2604,21 @@ class PlayingMixin:
                             # damage_vs_player=1 → 与僵尸完全对等，不吃通用衰减
                             _pd = min(_tick * float(getattr(proj, "damage_vs_player", 1) or 1),
                                       _cap - _bt.get(_k, 0))
+                            # v2.9.23 锁血制：帧伤再大，敌方玩家至少保留 1 滴血
+                            if getattr(proj, "annihilation", False):
+                                _hp = float(getattr(_pp, "hp", 0) or 0)
+                                _pd = max(0.0, min(_pd, _hp - float(ANNIHILATION_LOCK_HP)))
+                                # 玩家 hp 按整数结算，帧伤取整才能精确停在 1 HP
+                                _pd = float(int(_pd))
+                                if _pd <= 0:
+                                    continue
                             _pp.take_damage(_pd, damage_type="ranged",
                                             attack_x=proj.x, attack_y=proj.y,
                                             bypass_dodge=True, source="player",
-                                            incoming_angle=self.incoming_angle_of(proj))
+                                            incoming_angle=self.incoming_angle_of(proj),
+                                            lock_hp=(ANNIHILATION_LOCK_HP
+                                                     if getattr(proj, "annihilation", False)
+                                                     else None))
                             _bt[_k] = _bt.get(_k, 0) + _pd
                             _accum(_k, _pd, _pp.x, _pp.y, True)
 

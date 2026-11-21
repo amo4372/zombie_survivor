@@ -683,26 +683,32 @@ class Enemy:
         return None
 
     def _move_with_obstacle_collision(self, move_dx, move_dy, world):
-        """带障碍物碰撞的移动：普通怪物被阻挡，特殊怪物可穿越"""
-        can_phase = (getattr(self, "is_crawler", False) or
-                      getattr(self, "is_phantom", False) or
-                      getattr(self, "is_wraith", False) or
-                      getattr(self, "is_leaper", False) or
-                      getattr(self, "is_boss", False))
+        """v2.9.23：所有僵尸都能跨越障碍物，但穿越时行动明显受阻。
+
+        旧版对普通僵尸是硬阻挡（AABB 分轴拒绝），会被墙卡死；现在改为
+        可穿过 + 速度惩罚，并保留幽灵/穿墙类完全不受阻的设定。
+        """
+        can_phase = (getattr(self, "is_phantom", False) or
+                      getattr(self, "is_wraith", False))
         if can_phase or world is None or not hasattr(world, 'obstacles'):
             self.x += move_dx
             self.y += move_dy
             return
+        _obs = list(getattr(world, 'obstacles', []) or [])
         enemy_rect = pygame.Rect(self.x - self.size, self.y - self.size,
                                   self.size * 2, self.size * 2)
-        new_rect_x = enemy_rect.copy()
-        new_rect_x.x += move_dx
-        if not any(new_rect_x.colliderect(obs['rect']) for obs in world.obstacles):
-            self.x += move_dx
-        new_rect_y = enemy_rect.copy()
-        new_rect_y.y += move_dy
-        if not any(new_rect_y.colliderect(obs['rect']) for obs in world.obstacles):
-            self.y += move_dy
+        new_rect = enemy_rect.copy()
+        new_rect.x += move_dx
+        new_rect.y += move_dy
+        _hit = any(new_rect.colliderect(o['rect']) for o in _obs)
+        if _hit:
+            _slow = float(ZOMBIE_OBSTACLE_SLOW)
+            move_dx *= _slow
+            move_dy *= _slow
+            self.obstacle_slow = _slow          # 供动画 / AI 读取
+            self.obstacle_slow_timer = 0.25
+        self.x += move_dx
+        self.y += move_dy
 
     def _wang_behavior(self, dt, player_x, player_y, dist, player, hp_ratio, can_execution):
         """王某：枪械+死神镰刀双形态（极强Boss）

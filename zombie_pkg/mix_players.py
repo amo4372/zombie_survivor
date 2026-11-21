@@ -341,17 +341,28 @@ class PlayerRegistryMixin:
                                    520.0)
             except Exception:
                 pass
+            # v2.9.23：范围圈半径由技能预瞄写入（不是瞄准中心点）
+            _skill_radius = 0.0
+            try:
+                _skill_radius = float(getattr(player, "_skill_aim_radius", 0.0) or 0.0)
+                if _skill_radius <= 0.0 and _caster is not None:
+                    _skill_radius = float(getattr(_caster, "aim_radius", 0.0) or 0.0)
+            except Exception:
+                _skill_radius = 0.0
             _aiming = bool(_charge or _skill_d > 0.0)
             if not _aiming:
                 _target = _base
             else:
-                _want = max(_skill_d, _wr * (0.35 + 0.65 * _ratio) if _charge else 0.0)
+                _weapon_want = _wr * (0.35 + 0.65 * _ratio) if _charge else 0.0
+                # 完整看到整圈：视口需容纳 玩家 → 圈最远端 = 瞄准距离 + 2R
+                _circle_want = (_skill_d + 2.0 * _skill_radius) if _skill_d > 0.0 else 0.0
+                _want = max(_circle_want, _weapon_want)
                 if _want <= 0:
                     _target = _base
                 else:
                     _vis = 0.5 * min(float(getattr(self, "scaled_width", 1280) or 1280),
                                      float(getattr(self, "scaled_height", 720) or 720))
-                    _z = _vis / max(1.0, float(_want))
+                    _z = _vis / max(1.0, float(_want) * 1.06)
                     _target = max(0.45, min(_base, _z))
             _cur = float(getattr(cam, "zoom", 1.0) or 1.0)
             _k = 1.0 - pow(0.0001, max(0.0, float(dt)))

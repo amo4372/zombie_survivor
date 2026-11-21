@@ -831,15 +831,18 @@ class MultiplayerMixin:
             ok = True
         elif skill_type == SkillType.RAILGUN_ANNIHILATION:
             lv = self._legendary_skill_level(SkillType.RAILGUN_ANNIHILATION, p2)
-            dmg = (300 + 80 * (lv - 1)) * p2.damage_multiplier * p2.buff_manager.get_damage_mult()
             width = {1: 40, 2: 40, 3: 55, 4: 70, 5: 85}[lv]
-            # v2.6.5 修复：传递 laser_angle 参数，确保激光按预瞄方向发射
+            # v2.9.23：P2 同样走锁血制帧伤
             proj = Projectile(p2.x, p2.y, math.cos(angle) * 3, math.sin(angle) * 3,
-                              dmg, 1200, (140, 200, 245), 15,
-                              pierce=99, explosive=True, explosion_radius=90,
-                              is_laser=True, laser_width=width, laser_duration=0.85,
+                              1.0, 1200, (140, 200, 245), 15, pierce=99,
+                              is_laser=True, laser_width=width,
+                              laser_duration=ANNIHILATION_DURATION,
                               laser_angle=angle)
-            proj.owner = p2  # v2.6.5: 设置投射物归属
+            proj.owner = p2
+            proj.annihilation = True
+            proj.beam_dps = ANNIHILATION_BEAM_DPS
+            proj.beam_total = ANNIHILATION_BEAM_TOTAL
+            proj.damage_vs_player = ANNIHILATION_PVP_MULT
             self.projectiles.append(proj)
             ok = True
         elif skill_type == SkillType.SCYTHE_DANCE:
@@ -938,6 +941,12 @@ class MultiplayerMixin:
                     _a_dist = getattr(caster, 'max_skill_distance', 500) * getattr(caster, 'distance_ratio', 1.0)
                     try:
                         p2._skill_aim_dist = float(_a_dist)
+                        try:
+                            from ui_pkg.skills_ui import AIM_RADIUS_BY_SKILL
+                            p2._skill_aim_radius = float(AIM_RADIUS_BY_SKILL.get(
+                                getattr(self, "p2_selected_skill", None), 140.0))
+                        except Exception:
+                            p2._skill_aim_radius = 140.0
                         try:
                             p2.riot_gear.grapple_max_dist = float(_a_dist)
                         except Exception:

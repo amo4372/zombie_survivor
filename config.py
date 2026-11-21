@@ -220,7 +220,6 @@ class GameState(Enum):
     GACHA = auto()         # v2.8.9：军械库补给（武器抽取，米哈游式保底）
     SLOT_MACHINE = auto()  # v2.8.9：老虎机
     BOT_CONFIG = auto()    # v2.9.17：多人模式玩家 AI 配置（最多 9 个）
-    MAP_EDITOR = auto()    # v2.9.21：游戏内地图 / 障碍物编辑器
 
 
 class ControlMode(Enum):
@@ -954,3 +953,18 @@ PVP_SNIPER_MULT = 0.9
 PVP_NO_ATTEN_MULT = 1.2
 PVP_GEAR_MULT = 0.85       # 防爆套装肘击 / 盾冲对敌方玩家
 PVP_VEHICLE_MULT = 1.15    # 载具撞击对敌方玩家（质量大，不衰减）
+
+# ==================== v2.9.23 ====================
+# 技能类 AOE 对敌方玩家的独立伤害倍率（手雷 / 空袭 / EMP 等）
+PVP_SKILL_MULT = 0.75
+# 「吃伤害一方」的抗性计算系数按来源独立：
+# 1.0 = 完整抗性；0.25 = 只吃 25% 抗性减免效果（防爆肘击 / 载具能打动盾与车）
+SOURCE_RESIST_SCALE = {"gear": 0.25, "vehicle": 0.20, "skill": 0.45, "default": 1.0}
+# 湮灭射线（锁血制）：帧伤较大，对敌方玩家永不致死；对僵尸 / Boss 另算
+ANNIHILATION_BEAM_DPS = 220.0
+ANNIHILATION_BEAM_TOTAL = 480.0
+ANNIHILATION_DURATION = 1.6
+ANNIHILATION_PVE_MULT = 0.55
+ANNIHILATION_PVP_MULT = 1.0
+ANNIHILATION_LOCK_HP = 1          # 敌方玩家至少保留 1 滴血
+ZOMBIE_OBSTACLE_SLOW = 0.35       # 僵尸越障时的行动受阻系数

@@ -15,6 +15,11 @@
 """
 import math
 
+try:
+    from config import SOURCE_RESIST_SCALE
+except Exception:
+    SOURCE_RESIST_SCALE = {"skill": 0.45, "default": 1.0}
+
 
 class TargetMixin:
     def pvp_targets(self, owner=None):
@@ -90,10 +95,16 @@ class TargetMixin:
                 dmg = base * (1.0 - min(0.9, dist / radius)) if scale_by_dist else base
                 is_player = hasattr(t, "take_damage") and hasattr(t, "skill_tree")
                 if dmg > 0 and is_player:
+                    # v2.9.23：技能 AOE 对玩家走独立倍率 + 独立抗性系数
+                    try:
+                        dmg = self._pvp_dmg_to_player(dmg, None, kind="skill")
+                    except Exception:
+                        dmg *= 0.75
                     # 玩家：带攻击来源坐标（供格挡方向判定）+ 不可闪避
                     t.take_damage(dmg, damage_type=dtype, from_front=False,
                                   attack_x=float(x), attack_y=float(y),
-                                  bypass_dodge=True, source="player")
+                                  bypass_dodge=True, source="player",
+                                  resist_scale=SOURCE_RESIST_SCALE.get("skill", 0.45))
                 elif dmg > 0:
                     t.take_damage(dmg, damage_type=dtype)
                 # 结构化状态（两者都挂了 EntityStatus）
